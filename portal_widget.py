@@ -68,6 +68,7 @@ class PortalWidget:
         self.is_closing = False
         self.opening_scale = 0.0
         self._after_id: Optional[Any] = None  # id для after_cancel
+        self._after_master: Optional[Any] = None  # тот же Tk/CTk, что вызвал after (нужен для cancel)
 
         self.gif_frames: List[ImageTk.PhotoImage] = []
         self.target_ip: Optional[str] = None
@@ -344,13 +345,23 @@ class PortalWidget:
             except Exception as e:
                 print(f"[Portal] GIF {gif_path}: {e}")
 
+    def _schedule_after(self, ms: int, callback) -> None:
+        """Тикает анимацию через главное окно CTk — у Toplevel.after иногда не срабатывает."""
+        master = self.root
+        if self.main_app is not None and hasattr(self.main_app, "after"):
+            master = self.main_app
+        self._after_master = master
+        self._after_id = master.after(ms, callback)
+
     def _cancel_scheduled_animation(self) -> None:
         if self._after_id is not None:
+            master = self._after_master if self._after_master is not None else self.root
             try:
-                self.root.after_cancel(self._after_id)
+                master.after_cancel(self._after_id)
             except Exception:
                 pass
             self._after_id = None
+            self._after_master = None
 
     def start_opening_animation(self) -> None:
         """Раскрытие при показе виджета (хоткей)."""
@@ -379,34 +390,36 @@ class PortalWidget:
         max_r = self.size // 2 - 18
 
         if self.is_opening:
-            self.opening_scale = min(1.0, self.opening_scale + 0.09)
-            r = max_r * self.opening_scale
-            if r > 1:
-                self.draw_portal(cx, cy, r, angle=0.0)
+            self.opening_scale = min(1.0, self.opening_scale + 0.11)
+            # Минимальный радиус, иначе первые кадры почти не видны (особенно с прозрачностью)
+            r = max(6.0, max_r * self.opening_scale)
+            self.draw_portal(cx, cy, min(r, max_r), angle=0.0)
             if self.opening_scale >= 1.0:
                 self.is_opening = False
                 self.opening_scale = 1.0
                 self.draw_portal_static()
                 self._after_id = None
+                self._after_master = None
                 return
-            self._after_id = self.root.after(45, self._animate_step)
+            self._schedule_after(42, self._animate_step)
             return
 
         if self.is_closing:
-            self.opening_scale = max(0.0, self.opening_scale - 0.11)
-            r = max_r * self.opening_scale
-            if r > 1:
-                self.draw_portal(cx, cy, r, angle=0.0)
+            self.opening_scale = max(0.0, self.opening_scale - 0.13)
+            r = max(0.0, max_r * self.opening_scale)
+            if r > 4:
+                self.draw_portal(cx, cy, min(r, max_r), angle=0.0)
             if self.opening_scale <= 0.0:
                 self.is_closing = False
                 self.opening_scale = 0.0
                 self._after_id = None
+                self._after_master = None
                 try:
                     self.root.withdraw()
                 except Exception:
                     pass
                 return
-            self._after_id = self.root.after(45, self._animate_step)
+            self._schedule_after(42, self._animate_step)
             return
 
     def draw_portal_static(self) -> None:
@@ -523,13 +536,13 @@ class PortalWidget:
     def show(self) -> None:
         self.root.deiconify()
         self.root.lift()
-        if (
-            not self.is_opening
-            and not self.is_closing
-            and self.opening_scale >= 0.999
-        ):
-            self.draw_portal_static()
-            return
+        try:
+            self.root.update_idletasks()
+            if self.main_app is not None and hasattr(self.main_app, "update_idletasks"):
+                self.main_app.update_idletasks()
+        except Exception:
+            pass
+        # Всегда запускаем раскрытие при показе (масштаб уже 0 после закрытия или <1 при прерывании)
         self.start_opening_animation()
 
     def destroy(self):
@@ -586,7 +599,10 @@ class GlobalHotkeyManager:
 
     def toggle_widget(self):
         try:
-            self.widget.root.after(0, self._toggle_ui)
+            if self.main_app is not None and hasattr(self.main_app, "after"):
+                self.main_app.after(0, self._toggle_ui)
+            else:
+                self.widget.root.after(0, self._toggle_ui)
         except Exception:
             pass
 

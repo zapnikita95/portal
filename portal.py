@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 from typing import Optional, List
 import subprocess
+import platform
 
 import portal_config
 
@@ -190,6 +191,7 @@ class PortalApp(ctk.CTk):
         self.peer_ip_entry.pack(side="left", padx=(0, 10))
         if self.remote_peer_ip:
             self.peer_ip_entry.insert(0, self.remote_peer_ip)
+        self.peer_ip_entry.bind("<KeyRelease>", self._on_peer_ip_edited)
         ctk.CTkButton(
             row,
             text="Сохранить IP",
@@ -197,6 +199,39 @@ class PortalApp(ctk.CTk):
             command=self.save_peer_ip_from_ui,
             font=ctk.CTkFont(size=13),
         ).pack(side="left")
+        self.ip_saved_feedback = ctk.CTkLabel(
+            row,
+            text="",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color="#3dd68c",
+        )
+        self.ip_saved_feedback.pack(side="left", padx=(10, 0))
+
+        # Подсказки по хоткеям (виджет + общий буфер)
+        hotkey_frame = ctk.CTkFrame(peer_frame, fg_color="transparent")
+        hotkey_frame.pack(fill="x", padx=12, pady=(0, 10))
+        if platform.system() == "Darwin":
+            hotkey_text = (
+                "🔑 Быстрые клавиши (запуск с «Виджет на рабочем столе» / --widget):\n"
+                "   Показать или скрыть портал — Cmd+Option+P\n"
+                "   Отправить буфер на другой ПК — Cmd+Shift+C\n"
+                "   Вставить буфер с другого ПК — Cmd+Shift+V"
+            )
+        else:
+            hotkey_text = (
+                "🔑 Быстрые клавиши (запуск с «Виджет на рабочем столе» / --widget):\n"
+                "   Показать или скрыть портал — Ctrl+Alt+P\n"
+                "   Отправить буфер на другой ПК — Ctrl+Alt+C\n"
+                "   Вставить буфер с другого ПК — Ctrl+Alt+V"
+            )
+        ctk.CTkLabel(
+            hotkey_frame,
+            text=hotkey_text,
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+            justify="left",
+            anchor="w",
+        ).pack(anchor="w")
         
         # Кнопки управления
         button_frame = ctk.CTkFrame(main_frame)
@@ -255,14 +290,35 @@ class PortalApp(ctk.CTk):
         self.log_text.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self.log_text.insert("1.0", "Готов к работе...\n")
         self.log_text.configure(state="disabled")
-    
+
+    def _on_peer_ip_edited(self, _event=None):
+        """Сбросить зелёную галочку, если пользователь снова правит IP."""
+        if hasattr(self, "ip_saved_feedback"):
+            self.ip_saved_feedback.configure(text="")
+
+    def _peer_ip_entry_set_silent(self, text: str) -> None:
+        """Обновить поле IP без срабатывания KeyRelease (иначе сбросится «✅ Сохранено»)."""
+        if not hasattr(self, "peer_ip_entry"):
+            return
+        try:
+            self.peer_ip_entry.unbind("<KeyRelease>")
+            self.peer_ip_entry.delete(0, "end")
+            if text:
+                self.peer_ip_entry.insert(0, text)
+        finally:
+            self.peer_ip_entry.bind("<KeyRelease>", self._on_peer_ip_edited)
+
     def save_peer_ip_from_ui(self):
         """Сохранить IP второго ПК из поля ввода (в файл + в память)."""
         ip = self.peer_ip_entry.get().strip()
         if not ip:
             self.log("⚠️ Введите IP адрес перед сохранением")
+            if hasattr(self, "ip_saved_feedback"):
+                self.ip_saved_feedback.configure(text="❌ Введите IP", text_color="#e74c3c")
             return
         
+        if hasattr(self, "ip_saved_feedback"):
+            self.ip_saved_feedback.configure(text="⏳ …", text_color="gray")
         self.log(f"💾 Сохранение IP: {ip}...")
         
         # Сохраняем напрямую через portal_config для проверки результата
@@ -283,18 +339,26 @@ class PortalApp(ctk.CTk):
             if verify == ip:
                 self.log(f"✅ IP второго ПК сохранён: {ip}")
                 self.log(f"💾 Файл: {config_file}")
+                if hasattr(self, "ip_saved_feedback"):
+                    self.ip_saved_feedback.configure(
+                        text="✅ Сохранено",
+                        text_color="#3dd68c",
+                    )
                 # Обновляем поле (чтобы показать что сохранилось)
-                if hasattr(self, "peer_ip_entry"):
-                    try:
-                        self.peer_ip_entry.delete(0, "end")
-                        self.peer_ip_entry.insert(0, ip)
-                    except Exception as e:
-                        self.log(f"⚠️ Не удалось обновить поле ввода: {e}")
+                try:
+                    self._peer_ip_entry_set_silent(ip)
+                except Exception as e:
+                    self.log(f"⚠️ Не удалось обновить поле ввода: {e}")
             else:
                 self.log(f"❌ ОШИБКА: IP не сохранился!")
                 self.log(f"   Введено: {ip}")
                 self.log(f"   Проверка после сохранения: {verify or '(пусто)'}")
                 self.log(f"   Файл: {config_file}")
+                if hasattr(self, "ip_saved_feedback"):
+                    self.ip_saved_feedback.configure(
+                        text="❌ Не записалось",
+                        text_color="#e74c3c",
+                    )
         else:
             # Проверяем что в файле
             saved = portal_config.load_remote_ip()
@@ -313,6 +377,11 @@ class PortalApp(ctk.CTk):
             else:
                 self.log(f"   Папка существует: {config_file.parent.exists()}")
                 self.log(f"   Папка: {config_file.parent}")
+            if hasattr(self, "ip_saved_feedback"):
+                self.ip_saved_feedback.configure(
+                    text="❌ Ошибка записи",
+                    text_color="#e74c3c",
+                )
     
     def log(self, message: str):
         """Добавление сообщения в лог"""
@@ -474,13 +543,10 @@ class PortalApp(ctk.CTk):
             else:
                 print(f"[Portal] Не удалось сохранить IP: {ip_clean}")
         # Обновляем поле ввода
-        if hasattr(self, "peer_ip_entry"):
-            try:
-                self.peer_ip_entry.delete(0, "end")
-                if self.remote_peer_ip:
-                    self.peer_ip_entry.insert(0, self.remote_peer_ip)
-            except Exception as e:
-                print(f"[Portal] Ошибка обновления поля IP: {e}")
+        try:
+            self._peer_ip_entry_set_silent(self.remote_peer_ip or "")
+        except Exception as e:
+            print(f"[Portal] Ошибка обновления поля IP: {e}")
     
     def push_shared_clipboard_hotkey(self):
         """Ctrl+Alt+C / Cmd+Shift+C — отправить локальный буфер на удалённый ПК"""
