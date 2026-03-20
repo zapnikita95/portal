@@ -32,6 +32,22 @@ pip install -r requirements.txt
 2. (Опционально) Убедитесь, что Tailscale запущен для работы через VPN
 
 3. Запустите приложение:
+
+**Windows:**
+- Дважды кликните `start_portal.bat` - запустит приложение с виджетом
+- Или используйте `run.bat` / `run_widget.bat`
+
+**macOS:**
+- Дважды кликните `start_portal.command` - запустит приложение с виджетом
+- При первом запуске может потребоваться разрешить выполнение в настройках безопасности
+- Или в терминале: `chmod +x start_portal.command && ./start_portal.command`
+
+**Linux:**
+```bash
+python3 portal.py --widget
+```
+
+**Или вручную:**
 ```bash
 # Обычный режим
 python portal.py
@@ -39,13 +55,6 @@ python portal.py
 # С виджетом на рабочем столе
 python portal.py --widget
 ```
-
-На Windows можно использовать:
-- `run.bat` - обычный режим
-- `run_widget.bat` - с виджетом
-
-На Mac/Linux:
-- `python3 portal.py --widget` - с виджетом
 
 ## 📖 Использование
 
