@@ -185,10 +185,17 @@ class PortalWidget:
                         except Exception:
                             paths.append(b.decode("mbcs", errors="replace"))
                 if paths:
+                    # Логируем в главное окно если доступно
+                    if self.main_app and hasattr(self.main_app, "log"):
+                        self.main_app.log(f"📥 Получено файлов через drag & drop: {len(paths)}")
                     self.root.after(0, lambda p=list(paths): self.send_files(p))
 
+            # Ждём пока окно полностью создано
+            self.root.update_idletasks()
             windnd.hook_dropfiles(self.root, on_drop)
             self._windnd_ok = True
+            if self.main_app and hasattr(self.main_app, "log"):
+                self.main_app.log("✅ Drag & Drop включён (windnd)")
         except Exception as e:
             print(f"[Portal] windnd не сработал ({e}), пробуем tkinterdnd2…")
             try:
@@ -414,10 +421,19 @@ class PortalWidget:
         else:
             self.target_ip = ip
 
+        # Логируем начало отправки
+        if self.main_app and hasattr(self.main_app, "log"):
+            self.main_app.log(f"📤 Виджет: отправка {len(files)} файл(ов) на {ip}")
+            for fp in files:
+                self.main_app.log(f"   - {Path(fp).name}")
+        
         for fp in files:
+            if not os.path.exists(fp):
+                if self.main_app and hasattr(self.main_app, "log"):
+                    self.main_app.log(f"❌ Файл не найден: {Path(fp).name}")
+                continue
+                
             if self.main_app and hasattr(self.main_app, "send_file"):
-                if hasattr(self.main_app, "log"):
-                    self.main_app.log(f"📤 Виджет: {Path(fp).name}")
                 # Отправка в отдельном потоке с обработкой ошибок
                 def send_with_error_handling(filepath, target_ip):
                     try:
@@ -425,11 +441,18 @@ class PortalWidget:
                     except Exception as e:
                         if hasattr(self.main_app, "log"):
                             err = str(e)
-                            if "refused" in err.lower() or "timeout" in err.lower():
+                            if "refused" in err.lower() or "connection refused" in err.lower():
                                 self.main_app.log(f"❌ Не удалось отправить {Path(filepath).name}")
                                 self.main_app.log("💡 На втором ПК должен быть нажат «Запустить портал»")
+                                self.main_app.log(f"💡 IP получателя: {target_ip}")
+                            elif "timeout" in err.lower() or "timed out" in err.lower():
+                                self.main_app.log(f"❌ Таймаут при отправке {Path(filepath).name}")
+                                self.main_app.log("💡 Проверь что второй ПК включён и в сети")
+                            elif "no route" in err.lower() or "unreachable" in err.lower():
+                                self.main_app.log(f"❌ Нет пути к {target_ip}")
+                                self.main_app.log("💡 Проверь что оба ПК в одной сети (Tailscale или LAN)")
                             else:
-                                self.main_app.log(f"❌ Ошибка: {err}")
+                                self.main_app.log(f"❌ Ошибка отправки {Path(filepath).name}: {err}")
                 threading.Thread(
                     target=send_with_error_handling,
                     args=(fp, ip),
