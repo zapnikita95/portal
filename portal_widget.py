@@ -10,13 +10,15 @@ import time
 import sys
 import platform
 from pathlib import Path
+from PIL import Image, ImageTk, ImageSequence
+import os
 
 # Импорт основной логики из portal.py
 try:
     from portal import PortalApp
 except ImportError:
-    print("Ошибка: не найден portal.py")
-    sys.exit(1)
+    # Для тестирования виджета отдельно
+    PortalApp = None
 
 
 class PortalWidget:
@@ -31,6 +33,15 @@ class PortalWidget:
         self.size = 200
         self.angle = 0
         self.animation_running = True
+        self.is_opening = False
+        self.opening_scale = 0.0
+        self.opening_complete = False
+        
+        # GIF анимация
+        self.gif_frames = []
+        self.current_frame = 0
+        self.gif_image = None
+        self.load_portal_gif()
         
         # Позиция на рабочем столе (правый нижний угол)
         self.setup_window()
@@ -48,8 +59,8 @@ class PortalWidget:
         # Настройка drag & drop
         self.setup_drag_drop()
         
-        # Запуск анимации
-        self.animate()
+        # Запуск анимации открытия
+        self.start_opening_animation()
         
         # Переменная для хранения целевого IP
         self.target_ip = None
@@ -101,16 +112,55 @@ class PortalWidget:
         
     def setup_drag_drop(self):
         """Настройка drag & drop для файлов"""
-        # Windows с tkinterdnd2
+        # Windows - используем встроенный метод через win32api
         if platform.system() == 'Windows':
             try:
-                import tkinterdnd2 as tkdnd
-                self.dnd = tkdnd.DND_FUNC
-                self.canvas.drop_target_register(tkdnd.DND_FILES)
-                self.canvas.dnd_bind('<<Drop>>', self.on_file_drop)
+                import win32api
+                import win32con
+                import win32gui
+                
+                # Получаем handle окна
+                hwnd = int(self.root.winfo_id(), 16)
+                win32api.DragAcceptFiles(hwnd, True)
+                
+                # Сохраняем старую процедуру окна
+                self.old_wndproc = win32gui.GetWindowLong(hwnd, win32con.GWL_WNDPROC)
+                
+                # Новая процедура окна
+                def wndproc(hwnd, msg, wparam, lparam):
+                    if msg == win32con.WM_DROPFILES:
+                        try:
+                            hdrop = wparam
+                            file_count = win32api.DragQueryFile(hdrop, 0xFFFFFFFF, None, 0)
+                            files = []
+                            for i in range(file_count):
+                                file_path = win32api.DragQueryFile(hdrop, i, None, 260)
+                                if file_path:
+                                    files.append(file_path)
+                            win32api.DragFinish(hdrop)
+                            if files:
+                                # Вызываем в главном потоке
+                                self.root.after(0, lambda: self.send_files(files))
+                        except Exception as e:
+                            print(f"Ошибка drag & drop: {e}")
+                        return 0
+                    return win32gui.CallWindowProc(self.old_wndproc, hwnd, msg, wparam, lparam)
+                
+                # Устанавливаем новую процедуру
+                win32gui.SetWindowLong(hwnd, win32con.GWL_WNDPROC, wndproc)
+                self.wndproc = wndproc
                 return
             except ImportError:
-                pass  # Используем альтернативный метод
+                # Если win32api нет, пробуем tkinterdnd2
+                try:
+                    import tkinterdnd2 as tkdnd
+                    dnd_root = tkdnd.Tk()
+                    self.canvas = tkdnd.DND_FUNC(self.canvas)
+                    self.canvas.drop_target_register(tkdnd.DND_FILES)
+                    self.canvas.dnd_bind('<<Drop>>', self.on_file_drop)
+                    return
+                except ImportError:
+                    pass  # Используем альтернативный метод
         
         # Альтернативный метод для всех платформ
         self.setup_drag_drop_alternative()
@@ -243,6 +293,42 @@ class PortalWidget:
         y = self.root.winfo_y() + event.y - self.drag_start_y
         self.root.geometry(f"+{x}+{y}")
     
+    def load_portal_gif(self):
+        """Загрузка GIF анимации портала"""
+        assets_dir = os.path.join(os.path.dirname(__file__), 'assets')
+        
+        # Пробуем загрузить анимированный GIF
+        gif_paths = [
+            os.path.join(assets_dir, 'portal_animated_opening.gif'),
+            os.path.join(assets_dir, 'portal_opening.gif'),
+            os.path.join(assets_dir, 'portal_animated.gif'),
+            os.path.join(assets_dir, 'portal_static.gif'),
+        ]
+        
+        for gif_path in gif_paths:
+            if os.path.exists(gif_path):
+                try:
+                    gif = Image.open(gif_path)
+                    self.gif_frames = []
+                    for frame in ImageSequence.Iterator(gif):
+                        frame = frame.convert('RGBA')
+                        # Масштабируем под размер виджета
+                        frame = frame.resize((self.size, self.size), Image.Resampling.LANCZOS)
+                        self.gif_frames.append(ImageTk.PhotoImage(frame))
+                    if self.gif_frames:
+                        self.gif_image = self.gif_frames[0]
+                        return
+                except Exception as e:
+                    print(f"Ошибка загрузки GIF {gif_path}: {e}")
+                    continue
+    
+    def start_opening_animation(self):
+        """Запуск анимации открытия портала"""
+        self.is_opening = True
+        self.opening_scale = 0.0
+        self.opening_complete = False
+        self.animate()
+    
     def animate(self):
         """Анимация портала"""
         if not self.animation_running:
@@ -252,16 +338,52 @@ class PortalWidget:
         
         center_x = self.size // 2
         center_y = self.size // 2
-        radius = self.size // 2 - 20
         
-        # Рисуем портал (вращающийся круг с эффектом)
-        self.draw_portal(center_x, center_y, radius)
+        # Анимация открытия
+        if self.is_opening:
+            # Увеличиваем масштаб от 0 до 1
+            self.opening_scale += 0.05
+            if self.opening_scale >= 1.0:
+                self.opening_scale = 1.0
+                self.is_opening = False
+                self.opening_complete = True
+            
+            # Рисуем портал с масштабированием
+            if self.gif_frames and len(self.gif_frames) > 0:
+                # Используем первый кадр для открытия с масштабированием
+                scale_size = int(self.size * self.opening_scale)
+                if scale_size > 0:
+                    # Масштабируем первый кадр
+                    try:
+                        # Получаем исходное изображение из PhotoImage сложно, рисуем программно
+                        radius = (self.size // 2 - 20) * self.opening_scale
+                        if radius > 0:
+                            self.draw_portal(center_x, center_y, radius)
+                    except:
+                        radius = (self.size // 2 - 20) * self.opening_scale
+                        if radius > 0:
+                            self.draw_portal(center_x, center_y, radius)
+            else:
+                # Рисуем программно если нет GIF
+                radius = (self.size // 2 - 20) * self.opening_scale
+                if radius > 0:
+                    self.draw_portal(center_x, center_y, radius)
+        else:
+            # Обычная анимация после открытия
+            if self.gif_frames:
+                # Показываем анимированный GIF
+                if self.current_frame < len(self.gif_frames):
+                    self.canvas.create_image(center_x, center_y, image=self.gif_frames[self.current_frame], anchor=tk.CENTER)
+                    self.current_frame = (self.current_frame + 1) % len(self.gif_frames)
+            else:
+                # Рисуем программно
+                radius = self.size // 2 - 20
+                self.draw_portal(center_x, center_y, radius)
+                self.angle += 0.1
+                if self.angle >= 2 * math.pi:
+                    self.angle = 0
         
-        self.angle += 0.1
-        if self.angle >= 2 * math.pi:
-            self.angle = 0
-        
-        self.root.after(16, self.animate)  # ~60 FPS
+        self.root.after(50, self.animate)  # ~20 FPS для плавности
     
     def draw_portal(self, cx, cy, radius):
         """Рисование портала в стиле игры Portal"""
