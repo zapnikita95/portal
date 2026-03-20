@@ -65,10 +65,11 @@ class PortalWidget:
         self.angle = 0.0
         self.animation_running = True
         self.is_opening = False
+        self.is_closing = False
         self.opening_scale = 0.0
+        self._after_id: Optional[Any] = None  # id для after_cancel
 
         self.gif_frames: List[ImageTk.PhotoImage] = []
-        self.current_frame = 0
         self.target_ip: Optional[str] = None
 
         if main_app and getattr(main_app, "remote_peer_ip", None):
@@ -98,7 +99,7 @@ class PortalWidget:
 
         self.setup_mouse_bindings()
 
-        self.start_opening_animation()
+        # Анимация «раскрытия» только по хоткею (show), не в фоне каждые N мс
 
     def setup_window(self):
         """Позиция, поверх остальных окон, без рамки"""
@@ -343,39 +344,86 @@ class PortalWidget:
             except Exception as e:
                 print(f"[Portal] GIF {gif_path}: {e}")
 
-    def start_opening_animation(self):
-        self.is_opening = True
-        self.opening_scale = 0.0
-        self.animate()
+    def _cancel_scheduled_animation(self) -> None:
+        if self._after_id is not None:
+            try:
+                self.root.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
 
-    def animate(self):
+    def start_opening_animation(self) -> None:
+        """Раскрытие при показе виджета (хоткей)."""
+        self._cancel_scheduled_animation()
+        self.is_opening = True
+        self.is_closing = False
+        # Если закрывали на полпути — продолжаем открытие с текущего масштаба
+        self.opening_scale = min(1.0, max(0.0, self.opening_scale))
+        self._animate_step()
+
+    def start_closing_animation(self) -> None:
+        """Схлопывание перед скрытием."""
+        self._cancel_scheduled_animation()
+        self.is_opening = False
+        self.is_closing = True
+        self.opening_scale = min(1.0, max(0.0, self.opening_scale))
+        self._animate_step()
+
+    def _animate_step(self) -> None:
+        """Один кадр открытия/закрытия; без постоянного цикла в фоне."""
         if not self.animation_running:
             return
 
         self.canvas.delete("all")
         cx, cy = self.size // 2, self.size // 2
+        max_r = self.size // 2 - 18
 
         if self.is_opening:
-            self.opening_scale = min(1.0, self.opening_scale + 0.08)
-            r = (self.size // 2 - 18) * self.opening_scale
+            self.opening_scale = min(1.0, self.opening_scale + 0.09)
+            r = max_r * self.opening_scale
             if r > 1:
-                self.draw_portal(cx, cy, r)
+                self.draw_portal(cx, cy, r, angle=0.0)
             if self.opening_scale >= 1.0:
                 self.is_opening = False
+                self.opening_scale = 1.0
+                self.draw_portal_static()
+                self._after_id = None
+                return
+            self._after_id = self.root.after(45, self._animate_step)
+            return
+
+        if self.is_closing:
+            self.opening_scale = max(0.0, self.opening_scale - 0.11)
+            r = max_r * self.opening_scale
+            if r > 1:
+                self.draw_portal(cx, cy, r, angle=0.0)
+            if self.opening_scale <= 0.0:
+                self.is_closing = False
+                self.opening_scale = 0.0
+                self._after_id = None
+                try:
+                    self.root.withdraw()
+                except Exception:
+                    pass
+                return
+            self._after_id = self.root.after(45, self._animate_step)
+            return
+
+    def draw_portal_static(self) -> None:
+        """Статичный портал после раскрытия (без циклической анимации)."""
+        if not self.animation_running:
+            return
+        self.canvas.delete("all")
+        cx, cy = self.size // 2, self.size // 2
+        if self.gif_frames:
+            img = self.gif_frames[0]
+            self.canvas.create_image(cx, cy, image=img, anchor=tk.CENTER)
         else:
-            if self.gif_frames:
-                img = self.gif_frames[self.current_frame % len(self.gif_frames)]
-                self.canvas.create_image(cx, cy, image=img, anchor=tk.CENTER)
-                self.current_frame += 1
-            else:
-                self.draw_portal(cx, cy, self.size // 2 - 18)
-                self.angle += 0.12
-                if self.angle >= 2 * math.pi:
-                    self.angle = 0.0
+            r_full = self.size // 2 - 18
+            self.draw_portal(cx, cy, r_full, angle=0.0)
+        self.opening_scale = 1.0
 
-        self.root.after(45, self.animate)
-
-    def draw_portal(self, cx, cy, radius):
+    def draw_portal(self, cx, cy, radius, angle: Optional[float] = None):
         self.canvas.create_oval(
             cx - radius,
             cy - radius,
@@ -385,10 +433,11 @@ class PortalWidget:
             width=3,
             fill="#02060a",
         )
+        base_angle = self.angle if angle is None else angle
         inner = radius * 0.72
         pts = []
         for i in range(16):
-            a = self.angle + (i * 2 * math.pi / 16)
+            a = base_angle + (i * 2 * math.pi / 16)
             pts.extend([cx + inner * math.cos(a), cy + inner * math.sin(a)])
         if len(pts) >= 6:
             self.canvas.create_polygon(pts, outline="#FF6B35", fill="#1a0a05", width=2)
@@ -461,15 +510,31 @@ class PortalWidget:
             else:
                 print(f"[Portal] Не удалось отправить {Path(fp).name}: главное приложение недоступно")
 
-    def hide(self):
-        self.root.withdraw()
+    def hide(self) -> None:
+        if self.is_closing:
+            return
+        try:
+            if not self.root.winfo_viewable():
+                return
+        except Exception:
+            return
+        self.start_closing_animation()
 
-    def show(self):
+    def show(self) -> None:
         self.root.deiconify()
         self.root.lift()
+        if (
+            not self.is_opening
+            and not self.is_closing
+            and self.opening_scale >= 0.999
+        ):
+            self.draw_portal_static()
+            return
+        self.start_opening_animation()
 
     def destroy(self):
         self.animation_running = False
+        self._cancel_scheduled_animation()
         try:
             self.root.destroy()
         except Exception:
@@ -526,6 +591,10 @@ class GlobalHotkeyManager:
             pass
 
     def _toggle_ui(self):
+        # Во время схлопывания повторный хоткей — снова раскрыть, а не игнорировать
+        if getattr(self.widget, "is_closing", False):
+            self.widget.show()
+            return
         if self.widget.is_visible():
             self.widget.hide()
         else:
