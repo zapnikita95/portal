@@ -40,23 +40,31 @@ def load_remote_ip() -> Optional[str]:
     return str(ip).strip()
 
 
-def save_remote_ip(ip: Optional[str]) -> None:
+def save_remote_ip(ip: Optional[str]) -> bool:
     """Сохранить IP в файл. Возвращает True если успешно."""
     try:
+        ip_clean = str(ip).strip() if ip and str(ip).strip() else None
         data = _load_all()
-        if ip and str(ip).strip():
-            data["remote_ip"] = str(ip).strip()
+        if ip_clean:
+            data["remote_ip"] = ip_clean
         else:
             data.pop("remote_ip", None)
         p = config_path()
+        # Убеждаемся что папка существует
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # Записываем файл
         p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        # Проверяем что записалось
-        if ip and str(ip).strip():
+        # Проверяем что записалось (читаем сразу после записи)
+        if ip_clean:
             saved = load_remote_ip()
-            if saved != str(ip).strip():
-                print(f"[Portal] ВНИМАНИЕ: IP не сохранился! Введено: {ip}, прочитано: {saved}")
+            if saved != ip_clean:
+                print(f"[Portal] ВНИМАНИЕ: IP не сохранился! Введено: {ip_clean}, прочитано: {saved}")
+                print(f"[Portal] Файл: {p}")
+                print(f"[Portal] Содержимое файла: {p.read_text(encoding='utf-8') if p.exists() else 'не существует'}")
                 return False
         return True
     except Exception as e:
+        import traceback
         print(f"[Portal] Ошибка сохранения IP: {e}")
+        print(f"[Portal] Traceback: {traceback.format_exc()}")
         return False

@@ -263,22 +263,36 @@ class PortalApp(ctk.CTk):
             self.log("⚠️ Введите IP адрес перед сохранением")
             return
         
-        # Сохраняем
-        self.set_remote_peer_ip(ip)
+        self.log(f"💾 Сохранение IP: {ip}...")
         
-        # Проверяем что действительно сохранилось
-        saved = portal_config.load_remote_ip()
-        config_file = portal_config.config_path()
+        # Сохраняем напрямую через portal_config для проверки результата
+        success = portal_config.save_remote_ip(ip)
         
-        if saved == ip:
+        if success:
+            # Обновляем в памяти
+            self.remote_peer_ip = ip
+            config_file = portal_config.config_path()
             self.log(f"✅ IP второго ПК сохранён: {ip}")
             self.log(f"💾 Файл: {config_file}")
+            # Обновляем поле (чтобы показать что сохранилось)
+            if hasattr(self, "peer_ip_entry"):
+                self.peer_ip_entry.delete(0, "end")
+                self.peer_ip_entry.insert(0, ip)
         else:
+            # Проверяем что в файле
+            saved = portal_config.load_remote_ip()
+            config_file = portal_config.config_path()
             self.log(f"❌ ОШИБКА СОХРАНЕНИЯ!")
             self.log(f"   Введено: {ip}")
             self.log(f"   Прочитано из файла: {saved or '(пусто)'}")
             self.log(f"   Файл: {config_file}")
-            self.log(f"   Проверь права на запись в эту папку")
+            if config_file.exists():
+                try:
+                    content = config_file.read_text(encoding="utf-8")
+                    self.log(f"   Содержимое файла: {content[:200]}")
+                except:
+                    pass
+            self.log(f"   Проверь права на запись: {config_file.parent}")
     
     def log(self, message: str):
         """Добавление сообщения в лог"""
@@ -435,11 +449,18 @@ class PortalApp(ctk.CTk):
         self.remote_peer_ip = ip_clean
         success = portal_config.save_remote_ip(ip_clean)
         if not success and ip_clean:
-            self.log(f"⚠️ Не удалось сохранить IP в файл! Проверь права на запись")
+            if hasattr(self, "log"):
+                self.log(f"⚠️ Не удалось сохранить IP в файл! Проверь права на запись")
+            else:
+                print(f"[Portal] Не удалось сохранить IP: {ip_clean}")
+        # Обновляем поле ввода
         if hasattr(self, "peer_ip_entry"):
-            self.peer_ip_entry.delete(0, "end")
-            if self.remote_peer_ip:
-                self.peer_ip_entry.insert(0, self.remote_peer_ip)
+            try:
+                self.peer_ip_entry.delete(0, "end")
+                if self.remote_peer_ip:
+                    self.peer_ip_entry.insert(0, self.remote_peer_ip)
+            except Exception as e:
+                print(f"[Portal] Ошибка обновления поля IP: {e}")
     
     def push_shared_clipboard_hotkey(self):
         """Ctrl+Alt+C / Cmd+Shift+C — отправить локальный буфер на удалённый ПК"""
