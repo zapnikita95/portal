@@ -45,7 +45,8 @@ chmod +x Portal.command fix.sh
 # запуск двойным кликом по Portal.command или:
 python3 portal.py --widget
 ```
-Виджет **по умолчанию скрыт** — `Cmd+Option+P` чтобы показать/скрыть.
+Виджет **по умолчанию скрыт** — `Cmd+Option+P` чтобы показать/скрыть.  
+**Горячие клавиши:** в настройках macOS нет «pynput» — см. **[MAC_ACCESSIBILITY.md](MAC_ACCESSIBILITY.md)** (добавь **Терминал** или **Cursor** в «Универсальный доступ»).
 
 ### macOS (tkinter):
 1. Скачайте проект

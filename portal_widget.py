@@ -29,7 +29,21 @@ class PortalWidget:
 
     def __init__(self, main_app: Any):
         self.main_app = main_app
-        # ВАЖНО для macOS/CustomTkinter: Toplevel должен иметь master=главное окно
+        self._dnd_tkinterdnd2 = False
+        self._windnd_ok = False
+
+        # macOS/Linux: TkinterDnD._require на Toplevel даёт Tcl-ошибки; патчим главное CTk-окно
+        if platform.system() != "Windows" and main_app is not None:
+            try:
+                from tkinterdnd2 import TkinterDnD
+
+                TkinterDnD._require(main_app)
+                self._dnd_tkinterdnd2 = True
+            except Exception as e:
+                self._dnd_tkinterdnd2 = False
+                print(f"[Portal] tkinterdnd2 (главное окно): {e}")
+
+        # ВАЖНО: Toplevel с master=главное окно (CustomTkinter = Tk)
         if main_app is not None and hasattr(main_app, "winfo_toplevel"):
             self.root = tk.Toplevel(master=main_app)
         else:
@@ -46,8 +60,6 @@ class PortalWidget:
         self.gif_frames: List[ImageTk.PhotoImage] = []
         self.current_frame = 0
         self.target_ip: Optional[str] = None
-        self._dnd_tkinterdnd2 = False
-        self._windnd_ok = False
 
         if main_app and getattr(main_app, "remote_peer_ip", None):
             self.target_ip = main_app.remote_peer_ip
@@ -56,17 +68,6 @@ class PortalWidget:
 
         self.load_portal_gif()
         self.setup_window()
-
-        # Windows: windnd цепляется к HWND надёжнее, чем tkinterdnd2 на Toplevel
-        if platform.system() != "Windows":
-            try:
-                from tkinterdnd2 import TkinterDnD
-
-                TkinterDnD._require(self.root)
-                self._dnd_tkinterdnd2 = True
-            except Exception as e:
-                self._dnd_tkinterdnd2 = False
-                print(f"[Portal] tkinterdnd2: {e} — pip install tkinterdnd2")
 
         self.canvas = tk.Canvas(
             self.root,
@@ -100,7 +101,10 @@ class PortalWidget:
         except tk.TclError:
             pass
 
-        self.root.overrideredirect(True)
+        try:
+            self.root.overrideredirect(True)
+        except tk.TclError:
+            pass
 
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
@@ -117,7 +121,8 @@ class PortalWidget:
             try:
                 self.root.configure(bg="systemTransparent")
                 self.canvas.configure(bg="systemTransparent")
-                self.root.attributes("-transparent", True)
+                # На части сборок Tcl True ломается — используем 1
+                self.root.attributes("-transparent", 1)
             except tk.TclError:
                 try:
                     self.root.configure(bg=CHROMA_KEY)

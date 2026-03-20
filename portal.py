@@ -676,6 +676,7 @@ if __name__ == "__main__":
     # Если запрошен виджет, создаем его
     if show_widget:
         try:
+            app.update_idletasks()
             from portal_widget import PortalWidget, GlobalHotkeyManager
             widget = PortalWidget(app)
             GlobalHotkeyManager(widget, app).start()
