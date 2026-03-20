@@ -38,6 +38,8 @@ class PortalApp(ctk.CTk):
         self.sync_clipboard_enabled = False
         self.sync_target_ip = None
         self.is_receiving_clipboard = False
+        # IP удалённого ПК для горячих клавиш / виджета (общий буфер и файлы)
+        self.remote_peer_ip: Optional[str] = None
         
         # Создание UI
         self.create_ui()
@@ -307,6 +309,8 @@ class PortalApp(ctk.CTk):
                 self.receive_file(client_socket, message)
             elif message.get("type") == "clipboard":
                 self.receive_clipboard(message)
+            elif message.get("type") == "get_clipboard":
+                self.send_clipboard_response(client_socket)
             
         except Exception as e:
             self.log(f"❌ Ошибка обработки клиента: {str(e)}")
@@ -350,6 +354,81 @@ class PortalApp(ctk.CTk):
             self.last_clipboard = clipboard_text
             self.is_receiving_clipboard = False
             self.log(f"📋 Буфер обмена обновлен ({len(clipboard_text)} символов)")
+    
+    def send_clipboard_response(self, client_socket: socket.socket):
+        """Отправка текущего локального буфера клиенту (запрос get_clipboard)"""
+        try:
+            text = pyperclip.paste()
+            if text is None:
+                text = ""
+            resp = json.dumps({"type": "clipboard", "text": text}, ensure_ascii=False)
+            client_socket.sendall(resp.encode("utf-8"))
+            self.log(f"📋 Отправлен буфер по запросу ({len(text)} символов)")
+        except Exception as e:
+            self.log(f"❌ Ошибка ответа буфера: {str(e)}")
+    
+    def set_remote_peer_ip(self, ip: Optional[str]):
+        """Сохранить IP второго компьютера для горячих клавиш"""
+        self.remote_peer_ip = (ip or "").strip() or None
+    
+    def push_shared_clipboard_hotkey(self):
+        """Ctrl+Alt+C / Cmd+Shift+C — отправить локальный буфер на удалённый ПК"""
+        ip = self.remote_peer_ip
+        if not ip:
+            self.log("⚠️ Сначала укажите IP в виджете (двойной клик по порталу)")
+            return
+        threading.Thread(target=self.send_clipboard, args=(ip,), daemon=True).start()
+    
+    def pull_shared_clipboard_hotkey(self):
+        """Ctrl+Alt+V / Cmd+Shift+V — забрать буфер с удалённого ПК"""
+        ip = self.remote_peer_ip
+        if not ip:
+            self.log("⚠️ Сначала укажите IP в виджете (двойной клик по порталу)")
+            return
+        threading.Thread(target=self._pull_clipboard_worker, args=(ip,), daemon=True).start()
+    
+    def _pull_clipboard_worker(self, target_ip: str):
+        """Запрос буфера с удалённой машины (сервер должен быть запущен)"""
+        def _log(msg: str):
+            try:
+                self.after(0, lambda m=msg: self.log(m))
+            except Exception:
+                print(msg)
+
+        try:
+            _log(f"📥 Запрос буфера с {target_ip}...")
+            client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client_socket.settimeout(30)
+            client_socket.connect((target_ip, 12345))
+            client_socket.send(json.dumps({"type": "get_clipboard"}).encode("utf-8"))
+            buf = b""
+            message = None
+            while True:
+                part = client_socket.recv(65536)
+                if not part:
+                    break
+                buf += part
+                try:
+                    message = json.loads(buf.decode("utf-8", errors="replace"))
+                    break
+                except json.JSONDecodeError:
+                    if len(buf) > 4 * 1024 * 1024:
+                        break
+                    continue
+            client_socket.close()
+            if message is None:
+                raise ValueError("Пустой ответ")
+            if message.get("type") == "clipboard":
+                text = message.get("text", "")
+                self.is_receiving_clipboard = True
+                pyperclip.copy(text)
+                self.last_clipboard = text
+                self.is_receiving_clipboard = False
+                _log(f"📋 Буфер с удалённого ПК вставлен ({len(text)} символов)")
+            else:
+                _log("⚠️ Неожиданный ответ при запросе буфера")
+        except Exception as e:
+            _log(f"❌ Не удалось получить буфер: {str(e)}")
     
     def send_file_dialog(self):
         """Диалог выбора файла для отправки"""
@@ -538,8 +617,8 @@ if __name__ == "__main__":
         try:
             from portal_widget import PortalWidget, GlobalHotkeyManager
             widget = PortalWidget(app)
-            hotkey_manager = GlobalHotkeyManager(widget)
-            hotkey_manager.start()
+            GlobalHotkeyManager(widget, app).start()
+            app.log("✅ Виджет-портал создан (Alt+ЛКМ — двигать окно, Ctrl+ЛКМ — файл)")
         except Exception as e:
             app.log(f"⚠️ Не удалось создать виджет: {str(e)}")
     

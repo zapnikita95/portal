@@ -37,7 +37,14 @@ echo "✅ Зависимости готовы"
 echo ""
 echo "🚀 Запуск Портала с виджетом..."
 echo ""
-echo "💡 Используйте Cmd+Option+P для показа/скрытия виджета"
+if ! python3 -c "import tkinter" 2>/dev/null; then
+    echo "❌ Нет tkinter. В этой папке выполните: chmod +x fix.sh && ./fix.sh"
+    read -p "Нажмите Enter для выхода..."
+    exit 1
+fi
+
+echo "💡 Виджет: Cmd+Option+P | Буфер: Cmd+Shift+C отправить / Cmd+Shift+V забрать"
+echo "💡 Окно: Alt+тащить | Файл: Ctrl+клик по порталу | IP: двойной клик"
 echo ""
 
 # Запуск приложения

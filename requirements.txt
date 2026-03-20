@@ -5,5 +5,4 @@ watchdog==3.0.0
 keyboard==0.13.5
 pynput==1.7.6
 pywin32>=306; sys_platform == 'win32'
-# tkinterdnd2 опционально (только для Windows drag & drop)
-# Установите вручную если нужно: pip install tkinterdnd2
+tkinterdnd2>=0.3.0
