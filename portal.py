@@ -266,18 +266,35 @@ class PortalApp(ctk.CTk):
         self.log(f"💾 Сохранение IP: {ip}...")
         
         # Сохраняем напрямую через portal_config для проверки результата
-        success = portal_config.save_remote_ip(ip)
+        try:
+            success = portal_config.save_remote_ip(ip)
+        except Exception as e:
+            self.log(f"❌ ИСКЛЮЧЕНИЕ при сохранении: {str(e)}")
+            import traceback
+            self.log(f"   {traceback.format_exc()}")
+            success = False
         
         if success:
             # Обновляем в памяти
             self.remote_peer_ip = ip
             config_file = portal_config.config_path()
-            self.log(f"✅ IP второго ПК сохранён: {ip}")
-            self.log(f"💾 Файл: {config_file}")
-            # Обновляем поле (чтобы показать что сохранилось)
-            if hasattr(self, "peer_ip_entry"):
-                self.peer_ip_entry.delete(0, "end")
-                self.peer_ip_entry.insert(0, ip)
+            # Двойная проверка - читаем сразу после сохранения
+            verify = portal_config.load_remote_ip()
+            if verify == ip:
+                self.log(f"✅ IP второго ПК сохранён: {ip}")
+                self.log(f"💾 Файл: {config_file}")
+                # Обновляем поле (чтобы показать что сохранилось)
+                if hasattr(self, "peer_ip_entry"):
+                    try:
+                        self.peer_ip_entry.delete(0, "end")
+                        self.peer_ip_entry.insert(0, ip)
+                    except Exception as e:
+                        self.log(f"⚠️ Не удалось обновить поле ввода: {e}")
+            else:
+                self.log(f"❌ ОШИБКА: IP не сохранился!")
+                self.log(f"   Введено: {ip}")
+                self.log(f"   Проверка после сохранения: {verify or '(пусто)'}")
+                self.log(f"   Файл: {config_file}")
         else:
             # Проверяем что в файле
             saved = portal_config.load_remote_ip()
@@ -286,13 +303,16 @@ class PortalApp(ctk.CTk):
             self.log(f"   Введено: {ip}")
             self.log(f"   Прочитано из файла: {saved or '(пусто)'}")
             self.log(f"   Файл: {config_file}")
+            self.log(f"   Файл существует: {config_file.exists()}")
             if config_file.exists():
                 try:
                     content = config_file.read_text(encoding="utf-8")
-                    self.log(f"   Содержимое файла: {content[:200]}")
-                except:
-                    pass
-            self.log(f"   Проверь права на запись: {config_file.parent}")
+                    self.log(f"   Содержимое: {content[:200]}")
+                except Exception as e:
+                    self.log(f"   Не удалось прочитать файл: {e}")
+            else:
+                self.log(f"   Папка существует: {config_file.parent.exists()}")
+                self.log(f"   Папка: {config_file.parent}")
     
     def log(self, message: str):
         """Добавление сообщения в лог"""
