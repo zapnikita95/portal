@@ -28,6 +28,41 @@ except ImportError:
 CHROMA_KEY = "#010101"
 
 
+def _debug_log_file(line: str) -> None:
+    """Всегда пишем в файл — даже если консоль не видна (двойной клик по .bat)."""
+    try:
+        if platform.system() == "win32":
+            base = os.environ.get("TEMP") or os.environ.get("TMP") or str(Path.home())
+        else:
+            base = os.environ.get("TMPDIR") or "/tmp"
+        Path(base).mkdir(parents=True, exist_ok=True)
+        p = Path(base) / "portal_hotkey_debug.log"
+        with p.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
+
+def portal_thread_log(main_app: Any, message: str, prefix: str = "⌨️") -> None:
+    """Лог из фонового потока: консоль + файл + журнал GUI (через after)."""
+    ts = time.strftime("%H:%M:%S")
+    full = f"[{ts}] {prefix} {message}"
+    print(f"[Portal] {full}", flush=True)
+    _debug_log_file(f"[Portal] {full}")
+    try:
+        if main_app is not None and hasattr(main_app, "after") and hasattr(main_app, "log"):
+
+            def _do():
+                try:
+                    main_app.log(f"{prefix} {message}")
+                except Exception:
+                    pass
+
+            main_app.after(0, _do)
+    except Exception:
+        pass
+
+
 class PortalWidget:
     """Виджет-портал на рабочем столе"""
 
@@ -101,6 +136,9 @@ class PortalWidget:
         self.setup_mouse_bindings()
 
         # Анимация «раскрытия» только по хоткею (show), не в фоне каждые N мс
+
+    def _widget_log(self, message: str) -> None:
+        portal_thread_log(self.main_app, message, "🌀")
 
     def setup_window(self):
         """Позиция, поверх остальных окон, без рамки"""
@@ -351,7 +389,10 @@ class PortalWidget:
         if self.main_app is not None and hasattr(self.main_app, "after"):
             master = self.main_app
         self._after_master = master
-        self._after_id = master.after(ms, callback)
+        try:
+            self._after_id = master.after(ms, callback)
+        except Exception as e:
+            self._widget_log(f"ОШИБКА after({ms}): {e} — анимация может не идти")
 
     def _cancel_scheduled_animation(self) -> None:
         if self._after_id is not None:
@@ -365,6 +406,9 @@ class PortalWidget:
 
     def start_opening_animation(self) -> None:
         """Раскрытие при показе виджета (хоткей)."""
+        self._widget_log(
+            f"Анимация ОТКРЫТИЯ старт (масштаб={self.opening_scale:.2f})"
+        )
         self._cancel_scheduled_animation()
         self.is_opening = True
         self.is_closing = False
@@ -374,6 +418,9 @@ class PortalWidget:
 
     def start_closing_animation(self) -> None:
         """Схлопывание перед скрытием."""
+        self._widget_log(
+            f"Анимация ЗАКРЫТИЯ старт (масштаб={self.opening_scale:.2f})"
+        )
         self._cancel_scheduled_animation()
         self.is_opening = False
         self.is_closing = True
@@ -397,6 +444,7 @@ class PortalWidget:
             if self.opening_scale >= 1.0:
                 self.is_opening = False
                 self.opening_scale = 1.0
+                self._widget_log("Анимация открытия завершена → статичный кадр")
                 self.draw_portal_static()
                 self._after_id = None
                 self._after_master = None
@@ -414,6 +462,7 @@ class PortalWidget:
                 self.opening_scale = 0.0
                 self._after_id = None
                 self._after_master = None
+                self._widget_log("Анимация закрытия завершена → виджет скрыт")
                 try:
                     self.root.withdraw()
                 except Exception:
@@ -525,15 +574,20 @@ class PortalWidget:
 
     def hide(self) -> None:
         if self.is_closing:
+            self._widget_log("hide(): уже идёт закрытие — пропуск")
             return
         try:
             if not self.root.winfo_viewable():
+                self._widget_log("hide(): окно уже не видно — пропуск")
                 return
-        except Exception:
+        except Exception as e:
+            self._widget_log(f"hide(): ошибка winfo_viewable: {e}")
             return
+        self._widget_log("hide(): начинаю схлопывание")
         self.start_closing_animation()
 
     def show(self) -> None:
+        self._widget_log("show(): окно deiconify + lift, запуск открытия")
         self.root.deiconify()
         self.root.lift()
         try:
@@ -568,15 +622,21 @@ class GlobalHotkeyManager:
         self.main_app = main_app
         self._thread: Optional[threading.Thread] = None
 
+    def _safe_log(self, message: str) -> None:
+        portal_thread_log(self.main_app, message, "⌨️")
+
     def start(self):
+        self._safe_log("Старт фонового потока регистрации хоткеев…")
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
     def _run(self):
+        self._safe_log("Поток хоткеев: _run() начат")
         try:
             from pynput import keyboard
-        except ImportError:
-            print("[Portal] pynput не установлен — хоткеи отключены")
+        except ImportError as e:
+            self._safe_log(f"pynput не установлен ({e}) — ставь: pip install pynput")
+            self._fallback_keyboard_lib()
             return
 
         is_mac = platform.system() == "Darwin"
@@ -586,48 +646,113 @@ class GlobalHotkeyManager:
             combo["<cmd>+<alt>+p"] = self.toggle_widget
             combo["<cmd>+<shift>+c"] = self.push_clipboard
             combo["<cmd>+<shift>+v"] = self.pull_clipboard
+            self._safe_log(
+                "macOS: зарегистрированы Cmd+Option+P, Cmd+Shift+C/V "
+                "(нужны «Мониторинг ввода» / Accessibility для Терминала или Python)"
+            )
         else:
             combo["<ctrl>+<alt>+p"] = self.toggle_widget
             combo["<ctrl>+<alt>+c"] = self.push_clipboard
             combo["<ctrl>+<alt>+v"] = self.pull_clipboard
+            self._safe_log(
+                "Windows: зарегистрированы Ctrl+Alt+P, Ctrl+Alt+C/V "
+                "(если не срабатывает — другая программа могла перехватить сочетание)"
+            )
+
+        self._safe_log(f"Ключи pynput: {', '.join(combo.keys())}")
 
         try:
             with keyboard.GlobalHotKeys(combo) as h:
+                _started_msg = (
+                    "pynput GlobalHotKeys запущен — жми сочетание. Полный лог: %TEMP%\\portal_hotkey_debug.log"
+                    if platform.system() == "win32"
+                    else "pynput GlobalHotKeys запущен — жми сочетание. Лог: /tmp/portal_hotkey_debug.log"
+                )
+                self._safe_log(_started_msg)
                 h.join()
         except Exception as e:
-            print(f"[Portal] GlobalHotKeys: {e}")
+            import traceback
+
+            self._safe_log(f"pynput GlobalHotKeys упал: {e!r}")
+            self._safe_log(traceback.format_exc())
+            self._fallback_keyboard_lib()
+
+    def _fallback_keyboard_lib(self) -> None:
+        """Резерв на Windows, если pynput не взлетел."""
+        if platform.system() != "Darwin":
+            try:
+                import keyboard as kb  # type: ignore
+            except ImportError as e:
+                self._safe_log(
+                    f"Библиотека keyboard недоступна ({e}). Хоткеи не работают."
+                )
+                return
+            self._safe_log("Пробую резерв: пакет keyboard (Ctrl+Alt+P/C/V)…")
+            try:
+                kb.add_hotkey("ctrl+alt+p", self.toggle_widget, suppress=False)
+                kb.add_hotkey("ctrl+alt+c", self.push_clipboard, suppress=False)
+                kb.add_hotkey("ctrl+alt+v", self.pull_clipboard, suppress=False)
+                self._safe_log(
+                    "keyboard: хоткеи повешены. Если снова тишина — запускай из консоли и смотри лог."
+                )
+                kb.wait()
+            except Exception as e:
+                import traceback
+
+                self._safe_log(f"keyboard тоже упал: {e!r}")
+                self._safe_log(traceback.format_exc())
+            return
+        self._safe_log(
+            "На Mac резерва keyboard нет — почини pynput или права Accessibility."
+        )
 
     def toggle_widget(self):
+        self._safe_log("НАЖАТО сочетание портала (Ctrl+Alt+P / Cmd+Option+P) → планирую переключение в GUI")
         try:
             if self.main_app is not None and hasattr(self.main_app, "after"):
                 self.main_app.after(0, self._toggle_ui)
             else:
                 self.widget.root.after(0, self._toggle_ui)
-        except Exception:
-            pass
+        except Exception as e:
+            self._safe_log(f"Ошибка main_app.after(0, toggle): {e!r}")
 
     def _toggle_ui(self):
+        vis = False
+        try:
+            vis = self.widget.is_visible()
+        except Exception as e:
+            portal_thread_log(self.main_app, f"is_visible() ошибка: {e}", "⌨️")
+        closing = getattr(self.widget, "is_closing", False)
+        portal_thread_log(
+            self.main_app,
+            f"_toggle_ui: видим={vis}, закрывается={closing}",
+            "⌨️",
+        )
         # Во время схлопывания повторный хоткей — снова раскрыть, а не игнорировать
-        if getattr(self.widget, "is_closing", False):
+        if closing:
             self.widget.show()
             return
-        if self.widget.is_visible():
+        if vis:
             self.widget.hide()
         else:
             self.widget.show()
 
     def push_clipboard(self):
+        self._safe_log("Нажато: отправка буфера (Ctrl+Alt+C / Cmd+Shift+C)")
         if self.main_app and hasattr(self.main_app, "push_shared_clipboard_hotkey"):
             try:
                 self.main_app.after(0, self.main_app.push_shared_clipboard_hotkey)
-            except Exception:
+            except Exception as e:
+                self._safe_log(f"after(clipboard push): {e!r}")
                 self.main_app.push_shared_clipboard_hotkey()
 
     def pull_clipboard(self):
+        self._safe_log("Нажато: получение буфера (Ctrl+Alt+V / Cmd+Shift+V)")
         if self.main_app and hasattr(self.main_app, "pull_shared_clipboard_hotkey"):
             try:
                 self.main_app.after(0, self.main_app.pull_shared_clipboard_hotkey)
-            except Exception:
+            except Exception as e:
+                self._safe_log(f"after(clipboard pull): {e!r}")
                 self.main_app.pull_shared_clipboard_hotkey()
 
 

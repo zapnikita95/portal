@@ -37,6 +37,7 @@ echo.
 echo 🚀 Запуск Портала с виджетом...
 echo.
 echo 💡 Используйте Ctrl+Alt+P для показа/скрытия виджета
+echo 📝 Отладка хоткеев: %TEMP%\portal_hotkey_debug.log
 echo.
 
 python portal.py --widget

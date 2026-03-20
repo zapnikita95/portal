@@ -856,18 +856,37 @@ if __name__ == "__main__":
     show_widget = "--widget" in sys.argv or "-w" in sys.argv
     
     app = PortalApp()
-    
+
+    if not show_widget:
+        app.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        app.log("⚠️ ЗАПУСК БЕЗ ВИДЖЕТА: глобальные хоткеи ВЫКЛЮЧЕНЫ.")
+        app.log("   Ctrl+Alt+P / буфер с клавиатуры работают только с флагом --widget")
+        app.log("   Запуск:  python portal.py --widget   или   run_widget.bat")
+        app.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
     # Если запрошен виджет, создаем его
     if show_widget:
+        _dbg = (
+            Path(os.environ.get("TEMP", os.environ.get("TMP", ".")))
+            / "portal_hotkey_debug.log"
+            if platform.system() == "win32"
+            else Path(os.environ.get("TMPDIR", "/tmp")) / "portal_hotkey_debug.log"
+        )
+        app.log(f"📝 Лог хоткеев (всегда пишется в файл): {_dbg}")
         try:
             app.update_idletasks()
             from portal_widget import PortalWidget, GlobalHotkeyManager
+
             widget = PortalWidget(app)
             GlobalHotkeyManager(widget, app).start()
             widget.root.withdraw()
             app.log("✅ Виджет скрыт по умолчанию — Ctrl+Alt+P (Win) / Cmd+Option+P (Mac) чтобы показать")
             app.log("💡 IP второго ПК вводится один раз в поле выше → «Сохранить IP»")
+            app.log("⌨️ Смотри строки «⌨️ …» ниже: если жмёшь хоткей — должны появляться сообщения.")
         except Exception as e:
             app.log(f"⚠️ Не удалось создать виджет: {str(e)}")
-    
+            import traceback
+
+            app.log(traceback.format_exc())
+
     app.mainloop()
