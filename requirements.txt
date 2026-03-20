@@ -1,0 +1,8 @@
+customtkinter==5.2.2
+pillow==10.2.0
+pyperclip==1.8.2
+watchdog==3.0.0
+keyboard==0.13.5
+pynput==1.7.6
+# tkinterdnd2 опционально (только для Windows drag & drop)
+# Установите вручную если нужно: pip install tkinterdnd2
