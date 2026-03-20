@@ -17,7 +17,8 @@
   - **Общий буфер**: отправить локальный буфер на другой ПК — `Ctrl+Alt+C` (Win) / `Cmd+Shift+C` (Mac)
   - **Общий буфер**: забрать буфер с другого ПК в локальный — `Ctrl+Alt+V` (Win) / `Cmd+Shift+V` (Mac)  
     *(на втором компьютере должен быть запущен приёмник «Запустить портал», в виджете указан IP пары)*
-- 🖱️ **Виджет**: перетаскивание окна — **Alt + левую кнопку**; выбор файла — **Ctrl + клик**; IP пары — **двойной клик**
+- 🖱️ **Виджет**: перетаскивание окна — **Alt + левую кнопку**; выбор файла — **Ctrl + клик**; сменить IP — **двойной клик**
+- 💾 **IP второго ПК** вводится **один раз** в главном окне («Сохранить IP») или в виджете; хранится в `%APPDATA%\Portal\config.json` (Win) или `~/Library/Application Support/Portal/config.json` (Mac)
 - 🔒 **Безопасность** через Tailscale VPN
 - 🚀 **Работа без браузера** - нативное приложение
 
@@ -33,14 +34,27 @@
 1. Скачайте проект
 2. Дважды кликните `start_portal.bat` - всё установится автоматически!
 
-### macOS:
+### macOS (итог — что сделать):
+```bash
+git clone https://github.com/zapnikita95/portal.git
+cd portal
+pip3 install -r requirements.txt
+chmod +x Portal.command fix.sh
+# если ошибка _tkinter:
+./fix.sh
+# запуск двойным кликом по Portal.command или:
+python3 portal.py --widget
+```
+Виджет **по умолчанию скрыт** — `Cmd+Option+P` чтобы показать/скрыть.
+
+### macOS (tkinter):
 1. Скачайте проект
 2. Если видите ошибку `ModuleNotFoundError: No module named '_tkinter'`:
    ```bash
    chmod +x fix.sh
    ./fix.sh
    ```
-3. Запустите: `python3 portal.py --widget`
+3. Запустите: `python3 portal.py --widget` или **`Portal.command`**
 
 ### Linux:
 ```bash

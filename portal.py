@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Optional, List
 import subprocess
 
+import portal_config
+
 # Настройка темы
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -38,8 +40,8 @@ class PortalApp(ctk.CTk):
         self.sync_clipboard_enabled = False
         self.sync_target_ip = None
         self.is_receiving_clipboard = False
-        # IP удалённого ПК для горячих клавиш / виджета (общий буфер и файлы)
-        self.remote_peer_ip: Optional[str] = None
+        # IP второго ПК — из файла настроек (один раз указал в главном окне)
+        self.remote_peer_ip: Optional[str] = portal_config.load_remote_ip()
         
         # Создание UI
         self.create_ui()
@@ -160,6 +162,34 @@ class PortalApp(ctk.CTk):
             )
             warning_label.pack(pady=10)
         
+        # IP второго компьютера (сохраняется в %APPDATA%/Portal или ~/Library/...)
+        peer_frame = ctk.CTkFrame(main_frame)
+        peer_frame.pack(fill="x", padx=20, pady=(0, 10))
+        ctk.CTkLabel(
+            peer_frame,
+            text="🖥 IP второго компьютера (Tailscale / LAN) — указывается один раз:",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+        ctk.CTkLabel(
+            peer_frame,
+            text="Сохраняется на диск. Отправка файлов/буфера и виджет используют его без повторных вопросов.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+        ).pack(anchor="w", padx=12, pady=(0, 8))
+        row = ctk.CTkFrame(peer_frame, fg_color="transparent")
+        row.pack(fill="x", padx=12, pady=(0, 12))
+        self.peer_ip_entry = ctk.CTkEntry(row, width=280, placeholder_text="например 100.65.63.84")
+        self.peer_ip_entry.pack(side="left", padx=(0, 10))
+        if self.remote_peer_ip:
+            self.peer_ip_entry.insert(0, self.remote_peer_ip)
+        ctk.CTkButton(
+            row,
+            text="Сохранить IP",
+            width=120,
+            command=self.save_peer_ip_from_ui,
+            font=ctk.CTkFont(size=13),
+        ).pack(side="left")
+        
         # Кнопки управления
         button_frame = ctk.CTkFrame(main_frame)
         button_frame.pack(fill="x", padx=20, pady=20)
@@ -217,6 +247,15 @@ class PortalApp(ctk.CTk):
         self.log_text.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self.log_text.insert("1.0", "Готов к работе...\n")
         self.log_text.configure(state="disabled")
+    
+    def save_peer_ip_from_ui(self):
+        """Сохранить IP второго ПК из поля ввода (в файл + в память)."""
+        ip = self.peer_ip_entry.get().strip()
+        self.set_remote_peer_ip(ip if ip else None)
+        if ip:
+            self.log(f"✅ IP второго ПК сохранён: {ip}")
+        else:
+            self.log("ℹ️ IP второго ПК очищен")
     
     def log(self, message: str):
         """Добавление сообщения в лог"""
@@ -368,8 +407,13 @@ class PortalApp(ctk.CTk):
             self.log(f"❌ Ошибка ответа буфера: {str(e)}")
     
     def set_remote_peer_ip(self, ip: Optional[str]):
-        """Сохранить IP второго компьютера для горячих клавиш"""
+        """Сохранить IP второго компьютера (файл + поле в главном окне)."""
         self.remote_peer_ip = (ip or "").strip() or None
+        portal_config.save_remote_ip(self.remote_peer_ip)
+        if hasattr(self, "peer_ip_entry"):
+            self.peer_ip_entry.delete(0, "end")
+            if self.remote_peer_ip:
+                self.peer_ip_entry.insert(0, self.remote_peer_ip)
     
     def push_shared_clipboard_hotkey(self):
         """Ctrl+Alt+C / Cmd+Shift+C — отправить локальный буфер на удалённый ПК"""
@@ -431,34 +475,44 @@ class PortalApp(ctk.CTk):
             _log(f"❌ Не удалось получить буфер: {str(e)}")
     
     def send_file_dialog(self):
-        """Диалог выбора файла для отправки"""
+        """Выбор файла; IP берётся из сохранённых настроек (без лишних окон)."""
         from tkinter import filedialog
         filepath = filedialog.askopenfilename(
             title="Выберите файл для отправки"
         )
-        if filepath:
+        if not filepath:
+            return
+        if self.remote_peer_ip:
+            threading.Thread(
+                target=self.send_file,
+                args=(filepath, self.remote_peer_ip),
+                daemon=True,
+            ).start()
+        else:
+            self.log("⚠️ Сначала укажите IP второго ПК выше и нажмите «Сохранить IP»")
             self.send_file_to_dialog(filepath)
     
     def send_file_to_dialog(self, filepath: str):
-        """Диалог для ввода IP получателя"""
+        """Только если IP ещё не сохранён — один раз ввести и сохранить."""
         dialog = ctk.CTkToplevel(self)
         dialog.title("Отправить файл")
         dialog.geometry("400x200")
         
         label = ctk.CTkLabel(
             dialog,
-            text="Введите Tailscale IP получателя:",
+            text="Введите IP второго ПК (будет сохранён):",
             font=ctk.CTkFont(size=14)
         )
         label.pack(pady=20)
         
         ip_entry = ctk.CTkEntry(dialog, width=200, font=ctk.CTkFont(size=12))
         ip_entry.pack(pady=10)
-        ip_entry.insert(0, "100.")
+        ip_entry.insert(0, self.remote_peer_ip or "100.")
         
         def send():
             ip = ip_entry.get().strip()
             if ip:
+                self.set_remote_peer_ip(ip)
                 dialog.destroy()
                 threading.Thread(
                     target=self.send_file,
@@ -475,39 +529,46 @@ class PortalApp(ctk.CTk):
         send_button.pack(pady=20)
     
     def send_clipboard_dialog(self):
-        """Диалог для отправки буфера обмена"""
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("Отправить буфер обмена")
-        dialog.geometry("400x200")
-        
-        label = ctk.CTkLabel(
-            dialog,
-            text="Введите Tailscale IP получателя:",
-            font=ctk.CTkFont(size=14)
-        )
-        label.pack(pady=20)
-        
-        ip_entry = ctk.CTkEntry(dialog, width=200, font=ctk.CTkFont(size=12))
-        ip_entry.pack(pady=10)
-        ip_entry.insert(0, "100.")
-        
-        def send():
-            ip = ip_entry.get().strip()
-            if ip:
-                dialog.destroy()
-                threading.Thread(
-                    target=self.send_clipboard,
-                    args=(ip,),
-                    daemon=True
-                ).start()
-        
-        send_button = ctk.CTkButton(
-            dialog,
-            text="Отправить",
-            command=send,
-            font=ctk.CTkFont(size=14)
-        )
-        send_button.pack(pady=20)
+        """Отправка буфера на сохранённый IP без лишних окон."""
+        if self.remote_peer_ip:
+            threading.Thread(
+                target=self.send_clipboard,
+                args=(self.remote_peer_ip,),
+                daemon=True,
+            ).start()
+        else:
+            self.log("⚠️ Сначала укажите IP второго ПК выше и нажмите «Сохранить IP»")
+            dialog = ctk.CTkToplevel(self)
+            dialog.title("Отправить буфер обмена")
+            dialog.geometry("400x200")
+            label = ctk.CTkLabel(
+                dialog,
+                text="Введите IP второго ПК (будет сохранён):",
+                font=ctk.CTkFont(size=14),
+            )
+            label.pack(pady=20)
+            ip_entry = ctk.CTkEntry(dialog, width=200, font=ctk.CTkFont(size=12))
+            ip_entry.pack(pady=10)
+            ip_entry.insert(0, "100.")
+
+            def send():
+                ip = ip_entry.get().strip()
+                if ip:
+                    self.set_remote_peer_ip(ip)
+                    dialog.destroy()
+                    threading.Thread(
+                        target=self.send_clipboard,
+                        args=(ip,),
+                        daemon=True,
+                    ).start()
+
+            send_button = ctk.CTkButton(
+                dialog,
+                text="Отправить",
+                command=send,
+                font=ctk.CTkFont(size=14),
+            )
+            send_button.pack(pady=20)
     
     def send_file(self, filepath: str, target_ip: str):
         """Отправка файла"""
@@ -618,7 +679,9 @@ if __name__ == "__main__":
             from portal_widget import PortalWidget, GlobalHotkeyManager
             widget = PortalWidget(app)
             GlobalHotkeyManager(widget, app).start()
-            app.log("✅ Виджет-портал создан (Alt+ЛКМ — двигать окно, Ctrl+ЛКМ — файл)")
+            widget.root.withdraw()
+            app.log("✅ Виджет скрыт по умолчанию — Ctrl+Alt+P (Win) / Cmd+Option+P (Mac) чтобы показать")
+            app.log("💡 IP второго ПК вводится один раз в поле выше → «Сохранить IP»")
         except Exception as e:
             app.log(f"⚠️ Не удалось создать виджет: {str(e)}")
     

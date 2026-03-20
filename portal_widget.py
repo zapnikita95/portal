@@ -13,6 +13,8 @@ from PIL import Image, ImageTk, ImageSequence
 import os
 from typing import Optional, Any, List
 
+import portal_config
+
 try:
     from portal import PortalApp
 except ImportError:
@@ -45,18 +47,26 @@ class PortalWidget:
         self.current_frame = 0
         self.target_ip: Optional[str] = None
         self._dnd_tkinterdnd2 = False
+        self._windnd_ok = False
+
+        if main_app and getattr(main_app, "remote_peer_ip", None):
+            self.target_ip = main_app.remote_peer_ip
+        if not self.target_ip:
+            self.target_ip = portal_config.load_remote_ip()
 
         self.load_portal_gif()
         self.setup_window()
 
-        try:
-            from tkinterdnd2 import TkinterDnD
+        # Windows: windnd цепляется к HWND надёжнее, чем tkinterdnd2 на Toplevel
+        if platform.system() != "Windows":
+            try:
+                from tkinterdnd2 import TkinterDnD
 
-            TkinterDnD._require(self.root)
-            self._dnd_tkinterdnd2 = True
-        except Exception as e:
-            self._dnd_tkinterdnd2 = False
-            print(f"[Portal] tkinterdnd2: {e} — установите: pip install tkinterdnd2")
+                TkinterDnD._require(self.root)
+                self._dnd_tkinterdnd2 = True
+            except Exception as e:
+                self._dnd_tkinterdnd2 = False
+                print(f"[Portal] tkinterdnd2: {e} — pip install tkinterdnd2")
 
         self.canvas = tk.Canvas(
             self.root,
@@ -68,7 +78,13 @@ class PortalWidget:
         self.canvas.pack()
 
         self.setup_transparency()
-        self.setup_drag_drop()
+        self.root.update_idletasks()
+
+        if platform.system() == "Windows":
+            self._setup_windnd_drop()
+        else:
+            self.setup_drag_drop_tkdnd()
+
         self.setup_mouse_bindings()
 
         self.start_opening_animation()
@@ -134,8 +150,44 @@ class PortalWidget:
         self.root.bind("<Button-3>", self.show_context_menu)
         self.canvas.bind("<Button-3>", self.show_context_menu)
 
-    def setup_drag_drop(self):
-        """Регистрация drop на canvas (после TkinterDnD._require в __init__)."""
+    def _setup_windnd_drop(self):
+        """Windows: перетаскивание файлов из Проводника (в т.ч. .mp4)."""
+        try:
+            import windnd
+
+            def on_drop(files):
+                paths: List[str] = []
+                enc = sys.getfilesystemencoding() or "utf-8"
+                for b in files:
+                    if isinstance(b, str):
+                        paths.append(b)
+                        continue
+                    try:
+                        paths.append(b.decode("utf-8"))
+                    except Exception:
+                        try:
+                            paths.append(b.decode(enc))
+                        except Exception:
+                            paths.append(b.decode("mbcs", errors="replace"))
+                if paths:
+                    self.root.after(0, lambda p=list(paths): self.send_files(p))
+
+            windnd.hook_dropfiles(self.root, on_drop)
+            self._windnd_ok = True
+        except Exception as e:
+            print(f"[Portal] windnd не сработал ({e}), пробуем tkinterdnd2…")
+            try:
+                from tkinterdnd2 import TkinterDnD, DND_FILES
+
+                TkinterDnD._require(self.root)
+                self._dnd_tkinterdnd2 = True
+                self.canvas.drop_target_register(DND_FILES)
+                self.canvas.dnd_bind("<<Drop>>", self._on_tkdnd_drop)
+            except Exception as e2:
+                print(f"[Portal] И drag&drop недоступен: {e2}")
+
+    def setup_drag_drop_tkdnd(self):
+        """macOS / Linux: tkinterdnd2 на canvas."""
         if not self._dnd_tkinterdnd2:
             return
         try:
@@ -182,10 +234,8 @@ class PortalWidget:
         tk.Label(dialog, text="IP второго компьютера (Tailscale / LAN):").pack(pady=10)
         ip_entry = tk.Entry(dialog, width=28)
         ip_entry.pack(pady=5)
-        if self.target_ip:
-            ip_entry.insert(0, self.target_ip)
-        else:
-            ip_entry.insert(0, "100.")
+        pref = self.target_ip or portal_config.load_remote_ip() or "100."
+        ip_entry.insert(0, pref)
         ip_entry.focus()
 
         def save_ip():
@@ -206,10 +256,8 @@ class PortalWidget:
         tk.Label(dialog, text="IP второго компьютера:").pack(pady=10)
         ip_entry = tk.Entry(dialog, width=28)
         ip_entry.pack(pady=5)
-        if self.target_ip:
-            ip_entry.insert(0, self.target_ip)
-        else:
-            ip_entry.insert(0, "100.")
+        pref = self.target_ip or portal_config.load_remote_ip() or "100."
+        ip_entry.insert(0, pref)
 
         def save_ip():
             ip = ip_entry.get().strip()
@@ -217,6 +265,8 @@ class PortalWidget:
                 self.target_ip = ip
                 if self.main_app and hasattr(self.main_app, "set_remote_peer_ip"):
                     self.main_app.set_remote_peer_ip(ip)
+                else:
+                    portal_config.save_remote_ip(ip)
             dialog.destroy()
 
         tk.Button(dialog, text="Сохранить", command=save_ip).pack(pady=10)
@@ -321,19 +371,33 @@ class PortalWidget:
         if len(pts) >= 6:
             self.canvas.create_polygon(pts, outline="#FF6B35", fill="#1a0a05", width=2)
 
+    def _resolve_peer_ip(self) -> Optional[str]:
+        ip = self.target_ip
+        if not ip and self.main_app:
+            ip = getattr(self.main_app, "remote_peer_ip", None)
+        if not ip:
+            ip = portal_config.load_remote_ip()
+        return ip
+
     def send_files(self, files: List[str]):
-        if not self.target_ip:
+        ip = self._resolve_peer_ip()
+        if not ip:
             result: List[str] = []
 
-            def cb(ip: str):
-                result.append(ip)
+            def cb(addr: str):
+                result.append(addr)
 
             self.show_ip_dialog_sync(cb)
             if not result:
                 return
-            self.target_ip = result[0]
+            ip = result[0].strip()
+            self.target_ip = ip
             if self.main_app and hasattr(self.main_app, "set_remote_peer_ip"):
-                self.main_app.set_remote_peer_ip(self.target_ip)
+                self.main_app.set_remote_peer_ip(ip)
+            else:
+                portal_config.save_remote_ip(ip)
+        else:
+            self.target_ip = ip
 
         for fp in files:
             if self.main_app and hasattr(self.main_app, "send_file"):
@@ -341,7 +405,7 @@ class PortalWidget:
                     self.main_app.log(f"📤 Виджет: {Path(fp).name}")
                 threading.Thread(
                     target=self.main_app.send_file,
-                    args=(fp, self.target_ip),
+                    args=(fp, ip),
                     daemon=True,
                 ).start()
 
