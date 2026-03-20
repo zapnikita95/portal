@@ -8,6 +8,10 @@ import threading
 import time
 import sys
 import platform
+
+# Проверка версии Python для совместимости
+if sys.version_info >= (3, 13):
+    print("[Portal] Python 3.13+ - некоторые функции могут быть ограничены")
 from pathlib import Path
 from PIL import Image, ImageTk, ImageSequence
 import os
@@ -33,12 +37,18 @@ class PortalWidget:
         self._windnd_ok = False
 
         # macOS/Linux: TkinterDnD._require на Toplevel даёт Tcl-ошибки; патчим главное CTk-окно
+        # ВАЖНО: на Python 3.13+ может быть segfault - пробуем безопасно
         if platform.system() != "Windows" and main_app is not None:
             try:
                 from tkinterdnd2 import TkinterDnD
-
-                TkinterDnD._require(main_app)
-                self._dnd_tkinterdnd2 = True
+                # На Python 3.13+ _require может падать - пробуем с защитой
+                if sys.version_info >= (3, 13):
+                    # Пропускаем _require на 3.13+ - может вызвать segfault
+                    print("[Portal] Python 3.13+: пропускаем tkinterdnd2._require (может вызвать segfault)")
+                    self._dnd_tkinterdnd2 = False
+                else:
+                    TkinterDnD._require(main_app)
+                    self._dnd_tkinterdnd2 = True
             except Exception as e:
                 self._dnd_tkinterdnd2 = False
                 print(f"[Portal] tkinterdnd2 (главное окно): {e}")

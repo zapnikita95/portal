@@ -3,6 +3,14 @@
 через Tailscale сеть с красивым UI в стиле портала
 """
 
+import sys
+
+# Проверка версии Python (Python 3.13 может иметь проблемы с некоторыми библиотеками)
+if sys.version_info >= (3, 13):
+    print("⚠️  Python 3.13+ обнаружен. Некоторые библиотеки могут работать нестабильно.")
+    print("   Рекомендуется Python 3.11 или 3.12 для стабильности.")
+    print("   Если видите ошибки, попробуйте: pyenv install 3.12.7 && pyenv local 3.12.7\n")
+
 import customtkinter as ctk
 import socket
 import threading

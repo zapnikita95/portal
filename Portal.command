@@ -18,6 +18,14 @@ if ! python3 -c "import tkinter" 2>/dev/null; then
     exit 1
 fi
 
+# Проверка Python 3.13+
+PYVER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+if python3 -c "import sys; exit(0 if sys.version_info < (3, 13) else 1)" 2>/dev/null; then
+    echo "⚠️  Python $PYVER обнаружен. Python 3.13+ может вызывать segfault."
+    echo "   Рекомендуется Python 3.12. См. MAC_PYTHON313_FIX.md"
+    echo ""
+fi
+
 if ! python3 -c "import customtkinter" 2>/dev/null; then
     echo "📦 Ставлю зависимости..."
     pip3 install -r requirements.txt || exit 1
