@@ -418,11 +418,25 @@ class PortalWidget:
             if self.main_app and hasattr(self.main_app, "send_file"):
                 if hasattr(self.main_app, "log"):
                     self.main_app.log(f"📤 Виджет: {Path(fp).name}")
+                # Отправка в отдельном потоке с обработкой ошибок
+                def send_with_error_handling(filepath, target_ip):
+                    try:
+                        self.main_app.send_file(filepath, target_ip)
+                    except Exception as e:
+                        if hasattr(self.main_app, "log"):
+                            err = str(e)
+                            if "refused" in err.lower() or "timeout" in err.lower():
+                                self.main_app.log(f"❌ Не удалось отправить {Path(filepath).name}")
+                                self.main_app.log("💡 На втором ПК должен быть нажат «Запустить портал»")
+                            else:
+                                self.main_app.log(f"❌ Ошибка: {err}")
                 threading.Thread(
-                    target=self.main_app.send_file,
+                    target=send_with_error_handling,
                     args=(fp, ip),
                     daemon=True,
                 ).start()
+            else:
+                print(f"[Portal] Не удалось отправить {Path(fp).name}: главное приложение недоступно")
 
     def hide(self):
         self.root.withdraw()

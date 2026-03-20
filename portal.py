@@ -259,11 +259,26 @@ class PortalApp(ctk.CTk):
     def save_peer_ip_from_ui(self):
         """Сохранить IP второго ПК из поля ввода (в файл + в память)."""
         ip = self.peer_ip_entry.get().strip()
-        self.set_remote_peer_ip(ip if ip else None)
-        if ip:
+        if not ip:
+            self.log("⚠️ Введите IP адрес перед сохранением")
+            return
+        
+        # Сохраняем
+        self.set_remote_peer_ip(ip)
+        
+        # Проверяем что действительно сохранилось
+        saved = portal_config.load_remote_ip()
+        config_file = portal_config.config_path()
+        
+        if saved == ip:
             self.log(f"✅ IP второго ПК сохранён: {ip}")
+            self.log(f"💾 Файл: {config_file}")
         else:
-            self.log("ℹ️ IP второго ПК очищен")
+            self.log(f"❌ ОШИБКА СОХРАНЕНИЯ!")
+            self.log(f"   Введено: {ip}")
+            self.log(f"   Прочитано из файла: {saved or '(пусто)'}")
+            self.log(f"   Файл: {config_file}")
+            self.log(f"   Проверь права на запись в эту папку")
     
     def log(self, message: str):
         """Добавление сообщения в лог"""
@@ -416,8 +431,11 @@ class PortalApp(ctk.CTk):
     
     def set_remote_peer_ip(self, ip: Optional[str]):
         """Сохранить IP второго компьютера (файл + поле в главном окне)."""
-        self.remote_peer_ip = (ip or "").strip() or None
-        portal_config.save_remote_ip(self.remote_peer_ip)
+        ip_clean = (ip or "").strip() or None
+        self.remote_peer_ip = ip_clean
+        success = portal_config.save_remote_ip(ip_clean)
+        if not success and ip_clean:
+            self.log(f"⚠️ Не удалось сохранить IP в файл! Проверь права на запись")
         if hasattr(self, "peer_ip_entry"):
             self.peer_ip_entry.delete(0, "end")
             if self.remote_peer_ip:
@@ -584,7 +602,27 @@ class PortalApp(ctk.CTk):
             self.log(f"📤 Отправка файла на {target_ip}...")
             
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client_socket.connect((target_ip, 12345))
+            client_socket.settimeout(10)  # Таймаут 10 секунд
+            try:
+                client_socket.connect((target_ip, 12345))
+            except socket.timeout:
+                self.log(f"❌ Таймаут подключения к {target_ip}")
+                self.log("💡 Проверь:")
+                self.log("   1. На втором ПК нажат «Запустить портал»")
+                self.log("   2. IP адрес правильный")
+                self.log("   3. Оба ПК в одной сети (Tailscale или LAN)")
+                return
+            except ConnectionRefusedError:
+                self.log(f"❌ Подключение отклонено: {target_ip}:12345")
+                self.log("💡 На втором ПК должен быть нажат «Запустить портал»")
+                return
+            except OSError as e:
+                if "No route to host" in str(e) or "Network is unreachable" in str(e):
+                    self.log(f"❌ Нет пути к {target_ip}")
+                    self.log("💡 Проверь что оба ПК в одной сети (Tailscale или LAN)")
+                else:
+                    self.log(f"❌ Ошибка сети: {str(e)}")
+                return
             
             filename = os.path.basename(filepath)
             filesize = os.path.getsize(filepath)
@@ -615,8 +653,19 @@ class PortalApp(ctk.CTk):
             else:
                 self.log(f"⚠️ Неопределенный ответ от получателя")
                 
+        except socket.timeout:
+            self.log(f"❌ Таймаут при отправке на {target_ip}")
+            self.log("💡 Файл слишком большой или медленное соединение")
         except Exception as e:
-            self.log(f"❌ Ошибка отправки: {str(e)}")
+            err_msg = str(e)
+            if "timed out" in err_msg.lower() or "timeout" in err_msg.lower():
+                self.log(f"❌ Таймаут: {target_ip} не отвечает")
+                self.log("💡 Убедись что на втором ПК запущен портал")
+            elif "refused" in err_msg.lower():
+                self.log(f"❌ Подключение отклонено: портал на {target_ip} не запущен")
+                self.log("💡 На втором ПК нажми «Запустить портал»")
+            else:
+                self.log(f"❌ Ошибка отправки: {err_msg}")
     
     def send_clipboard(self, target_ip: str):
         """Отправка буфера обмена"""
@@ -629,7 +678,19 @@ class PortalApp(ctk.CTk):
             self.log(f"📤 Отправка буфера обмена на {target_ip}...")
             
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client_socket.connect((target_ip, 12345))
+            client_socket.settimeout(10)
+            try:
+                client_socket.connect((target_ip, 12345))
+            except (socket.timeout, ConnectionRefusedError, OSError) as e:
+                if isinstance(e, socket.timeout):
+                    self.log(f"❌ Таймаут подключения к {target_ip}")
+                elif isinstance(e, ConnectionRefusedError):
+                    self.log(f"❌ Подключение отклонено: портал на {target_ip} не запущен")
+                    self.log("💡 На втором ПК нажми «Запустить портал»")
+                else:
+                    self.log(f"❌ Нет пути к {target_ip}")
+                    self.log("💡 Проверь что оба ПК в одной сети")
+                return
             
             # Отправка метаданных
             message = {
@@ -642,7 +703,15 @@ class PortalApp(ctk.CTk):
             self.log(f"✅ Буфер обмена отправлен ({len(clipboard_text)} символов)")
                 
         except Exception as e:
-            self.log(f"❌ Ошибка отправки буфера: {str(e)}")
+            err_msg = str(e)
+            if "timed out" in err_msg.lower() or "timeout" in err_msg.lower():
+                self.log(f"❌ Таймаут: {target_ip} не отвечает")
+                self.log("💡 Убедись что на втором ПК запущен портал")
+            elif "refused" in err_msg.lower():
+                self.log(f"❌ Подключение отклонено: портал на {target_ip} не запущен")
+                self.log("💡 На втором ПК нажми «Запустить портал»")
+            else:
+                self.log(f"❌ Ошибка отправки буфера: {err_msg}")
     
     def start_clipboard_monitor(self):
         """Запуск мониторинга буфера обмена"""

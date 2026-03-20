@@ -41,10 +41,22 @@ def load_remote_ip() -> Optional[str]:
 
 
 def save_remote_ip(ip: Optional[str]) -> None:
-    data = _load_all()
-    if ip and str(ip).strip():
-        data["remote_ip"] = str(ip).strip()
-    else:
-        data.pop("remote_ip", None)
-    p = config_path()
-    p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    """Сохранить IP в файл. Возвращает True если успешно."""
+    try:
+        data = _load_all()
+        if ip and str(ip).strip():
+            data["remote_ip"] = str(ip).strip()
+        else:
+            data.pop("remote_ip", None)
+        p = config_path()
+        p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        # Проверяем что записалось
+        if ip and str(ip).strip():
+            saved = load_remote_ip()
+            if saved != str(ip).strip():
+                print(f"[Portal] ВНИМАНИЕ: IP не сохранился! Введено: {ip}, прочитано: {saved}")
+                return False
+        return True
+    except Exception as e:
+        print(f"[Portal] Ошибка сохранения IP: {e}")
+        return False
