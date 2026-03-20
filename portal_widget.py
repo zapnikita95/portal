@@ -370,13 +370,15 @@ class PortalWidget:
                     self.draw_portal(center_x, center_y, radius)
         else:
             # Обычная анимация после открытия
-            if self.gif_frames:
+            if self.gif_frames and len(self.gif_frames) > 0:
                 # Показываем анимированный GIF
                 if self.current_frame < len(self.gif_frames):
                     self.canvas.create_image(center_x, center_y, image=self.gif_frames[self.current_frame], anchor=tk.CENTER)
                     self.current_frame = (self.current_frame + 1) % len(self.gif_frames)
+                else:
+                    self.current_frame = 0
             else:
-                # Рисуем программно
+                # Рисуем программно если нет GIF
                 radius = self.size // 2 - 20
                 self.draw_portal(center_x, center_y, radius)
                 self.angle += 0.1
