@@ -7,36 +7,70 @@ ModuleNotFoundError: No module named '_tkinter'
 
 Это означает, что Python был установлен без поддержки Tkinter.
 
-## Решение для pyenv:
+## Быстрое решение (автоматический скрипт):
 
-1. **Установите tcl-tk через Homebrew:**
-   ```bash
-   brew install tcl-tk
-   ```
+Запустите скрипт исправления:
+```bash
+chmod +x fix_mac_tkinter.sh
+./fix_mac_tkinter.sh
+```
 
-2. **Переустановите Python через pyenv с поддержкой tkinter:**
-   ```bash
-   # Удалите текущую версию Python
-   pyenv uninstall 3.12.7
-   
-   # Установите заново с указанием пути к tcl-tk
-   export PATH="/opt/homebrew/opt/tcl-tk/bin:$PATH"
-   export LDFLAGS="-L/opt/homebrew/opt/tcl-tk/lib"
-   export CPPFLAGS="-I/opt/homebrew/opt/tcl-tk/include"
-   export PKG_CONFIG_PATH="/opt/homebrew/opt/tcl-tk/lib/pkgconfig"
-   
-   pyenv install 3.12.7
-   ```
+## Ручное решение для pyenv:
 
-3. **Или используйте системный Python:**
-   ```bash
-   # macOS обычно имеет встроенный Python с tkinter
-   /usr/bin/python3 portal.py --widget
-   ```
+### Шаг 1: Установите tcl-tk
+```bash
+brew install tcl-tk
+```
 
-## Альтернативное решение:
+### Шаг 2: Определите путь к tcl-tk
+```bash
+# Для Apple Silicon (M1/M2/M3)
+TCLTK_PATH="/opt/homebrew/opt/tcl-tk"
 
-Используйте Homebrew Python вместо pyenv:
+# Для Intel Mac
+TCLTK_PATH="/usr/local/opt/tcl-tk"
+
+# Или автоматически
+TCLTK_PATH=$(brew --prefix tcl-tk)
+```
+
+### Шаг 3: Удалите текущую версию Python
+```bash
+# Узнайте текущую версию
+python3 --version
+
+# Удалите её (замените 3.12.7 на вашу версию)
+pyenv uninstall 3.12.7
+```
+
+### Шаг 4: Установите Python заново с поддержкой tkinter
+```bash
+# Установите переменные окружения
+export PATH="$TCLTK_PATH/bin:$PATH"
+export LDFLAGS="-L$TCLTK_PATH/lib"
+export CPPFLAGS="-I$TCLTK_PATH/include"
+export PKG_CONFIG_PATH="$TCLTK_PATH/lib/pkgconfig"
+
+# Установите Python
+pyenv install 3.12.7
+
+# Установите как глобальную версию
+pyenv global 3.12.7
+```
+
+### Шаг 5: Переустановите зависимости
+```bash
+pip install -r requirements.txt
+```
+
+## Альтернативное решение (без переустановки):
+
+### Вариант 1: Используйте системный Python macOS
+```bash
+/usr/bin/python3 portal.py --widget
+```
+
+### Вариант 2: Используйте Homebrew Python
 ```bash
 brew install python@3.12
 python3 portal.py --widget
@@ -46,10 +80,10 @@ python3 portal.py --widget
 
 После установки проверьте:
 ```bash
-python3 -c "import tkinter; print('Tkinter работает!')"
+python3 -c "import tkinter; print('✅ Tkinter работает!')"
 ```
 
-Если ошибка сохраняется, убедитесь что:
-- Homebrew установлен и обновлен: `brew update`
-- tcl-tk установлен: `brew list tcl-tk`
-- Python переустановлен с правильными переменными окружения
+Если ошибка сохраняется:
+- Убедитесь что Homebrew обновлен: `brew update`
+- Проверьте что tcl-tk установлен: `brew list tcl-tk`
+- Проверьте переменные окружения перед установкой Python
