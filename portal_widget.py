@@ -287,6 +287,11 @@ class PortalWidget:
 
         # Антидребезг: двойной клик в Tk может вызвать обработчик дважды (canvas + toplevel в bindtags)
         self._last_double_clipboard_send_mono: float = 0.0
+        # Режим «статичная картинка»: масштаб при открытии/закрытии
+        self._portal_media_static_visual: bool = False
+        self._static_rgba_full: Optional[Image.Image] = None
+        self._static_open_photo: Optional[ImageTk.PhotoImage] = None
+        self._static_anim_steps: int = 18
 
         self.setup_window()
 
@@ -640,7 +645,10 @@ class PortalWidget:
     # ───────────────────────────── ЗАГРУЗКА GIF ─────────────────────
 
     def _find_portal_asset(self) -> Optional[str]:
-        """GIF или PNG в assets/ (любой portal*.gif / portal*.png)."""
+        """Пользовательский путь из config или GIF/PNG в assets/ (portal*.gif / portal*.png)."""
+        custom = portal_config.load_widget_media_path()
+        if custom and os.path.isfile(custom):
+            return custom
         assets_dir = os.path.join(os.path.dirname(__file__), "assets")
         os.makedirs(assets_dir, exist_ok=True)
         priority = [
@@ -774,7 +782,7 @@ class PortalWidget:
         return ImageTk.PhotoImage(composed, master=self.canvas)
 
     def load_portal_gif(self):
-        """Загрузить GIF или PNG из assets/, подготовить кадры под хромакей окна."""
+        """Загрузить GIF/PNG/WebP: путь из config (widget_media_path) или assets/, режим — widget_media_mode."""
         asset_path = self._find_portal_asset()
         if not asset_path:
             print(
@@ -801,6 +809,29 @@ class PortalWidget:
             if not raw_frames:
                 print("[Portal] Файл без кадров — рисованный портал")
                 return
+
+            wmode = portal_config.load_widget_media_mode()
+            if wmode == "static":
+                use_static_visual = True
+            elif wmode == "animated":
+                use_static_visual = False
+            else:
+                low = asset_path.lower()
+                if low.endswith(".gif"):
+                    use_static_visual = False
+                elif len(raw_frames) > 1:
+                    use_static_visual = False
+                else:
+                    use_static_visual = True
+
+            if use_static_visual and len(raw_frames) > 1:
+                raw_frames = [raw_frames[0]]
+
+            self._portal_media_static_visual = bool(use_static_visual and raw_frames)
+            self._static_rgba_full = (
+                raw_frames[0].copy() if self._portal_media_static_visual else None
+            )
+            self._static_open_photo = None
 
             self.gif_frames_raw = [f.copy() for f in raw_frames]
             self.gif_frames = []
@@ -840,8 +871,28 @@ class PortalWidget:
                     else "хромакей"
                 )
 
+            if getattr(self, "_portal_media_static_visual", False):
+                self.gif_frames = []
+                self.gif_frames_raw = []
+                self._gif_frame_durations = []
+                try:
+                    f0 = self._static_rgba_full
+                    if f0 is not None:
+                        if self._mac_using_rgba_window:
+                            self._static_open_photo = ImageTk.PhotoImage(
+                                f0.convert("RGBA"), master=self.canvas
+                            )
+                        else:
+                            self._static_open_photo = self._photo_from_rgba_chroma(f0)
+                        self._last_photo = self._static_open_photo
+                except Exception as ex:
+                    print(f"[Portal] статика: полный кадр: {ex}")
+                    self._static_open_photo = None
+                mode_note = f"{mode_note} | статика (масштаб при открытии/закрытии)"
+
+            _nframes = len(self.gif_frames) or (1 if self._static_open_photo else 0)
             print(
-                f"[Portal] Загружено {len(self.gif_frames)} кадр(ов) из {asset_path} ({mode_note})"
+                f"[Portal] Загружено {_nframes} кадр(ов) из {asset_path} ({mode_note})"
             )
             if platform.system() == "Darwin":
                 try:
@@ -860,6 +911,20 @@ class PortalWidget:
             import traceback
 
             traceback.print_exc()
+
+    def reload_portal_media(self) -> None:
+        """Перечитать путь/режим из config и заново загрузить медиа (только главный поток Tk)."""
+        self._cancel_anim()
+        self.gif_frames = []
+        self.gif_frames_raw = []
+        self._gif_frame_durations = []
+        self._portal_media_static_visual = False
+        self._static_rgba_full = None
+        self._static_open_photo = None
+        self._mac_using_rgba_window = False
+        self.anim_state = self.ANIM_HIDDEN
+        self.anim_frame_idx = 0
+        self.load_portal_gif()
 
     # ───────────────────────────── АНИМАЦИЯ ─────────────────────────
 
@@ -917,6 +982,31 @@ class PortalWidget:
             return max(16, self._gif_frame_durations[idx])
         return max(16, self._anim_speed_ms)
 
+    def _show_static_scaled(self, t: float) -> None:
+        """Статичная картинка: масштаб t ∈ [0, 1] от центра."""
+        base = self._static_rgba_full
+        if base is None:
+            return
+        t = max(0.0, min(1.0, float(t)))
+        self.canvas.delete("all")
+        cx, cy = self.size // 2, self.size // 2
+        if t >= 0.998 and getattr(self, "_static_open_photo", None):
+            photo = self._static_open_photo
+            self._last_photo = photo
+            self.canvas.create_image(cx, cy, image=photo, anchor=tk.CENTER)
+            return
+        scale = 0.06 + 0.94 * (t ** 0.82)
+        side = max(2, int(self.size * scale))
+        small = base.resize((side, side), Image.Resampling.LANCZOS)
+        if self._mac_using_rgba_window and not getattr(
+            self, "_mac_framed_window", False
+        ):
+            photo = ImageTk.PhotoImage(small.convert("RGBA"), master=self.canvas)
+        else:
+            photo = self._photo_from_rgba_chroma(small)
+        self._last_photo = photo
+        self.canvas.create_image(cx, cy, image=photo, anchor=tk.CENTER)
+
     def _show_frame(self, idx: int):
         """Отрисовать один кадр на canvas."""
         self.canvas.delete("all")
@@ -938,6 +1028,43 @@ class PortalWidget:
     def _animate_step(self):
         """Один шаг анимации — планируется через self.root.after (перерисовка canvas Toplevel)."""
         if self.anim_state == self.ANIM_HIDDEN:
+            return
+
+        steps = max(8, int(getattr(self, "_static_anim_steps", 18)))
+
+        if self.anim_state == self.ANIM_OPENING and getattr(
+            self, "_portal_media_static_visual", False
+        ):
+            tt = self.anim_frame_idx / max(1, steps - 1)
+            self._show_static_scaled(tt)
+            if self.anim_frame_idx < steps - 1:
+                self.anim_frame_idx += 1
+                self._schedule_anim_ms(self._anim_speed_ms, self._animate_step)
+            else:
+                self.anim_state = self.ANIM_OPEN
+                self._show_static_scaled(1.0)
+            return
+
+        if self.anim_state == self.ANIM_OPEN and getattr(
+            self, "_portal_media_static_visual", False
+        ):
+            self._show_static_scaled(1.0)
+            return
+
+        if self.anim_state == self.ANIM_CLOSING and getattr(
+            self, "_portal_media_static_visual", False
+        ):
+            tt = self.anim_frame_idx / max(1, steps - 1)
+            self._show_static_scaled(tt)
+            if self.anim_frame_idx > 0:
+                self.anim_frame_idx -= 1
+                self._schedule_anim_ms(self._anim_speed_ms, self._animate_step)
+            else:
+                self.anim_state = self.ANIM_HIDDEN
+                try:
+                    self.root.withdraw()
+                except tk.TclError:
+                    pass
             return
 
         total = len(self.gif_frames) if self.gif_frames else 20
@@ -1010,6 +1137,17 @@ class PortalWidget:
     def hide(self):
         """Закрыть виджет с анимацией сворачивания."""
         self._cancel_anim()
+        steps = max(8, int(getattr(self, "_static_anim_steps", 18)))
+        if getattr(self, "_portal_media_static_visual", False) and (
+            self._static_rgba_full is not None or self._static_open_photo is not None
+        ):
+            if self.anim_state == self.ANIM_OPEN:
+                self.anim_frame_idx = steps - 1
+            elif self.anim_state == self.ANIM_OPENING:
+                self.anim_frame_idx = min(self.anim_frame_idx, steps - 1)
+            self.anim_state = self.ANIM_CLOSING
+            self._animate_step()
+            return
         if self.gif_frames:
             # Если портал уже открыт — начинаем с последнего кадра
             if self.anim_state == self.ANIM_OPEN:

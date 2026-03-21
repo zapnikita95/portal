@@ -314,3 +314,56 @@ def generate_shared_secret(length: int = 8) -> str:
     """Случайный код (по умолчанию 8 символов)."""
     n = max(6, min(int(length), 32))
     return "".join(secrets.choice(_SHARED_SECRET_ALPHABET) for _ in range(n))
+
+
+# ── Внешний вид виджета-портала (GIF/PNG и т.д.) ───────────────────
+
+
+def load_widget_media_path() -> Optional[str]:
+    """Пользовательский файл анимации/картинки; None = только папка assets/."""
+    data = _load_all()
+    raw = data.get("widget_media_path")
+    if not raw or not str(raw).strip():
+        return None
+    p = Path(str(raw).strip()).expanduser()
+    try:
+        if p.is_file():
+            return str(p.resolve())
+    except OSError:
+        pass
+    return None
+
+
+def save_widget_media_path(path: Optional[str]) -> bool:
+    data = _load_all()
+    if path is None or not str(path).strip():
+        data.pop("widget_media_path", None)
+    else:
+        p = Path(str(path).strip()).expanduser()
+        if not p.is_file():
+            return False
+        data["widget_media_path"] = str(p.resolve())
+    return _write_all(data)
+
+
+def load_widget_media_mode() -> str:
+    """auto | animated | static — для PNG/JPEG обычно static (масштаб при открытии/закрытии)."""
+    m = _load_all().get("widget_media_mode", "auto")
+    if m in ("auto", "animated", "static"):
+        return str(m)
+    return "auto"
+
+
+def save_widget_media_mode(mode: str) -> bool:
+    if mode not in ("auto", "animated", "static"):
+        return False
+    data = _load_all()
+    data["widget_media_mode"] = mode
+    return _write_all(data)
+
+
+WIDGET_MEDIA_MODE_LABELS_RU: Dict[str, str] = {
+    "auto": "Авто (GIF — анимация, PNG/JPEG — статика с масштабом)",
+    "animated": "Всегда как анимация (первый кадр WebP/APNG при многокадровости)",
+    "static": "Всегда статика (один кадр, масштаб при открытии/закрытии)",
+}

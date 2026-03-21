@@ -32,6 +32,9 @@ def main() -> int:
             "load_shared_secret",
             "save_shared_secret",
             "generate_shared_secret",
+            "load_widget_media_path",
+            "load_widget_media_mode",
+            "WIDGET_MEDIA_MODE_LABELS_RU",
         ]
         for name in need:
             if not hasattr(portal_config, name):

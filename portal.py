@@ -671,6 +671,79 @@ class PortalApp(ctk.CTk):
 
         ctk.CTkLabel(
             peer_frame,
+            text="Внешний вид портала (GIF/PNG/JPEG/WebP — виджет на столе):",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(anchor="w", padx=12, pady=(10, 2))
+        wm_row1 = ctk.CTkFrame(peer_frame, fg_color="transparent")
+        wm_row1.pack(fill="x", padx=12, pady=(0, 4))
+        self.widget_media_entry = ctk.CTkEntry(
+            wm_row1,
+            width=340,
+            placeholder_text="пусто = только папка assets/ в проекте",
+            font=ctk.CTkFont(size=12),
+        )
+        self.widget_media_entry.pack(side="left", padx=(0, 8))
+        try:
+            _wmp = portal_config.load_widget_media_path()
+            if _wmp:
+                self.widget_media_entry.insert(0, _wmp)
+        except Exception:
+            pass
+        ctk.CTkButton(
+            wm_row1,
+            text="Обзор…",
+            width=88,
+            command=self.choose_widget_media_file,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            wm_row1,
+            text="Сброс",
+            width=72,
+            command=self.clear_widget_media_from_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left")
+        wm_row2 = ctk.CTkFrame(peer_frame, fg_color="transparent")
+        wm_row2.pack(fill="x", padx=12, pady=(0, 6))
+        self._widget_media_mode_labels_ru = dict(portal_config.WIDGET_MEDIA_MODE_LABELS_RU)
+        self._widget_media_mode_rev = {
+            v: k for k, v in self._widget_media_mode_labels_ru.items()
+        }
+        self.widget_media_mode_menu = ctk.CTkOptionMenu(
+            wm_row2,
+            values=list(self._widget_media_mode_labels_ru.values()),
+            command=lambda _c: None,
+            width=460,
+            font=ctk.CTkFont(size=12),
+        )
+        self.widget_media_mode_menu.pack(side="left", padx=(0, 8))
+        _wmm = portal_config.load_widget_media_mode()
+        self.widget_media_mode_menu.set(
+            self._widget_media_mode_labels_ru.get(
+                _wmm, self._widget_media_mode_labels_ru["auto"]
+            )
+        )
+        ctk.CTkButton(
+            wm_row2,
+            text="Сохранить внешний вид",
+            width=168,
+            command=self.save_widget_media_from_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left")
+        ctk.CTkLabel(
+            peer_frame,
+            text=(
+                "Видео (MP4): конвертируй в GIF — python import_portal_from_mp4.py … "
+                "или положи готовый GIF в assets/. Прозрачный фон: см. README (хромакей / macOS)."
+            ),
+            font=ctk.CTkFont(size=10),
+            text_color="gray",
+            wraplength=640,
+            justify="left",
+        ).pack(anchor="w", padx=12, pady=(0, 4))
+
+        ctk.CTkLabel(
+            peer_frame,
             text="Входящие файлы (не «как из буфера» у отправителя — там всегда диск+буфер):",
             font=ctk.CTkFont(size=12, weight="bold"),
         ).pack(anchor="w", padx=12, pady=(4, 2))
@@ -1276,6 +1349,63 @@ class PortalApp(ctk.CTk):
             self.log("📋 Пароль сети скопирован в буфер")
         except Exception as e:
             self.log(f"⚠️ Не удалось скопировать: {e}")
+
+    def choose_widget_media_file(self) -> None:
+        from tkinter import filedialog
+
+        if not hasattr(self, "widget_media_entry"):
+            return
+        p = filedialog.askopenfilename(
+            title="Картинка или GIF для портала",
+            filetypes=[
+                ("Изображения", "*.gif *.png *.jpg *.jpeg *.webp"),
+                ("Все файлы", "*.*"),
+            ],
+        )
+        if p:
+            self.widget_media_entry.delete(0, "end")
+            self.widget_media_entry.insert(0, p)
+
+    def save_widget_media_from_ui(self) -> None:
+        if not hasattr(self, "widget_media_entry"):
+            return
+        raw = self.widget_media_entry.get().strip()
+        if raw and not os.path.isfile(raw):
+            self.log("⚠️ Файл не найден — проверь путь")
+            return
+        if raw:
+            if not portal_config.save_widget_media_path(raw):
+                self.log("⚠️ Не удалось сохранить путь к медиа")
+                return
+        else:
+            portal_config.save_widget_media_path(None)
+        label = self.widget_media_mode_menu.get()
+        mode_key = getattr(self, "_widget_media_mode_rev", {}).get(label, "auto")
+        if not portal_config.save_widget_media_mode(mode_key):
+            self.log("⚠️ Не удалось сохранить режим отображения")
+            return
+        self.log("✅ Внешний вид портала сохранён")
+        self.apply_widget_media_reload()
+
+    def clear_widget_media_from_ui(self) -> None:
+        portal_config.save_widget_media_path(None)
+        if hasattr(self, "widget_media_entry"):
+            self.widget_media_entry.delete(0, "end")
+        self.log("✅ Путь сброшен — снова используется assets/ в папке проекта")
+        self.apply_widget_media_reload()
+
+    def apply_widget_media_reload(self) -> None:
+        w = getattr(self, "portal_widget_ref", None)
+        if w is not None and hasattr(w, "reload_portal_media"):
+            try:
+                self.after(0, w.reload_portal_media)
+            except Exception as ex:
+                self.log(f"⚠️ Перезагрузка виджета: {ex}")
+        else:
+            self.log(
+                "💡 Виджет ещё не создан — открой его хоткеем после запуска; "
+                "медиа подхватится при следующей загрузке."
+            )
 
     def _parse_peer_ips_draft(self) -> List[str]:
         if not hasattr(self, "peer_ips_text"):
