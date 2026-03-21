@@ -28,15 +28,20 @@ except ImportError:
 CHROMA_KEY = "#010101"
 
 
+def debug_log_path() -> Path:
+    """Путь к файлу отладки хоткеев (один источник правды для UI и логов)."""
+    if platform.system() == "win32":
+        base = os.environ.get("TEMP") or os.environ.get("TMP") or str(Path.home())
+    else:
+        base = os.environ.get("TMPDIR") or "/tmp"
+    return Path(base) / "portal_hotkey_debug.log"
+
+
 def _debug_log_file(line: str) -> None:
     """Всегда пишем в файл — даже если консоль не видна (двойной клик по .bat)."""
     try:
-        if platform.system() == "win32":
-            base = os.environ.get("TEMP") or os.environ.get("TMP") or str(Path.home())
-        else:
-            base = os.environ.get("TMPDIR") or "/tmp"
-        Path(base).mkdir(parents=True, exist_ok=True)
-        p = Path(base) / "portal_hotkey_debug.log"
+        p = debug_log_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
     except Exception:
@@ -710,11 +715,52 @@ class GlobalHotkeyManager:
 
     def _run(self):
         self._safe_log("Поток хоткеев: _run() начат")
+        log_file = str(debug_log_path())
+        self._safe_log(f"Файл отладки: {log_file}")
+
+        # Windows: сначала keyboard — у pynput часто Ctrl+Alt «молчит» (драйверы, AltGr, Intel и т.д.)
+        if platform.system() == "win32":
+            if self._run_windows_keyboard_primary():
+                return
+
+        self._run_pynput()
+
+    def _run_windows_keyboard_primary(self) -> bool:
+        """True если keyboard запущен и держит поток (kb.wait)."""
+        try:
+            import keyboard as kb  # type: ignore
+        except ImportError as e:
+            self._safe_log(f"keyboard не установлен ({e}), пробую pynput…")
+            return False
+        try:
+            self._safe_log(
+                "Windows: глобальные хоткеи через библиотеку keyboard "
+                "(Ctrl+Alt+P / C / V). Если не срабатывает — отключи оверлеи (GeForce/AMD) или смени раскладку."
+            )
+            kb.add_hotkey("ctrl+alt+p", self.toggle_widget, suppress=False)
+            kb.add_hotkey("ctrl+alt+c", self.push_clipboard, suppress=False)
+            kb.add_hotkey("ctrl+alt+v", self.pull_clipboard, suppress=False)
+            # Запас: Win+Shift+P (редко перехватывают)
+            kb.add_hotkey("windows+shift+p", self.toggle_widget, suppress=False)
+            self._safe_log("Запасной хоткей: Win+Shift+P — показать/скрыть портал")
+            self._safe_log("keyboard: слушатель активен (kb.wait).")
+            kb.wait()
+            return True
+        except Exception as e:
+            import traceback
+
+            self._safe_log(f"keyboard на Windows не удался: {e!r}")
+            self._safe_log(traceback.format_exc())
+            return False
+
+    def _run_pynput(self) -> None:
+        """macOS / Linux / запас на Windows."""
         try:
             from pynput import keyboard
         except ImportError as e:
-            self._safe_log(f"pynput не установлен ({e}) — ставь: pip install pynput")
-            self._fallback_keyboard_lib()
+            self._safe_log(f"pynput не установлен ({e}) — pip install pynput")
+            if platform.system() == "Darwin":
+                self._safe_log("На Mac без pynput хоткеев не будет.")
             return
 
         is_mac = platform.system() == "Darwin"
@@ -725,87 +771,29 @@ class GlobalHotkeyManager:
             combo["<cmd>+<shift>+c"] = self.push_clipboard
             combo["<cmd>+<shift>+v"] = self.pull_clipboard
             self._safe_log(
-                "macOS: зарегистрированы Cmd+Option+P, Cmd+Shift+C/V "
-                "(нужны «Мониторинг ввода» / Accessibility для Терминала или Python)"
+                "macOS: Cmd+Option+P, Cmd+Shift+C/V — нужен Accessibility для Терминала/Python"
             )
         else:
             combo["<ctrl>+<alt>+p"] = self.toggle_widget
             combo["<ctrl>+<alt>+c"] = self.push_clipboard
             combo["<ctrl>+<alt>+v"] = self.pull_clipboard
-            self._safe_log(
-                "Windows: зарегистрированы Ctrl+Alt+P, Ctrl+Alt+C/V "
-                "(если не срабатывает — другая программа могла перехватить сочетание)"
-            )
+            self._safe_log("pynput: Ctrl+Alt+P/C/V")
 
-        self._safe_log(f"Ключи pynput: {', '.join(combo.keys())}")
+        self._safe_log(f"pynput комбинации: {', '.join(combo.keys())}")
 
         try:
-            # Тест: проверим что callback вызывается
-            test_called = {"value": False}
-
-            def test_callback():
-                test_called["value"] = True
-                self._safe_log("🧪 ТЕСТ: callback вызван! pynput работает.")
-
-            # Добавляем тестовый хоткей на 5 секунд
-            test_combo = {**combo}
-            test_combo["<ctrl>+<alt>+t"] = test_callback
-            self._safe_log("🧪 Тест: нажми Ctrl+Alt+T в течение 5 сек — должен появиться лог «ТЕСТ: callback вызван»")
-
-            with keyboard.GlobalHotKeys(test_combo) as h:
-                _started_msg = (
-                    "pynput GlobalHotKeys запущен — жми сочетание. Полный лог: %TEMP%\\portal_hotkey_debug.log"
-                    if platform.system() == "win32"
-                    else "pynput GlobalHotKeys запущен — жми сочетание. Лог: /tmp/portal_hotkey_debug.log"
+            with keyboard.GlobalHotKeys(combo) as h:
+                self._safe_log(
+                    f"pynput GlobalHotKeys запущен. Лог-файл: {debug_log_path()}"
                 )
-                self._safe_log(_started_msg)
-                # Ждём 5 сек и проверяем тест
-                import time
-
-                time.sleep(5)
-                if not test_called["value"]:
-                    self._safe_log(
-                        "⚠️ ТЕСТ НЕ ПРОШЁЛ: Ctrl+Alt+T не сработал за 5 сек. "
-                        "Возможные причины: права доступа, другая программа перехватывает, антивирус блокирует."
-                    )
-                else:
-                    self._safe_log("✅ ТЕСТ ПРОШЁЛ: pynput работает, хоткеи должны срабатывать")
                 h.join()
         except Exception as e:
             import traceback
 
             self._safe_log(f"pynput GlobalHotKeys упал: {e!r}")
             self._safe_log(traceback.format_exc())
-            self._fallback_keyboard_lib()
-
-    def _fallback_keyboard_lib(self) -> None:
-        """Резерв на Windows, если pynput не взлетел."""
-        if platform.system() != "Darwin":
-            try:
-                import keyboard as kb  # type: ignore
-            except ImportError as e:
-                self._safe_log(
-                    f"Библиотека keyboard недоступна ({e}). Хоткеи не работают."
-                )
-                return
-            self._safe_log("Пробую резерв: пакет keyboard (Ctrl+Alt+P/C/V)…")
-            try:
-                kb.add_hotkey("ctrl+alt+p", self.toggle_widget, suppress=False)
-                kb.add_hotkey("ctrl+alt+c", self.push_clipboard, suppress=False)
-                kb.add_hotkey("ctrl+alt+v", self.pull_clipboard, suppress=False)
-                self._safe_log(
-                    "keyboard: хоткеи повешены. Если снова тишина — запускай из консоли и смотри лог."
-                )
-                kb.wait()
-            except Exception as e:
-                import traceback
-
-                self._safe_log(f"keyboard тоже упал: {e!r}")
-                self._safe_log(traceback.format_exc())
-            return
-        self._safe_log(
-            "На Mac резерва keyboard нет — почини pynput или права Accessibility."
-        )
+            if platform.system() == "win32":
+                self._safe_log("На Windows оба бэкенда не сработали — проверь антивирус и запуск от имени пользователя (не из песочницы).")
 
     def toggle_widget(self):
         self._safe_log("🔥🔥🔥 НАЖАТО сочетание портала (Ctrl+Alt+P / Cmd+Option+P) → планирую переключение в GUI")

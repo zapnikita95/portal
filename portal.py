@@ -222,8 +222,8 @@ class PortalApp(ctk.CTk):
             )
         else:
             hotkey_text = (
-                "🔑 Быстрые клавиши (запуск с «Виджет на рабочем столе» / --widget):\n"
-                "   Показать или скрыть портал — Ctrl+Alt+P\n"
+                "🔑 Быстрые клавиши:\n"
+                "   Показать или скрыть портал — Ctrl+Alt+P (запас: Win+Shift+P)\n"
                 "   Отправить буфер на другой ПК — Ctrl+Alt+C\n"
                 "   Вставить буфер с другого ПК — Ctrl+Alt+V"
             )
@@ -946,16 +946,11 @@ if __name__ == "__main__":
 
     # Виджет запускается всегда (если не отключен явно)
     if show_widget:
-        _dbg = (
-            Path(os.environ.get("TEMP", os.environ.get("TMP", ".")))
-            / "portal_hotkey_debug.log"
-            if platform.system() == "win32"
-            else Path(os.environ.get("TMPDIR", "/tmp")) / "portal_hotkey_debug.log"
-        )
-        app.log(f"📝 Лог хоткеев (всегда пишется в файл): {_dbg}")
+        from portal_widget import PortalWidget, GlobalHotkeyManager, debug_log_path
+
+        app.log(f"📝 Лог хоткеев (файл): {debug_log_path()}")
         try:
             app.update_idletasks()
-            from portal_widget import PortalWidget, GlobalHotkeyManager
 
             widget = PortalWidget(app)
             GlobalHotkeyManager(widget, app).start()
