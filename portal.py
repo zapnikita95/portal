@@ -6,6 +6,14 @@
 import sys
 import os
 
+# Дочерний процесс глобальных хоткеев (macOS 3.13+): только pynput, без Tk/CustomTkinter.
+# В сборке PyInstaller тот же бинарник запускается с этой переменной — не нужен отдельный .py.
+if __name__ == "__main__" and os.environ.get("PORTAL_HOTKEY_HELPER_SUBPROCESS") == "1":
+    from portal_mac_hotkey_helper import main as _portal_hk_main
+
+    _portal_hk_main()
+    raise SystemExit(0)
+
 # Проверка версии Python (один раз за процесс)
 if sys.version_info >= (3, 13) and not os.environ.get("_PORTAL_PY313_WARN_DONE"):
     os.environ["_PORTAL_PY313_WARN_DONE"] = "1"
@@ -534,6 +542,7 @@ class PortalApp(ctk.CTk):
         self.portal_widget_ref: Optional[Any] = None
         self._hotkey_mgr: Optional[Any] = None
         self._widget_pulse_generation: int = 0
+        self._widget_preset_rule_rows: List[Dict[str, Any]] = []
         self._settings_win: Optional[ctk.CTkToplevel] = None
         self._log_win: Optional[ctk.CTkToplevel] = None
         self._apk_win: Optional[ctk.CTkToplevel] = None
@@ -973,6 +982,7 @@ class PortalApp(ctk.CTk):
                     self._settings_win.deiconify()
                     self._settings_win.lift()
                     self._settings_win.focus_force()
+                    self._refresh_settings_preset_rules_ui()
                     return
             except Exception:
                 self._settings_win = None
@@ -1209,6 +1219,79 @@ class PortalApp(ctk.CTk):
             wraplength=680,
             justify="left",
         ).pack(anchor="w", padx=8, pady=(8, 8))
+
+        ctk.CTkLabel(
+            t_widget,
+            text="Импульс виджета: пресеты и правила (какая анимация при приёме / отправке):",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=8, pady=(16, 4))
+        ctk.CTkLabel(
+            t_widget,
+            text=(
+                "Выбери пресет в списке и нажми «Показать превью в углу» — увидишь, как он выглядит "
+                "в том же углу, что и виджет (коротко, ~4 с)."
+            ),
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=680,
+            justify="left",
+        ).pack(anchor="w", padx=8, pady=(0, 6))
+        prev_row = ctk.CTkFrame(t_widget, fg_color="transparent")
+        prev_row.pack(fill="x", padx=8, pady=(0, 8))
+        self._widget_preset_preview_combo = ctk.CTkComboBox(
+            prev_row,
+            width=420,
+            values=["…"],
+            font=ctk.CTkFont(size=12),
+            state="readonly",
+        )
+        self._widget_preset_preview_combo.pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            prev_row,
+            text="Показать превью в углу",
+            width=200,
+            command=self.preview_widget_preset_from_settings_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left")
+        self._refresh_widget_preset_preview_menu_from_catalog()
+
+        ctk.CTkLabel(
+            t_widget,
+            text=(
+                "Правила: IP получателя или * → когда сработало → какой пресет. "
+                "Сначала совпадёт конкретный IP, потом *. Если для «Приём файла» нет строки — "
+                "используется правило для «Приём в буфер»."
+            ),
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=680,
+            justify="left",
+        ).pack(anchor="w", padx=8, pady=(0, 4))
+        self._widget_preset_rules_scroll = ctk.CTkScrollableFrame(
+            t_widget, height=220, fg_color="transparent"
+        )
+        self._widget_preset_rules_scroll.pack(fill="x", padx=8, pady=(0, 6))
+        wpr_row = ctk.CTkFrame(t_widget, fg_color="transparent")
+        wpr_row.pack(fill="x", padx=8, pady=(0, 8))
+        ctk.CTkButton(
+            wpr_row,
+            text="+ Строка правила",
+            width=150,
+            command=self._widget_preset_add_rule_row,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            wpr_row,
+            text="Сохранить правила пресетов",
+            width=210,
+            command=self.save_widget_preset_rules_from_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 8))
+        self.widget_preset_rules_feedback = ctk.CTkLabel(
+            wpr_row, text="", font=ctk.CTkFont(size=12), text_color="gray"
+        )
+        self.widget_preset_rules_feedback.pack(side="left")
+        self._rebuild_widget_preset_rule_rows()
 
         ctk.CTkLabel(
             t_peers,
@@ -2237,6 +2320,239 @@ class PortalApp(ctk.CTk):
         else:
             self.log("⚠️ Не удалось записать настройки геометрии")
 
+    def _widget_preset_labels_and_ids(self) -> Tuple[List[str], List[str]]:
+        cat = portal_config.load_widget_presets_catalog()
+        labels: List[str] = []
+        ids: List[str] = []
+        for p in cat:
+            pid = str(p.get("id", "")).strip()
+            if not pid:
+                continue
+            nm = str(p.get("name") or pid).strip()
+            labels.append(f"{nm} ({pid})")
+            ids.append(pid)
+        if not labels:
+            labels = ["Как медиа выше (main)"]
+            ids = ["main"]
+        return labels, ids
+
+    def _refresh_widget_preset_preview_menu_from_catalog(self) -> None:
+        m = getattr(self, "_widget_preset_preview_combo", None)
+        if m is None:
+            return
+        labels, _ids = self._widget_preset_labels_and_ids()
+        try:
+            cur = m.get()
+        except Exception:
+            cur = ""
+        m.configure(values=labels)
+        if labels:
+            m.set(cur if cur in labels else labels[0])
+
+    def _refresh_settings_preset_rules_ui(self) -> None:
+        try:
+            self._rebuild_widget_preset_rule_rows()
+            self._refresh_widget_preset_preview_menu_from_catalog()
+        except Exception as ex:
+            try:
+                self.log(f"⚠️ Обновление таблицы пресетов: {ex}")
+            except Exception:
+                pass
+
+    def _remove_widget_preset_rule_row(self, row: Dict[str, Any]) -> None:
+        try:
+            if row in self._widget_preset_rule_rows:
+                self._widget_preset_rule_rows.remove(row)
+            row["frame"].destroy()
+        except Exception:
+            pass
+
+    def _add_widget_preset_rule_row(
+        self, peer: str, event_key: str, preset_id: str
+    ) -> None:
+        sc = getattr(self, "_widget_preset_rules_scroll", None)
+        if sc is None:
+            return
+        labels, ids = self._widget_preset_labels_and_ids()
+        fr = ctk.CTkFrame(sc, fg_color="transparent")
+        fr.pack(fill="x", pady=3)
+        ip_e = ctk.CTkEntry(
+            fr,
+            width=128,
+            placeholder_text="* или IP",
+            font=ctk.CTkFont(size=12),
+        )
+        ip_e.insert(0, peer)
+        ip_e.pack(side="left", padx=(0, 6))
+        ev_labels = list(portal_config.WIDGET_PRESET_EVENT_LABELS_RU.values())
+        ev_m = ctk.CTkOptionMenu(
+            fr,
+            values=ev_labels,
+            width=200,
+            font=ctk.CTkFont(size=12),
+        )
+        if event_key in portal_config.WIDGET_PRESET_EVENT_LABELS_RU:
+            ev_m.set(portal_config.WIDGET_PRESET_EVENT_LABELS_RU[event_key])
+        else:
+            ev_m.set(ev_labels[0])
+        ev_m.pack(side="left", padx=(0, 6))
+        pr_m = ctk.CTkOptionMenu(
+            fr,
+            values=labels,
+            width=268,
+            font=ctk.CTkFont(size=12),
+        )
+        if preset_id in ids:
+            pr_m.set(labels[ids.index(preset_id)])
+        else:
+            pr_m.set(labels[0])
+        pr_m.pack(side="left", padx=(0, 6), fill="x", expand=True)
+        row_ui: Dict[str, Any] = {
+            "frame": fr,
+            "ip": ip_e,
+            "event_menu": ev_m,
+            "preset_menu": pr_m,
+            "preset_ids": list(ids),
+        }
+        self._widget_preset_rule_rows.append(row_ui)
+
+        def _rm() -> None:
+            self._remove_widget_preset_rule_row(row_ui)
+
+        ctk.CTkButton(
+            fr,
+            text="✕",
+            width=36,
+            command=_rm,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(4, 0))
+
+    def _rebuild_widget_preset_rule_rows(self) -> None:
+        sc = getattr(self, "_widget_preset_rules_scroll", None)
+        if sc is None:
+            return
+        for w in sc.winfo_children():
+            w.destroy()
+        self._widget_preset_rule_rows.clear()
+        for r in portal_config.load_widget_preset_rules():
+            self._add_widget_preset_rule_row(
+                str(r.get("peer", "*") or "*"),
+                str(r.get("event", "receive")),
+                str(r.get("preset", "main")),
+            )
+
+    def _widget_preset_add_rule_row(self) -> None:
+        self._add_widget_preset_rule_row("*", "receive", "main")
+
+    def _collect_widget_preset_rules_from_table(self) -> List[Dict[str, str]]:
+        rules: List[Dict[str, str]] = []
+        rev_ev = {
+            v: k for k, v in portal_config.WIDGET_PRESET_EVENT_LABELS_RU.items()
+        }
+        for row in self._widget_preset_rule_rows:
+            ip = (row["ip"].get() or "").strip() or "*"
+            ev_ru = row["event_menu"].get()
+            ev = rev_ev.get(ev_ru, "receive")
+            pr_vals = list(row["preset_menu"].cget("values"))
+            cur = row["preset_menu"].get()
+            ids_row: List[str] = row["preset_ids"]
+            try:
+                ix = pr_vals.index(cur)
+                pid = ids_row[ix]
+            except (ValueError, IndexError):
+                pid = "main"
+            rules.append({"peer": ip, "event": ev, "preset": pid})
+        return rules
+
+    def save_widget_preset_rules_from_ui(self) -> None:
+        """Сохранить правила пресетов из таблицы во вкладке «Виджет»."""
+        if getattr(self, "_widget_preset_rules_scroll", None) is None:
+            return
+        fb = getattr(self, "widget_preset_rules_feedback", None)
+        try:
+            rules = self._collect_widget_preset_rules_from_table()
+            if portal_config.save_widget_preset_rules(rules):
+                if fb is not None:
+                    fb.configure(text="✅ Сохранено")
+                self.log("✅ Правила пресетов виджета сохранены (импульс по IP/событию)")
+            else:
+                if fb is not None:
+                    fb.configure(text="⚠️ Не записалось")
+                self.log("⚠️ Не удалось сохранить правила пресетов (config.json)")
+        except Exception as e:
+            if fb is not None:
+                fb.configure(text="❌ Ошибка")
+            self.log(f"❌ Пресеты виджета: {e}")
+
+    def preview_widget_preset_from_settings_ui(self) -> None:
+        m = getattr(self, "_widget_preset_preview_combo", None)
+        if m is None:
+            return
+        labels, ids = self._widget_preset_labels_and_ids()
+        try:
+            cur = m.get()
+            ix = labels.index(cur)
+            pid = ids[ix]
+        except (ValueError, IndexError):
+            pid = "main"
+        self.preview_preset_in_corner(pid)
+
+    def preview_preset_in_corner(self, preset_id: str) -> None:
+        """Кратко показать пресет в углу, как при импульсе виджета."""
+        w = getattr(self, "portal_widget_ref", None)
+        if w is None or not hasattr(w, "show"):
+            self.log(
+                "💡 Виджет ещё не создан: перезапусти Portal или нажми хоткей показа портала, "
+                "затем снова «Показать превью»."
+            )
+            return
+        pid = (preset_id or "main").strip() or "main"
+        media_path = portal_config.resolve_widget_preset_file_path(pid)
+        if not media_path:
+            self.log(
+                f"⚠️ Нет файла для пресета «{pid}». Для «main» укажи медиа выше или положи GIF в assets/presets/."
+            )
+            return
+        seconds = 4.0
+
+        def run() -> None:
+            try:
+                self._widget_pulse_generation += 1
+                gen = self._widget_pulse_generation
+                was_visible = False
+                try:
+                    was_visible = bool(w.is_visible())
+                except Exception:
+                    pass
+                if hasattr(w, "set_transient_portal_media"):
+                    w.set_transient_portal_media(media_path)
+                if not was_visible:
+                    w.show()
+
+                def hide_later() -> None:
+                    if self._widget_pulse_generation != gen:
+                        return
+                    try:
+                        if hasattr(w, "clear_transient_portal_media"):
+                            w.clear_transient_portal_media()
+                        if not was_visible:
+                            try:
+                                if w.is_visible():
+                                    w.hide()
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+
+                self.after(int(seconds * 1000), hide_later)
+            except Exception as ex:
+                self.log(f"⚠️ Превью пресета: {ex}")
+
+        try:
+            self.after(0, run)
+        except Exception:
+            run()
+
     def _apply_widget_geometry_live(self) -> None:
         w = getattr(self, "portal_widget_ref", None)
         if w is not None and hasattr(w, "apply_widget_geometry"):
@@ -2249,9 +2565,16 @@ class PortalApp(ctk.CTk):
                 "💡 Виджет ещё не создан — геометрия из config подхватится при следующем старте"
             )
 
-    def _pulse_portal_widget(self, seconds: Optional[float] = None) -> None:
+    def _pulse_portal_widget(
+        self,
+        seconds: Optional[float] = None,
+        *,
+        pulse_event: str = "receive",
+        peer_ip: Optional[str] = None,
+    ) -> None:
         """
-        Кратко показать виджет-портал при приёме файла (если был скрыт).
+        Кратко показать виджет (если был скрыт) и/или подменить GIF по пресетам (IP + событие).
+        pulse_event: receive | receive_file | send
         Отключить: PORTAL_WIDGET_PULSE_ON_RECEIVE=0
         """
         if os.environ.get("PORTAL_WIDGET_PULSE_ON_RECEIVE", "1").strip().lower() in (
@@ -2264,11 +2587,6 @@ class PortalApp(ctk.CTk):
         w = getattr(self, "portal_widget_ref", None)
         if w is None or not hasattr(w, "show") or not hasattr(w, "hide"):
             return
-        try:
-            if w.is_visible():
-                return
-        except Exception:
-            pass
         if seconds is None:
             try:
                 seconds = float(os.environ.get("PORTAL_WIDGET_PULSE_SECONDS", "3").strip() or "3")
@@ -2276,18 +2594,39 @@ class PortalApp(ctk.CTk):
                 seconds = 3.0
         seconds = max(0.5, min(float(seconds), 30.0))
 
+        ev = (pulse_event or "receive").strip()
+        if ev not in ("receive", "receive_file", "send"):
+            ev = "receive"
+
         def run() -> None:
             try:
                 self._widget_pulse_generation += 1
                 gen = self._widget_pulse_generation
-                w.show()
+                was_visible = False
+                try:
+                    was_visible = bool(w.is_visible())
+                except Exception:
+                    pass
+                media_path = portal_config.resolve_widget_pulse_media_path(ev, peer_ip)
+                if media_path and hasattr(w, "set_transient_portal_media"):
+                    w.set_transient_portal_media(media_path)
+                elif hasattr(w, "clear_transient_portal_media"):
+                    w.clear_transient_portal_media()
+                if not was_visible:
+                    w.show()
 
                 def hide_later() -> None:
                     if self._widget_pulse_generation != gen:
                         return
                     try:
-                        if w.is_visible():
-                            w.hide()
+                        if hasattr(w, "clear_transient_portal_media"):
+                            w.clear_transient_portal_media()
+                        if not was_visible:
+                            try:
+                                if w.is_visible():
+                                    w.hide()
+                            except Exception:
+                                pass
                     except Exception:
                         pass
 
@@ -2796,16 +3135,25 @@ class PortalApp(ctk.CTk):
             if req != "ping":
                 self._log_from_thread(f"🔗 {addr[0]} · {req}")
             
+            peer_host = addr[0]
             if message.get("type") == "file":
-                self.receive_file(client_socket, message, prefix=tail)
+                self.receive_file(
+                    client_socket, message, prefix=tail, peer_ip=peer_host
+                )
             elif message.get("type") == "clipboard_files":
-                self.receive_clipboard_files(client_socket, message, prefix=tail)
+                self.receive_clipboard_files(
+                    client_socket, message, prefix=tail, peer_ip=peer_host
+                )
             elif message.get("type") == "clipboard_rich":
-                self.receive_clipboard_rich(client_socket, message, prefix=tail)
+                self.receive_clipboard_rich(
+                    client_socket, message, prefix=tail, peer_ip=peer_host
+                )
             elif message.get("type") == "clipboard":
-                self.receive_clipboard(message)
+                self.receive_clipboard(message, peer_ip=peer_host)
             elif message.get("type") == "clipboard_file":
-                self._receive_clipboard_file_payload(client_socket, message, prefix=tail)
+                self._receive_clipboard_file_payload(
+                    client_socket, message, prefix=tail, peer_ip=peer_host
+                )
             elif req == "get_clipboard":
                 self.send_clipboard_response(client_socket)
             elif req == "ping":
@@ -2831,6 +3179,7 @@ class PortalApp(ctk.CTk):
         client_socket: socket.socket,
         message: dict,
         prefix: bytes = b"",
+        peer_ip: Optional[str] = None,
     ) -> None:
         """Один файл в стиле clipboard_file (JSON + сырые байты), как в ответе get_clipboard."""
         try:
@@ -2862,9 +3211,12 @@ class PortalApp(ctk.CTk):
             _portal_sendall(client_socket, b"OK")
             p = str(filepath.resolve())
 
-            def _apply():
+            def _apply(ip: Optional[str] = peer_ip):
                 try:
                     self._apply_incoming_clipboard_files([p])
+                    self._pulse_portal_widget(
+                        pulse_event="receive_file", peer_ip=ip
+                    )
                 except Exception as ex:
                     self._log_from_thread(f"❌ После приёма clipboard_file: {ex}")
 
@@ -2885,6 +3237,7 @@ class PortalApp(ctk.CTk):
         client_socket: socket.socket,
         message: dict,
         prefix: bytes = b"",
+        peer_ip: Optional[str] = None,
     ):
         """Прием файла; prefix — байты уже прочитанные после JSON в первом recv."""
         filepath: Optional[Path] = None
@@ -2968,7 +3321,10 @@ class PortalApp(ctk.CTk):
                 except Exception as ex:
                     self.log(f"❌ После приёма (Finder/буфер): {ex}")
                 else:
-                    self._pulse_portal_widget()
+                    self._pulse_portal_widget(
+                        pulse_event="receive_file",
+                        peer_ip=peer_ip,
+                    )
                     if _portal_message_from_mobile(msg_local):
                         self.log("📱 Получено с телефона — файл сохранён")
                         _portal_desktop_notify(
@@ -3011,6 +3367,7 @@ class PortalApp(ctk.CTk):
         client_socket: socket.socket,
         message: dict,
         prefix: bytes = b"",
+        peer_ip: Optional[str] = None,
     ) -> None:
         """Несколько файлов из буфера (push Ctrl+Alt+C) — сохранить и по режиму в буфер ОС."""
         specs = message.get("files") or []
@@ -3070,10 +3427,11 @@ class PortalApp(ctk.CTk):
 
         self._log_from_thread(f"✅ Из буфера сохранено файлов: {len(saved)}")
         try:
-            self.after(
-                0,
-                lambda paths=list(saved): self._apply_incoming_clipboard_files(paths),
-            )
+            def _done(paths: List[str] = list(saved), ip: Optional[str] = peer_ip) -> None:
+                self._apply_incoming_clipboard_files(paths)
+                self._pulse_portal_widget(pulse_event="receive_file", peer_ip=ip)
+
+            self.after(0, _done)
         except Exception:
             pass
 
@@ -3082,6 +3440,7 @@ class PortalApp(ctk.CTk):
         client_socket: socket.socket,
         message: dict,
         prefix: bytes = b"",
+        peer_ip: Optional[str] = None,
     ) -> None:
         """Картинка из буфера: JSON + сырые байты PNG (протокол Win/Mac)."""
         try:
@@ -3138,10 +3497,15 @@ class PortalApp(ctk.CTk):
         refresh_windows_shell_after_new_file(out_path)
         self._log_from_thread(f"✅ Картинка из буфера сохранена: {out_path.name}")
         p = str(out_path.resolve())
+
+        def _done_img(path: str = p, ip: Optional[str] = peer_ip) -> None:
+            self._apply_incoming_clipboard_image(path)
+            self._pulse_portal_widget(pulse_event="receive", peer_ip=ip)
+
         try:
-            self.after(0, lambda path=p: self._apply_incoming_clipboard_image(path))
+            self.after(0, _done_img)
         except Exception:
-            pass
+            _done_img()
 
     def _apply_incoming_clipboard_files(self, paths: List[str]) -> None:
         self.is_receiving_clipboard = True
@@ -3279,7 +3643,9 @@ class PortalApp(ctk.CTk):
             except Exception:
                 pass
     
-    def receive_clipboard(self, message: dict):
+    def receive_clipboard(
+        self, message: dict, peer_ip: Optional[str] = None
+    ):
         """Прием буфера обмена (push с другого ПК) — вставка на главном потоке."""
         clipboard_text = message.get("text", "")
         if clipboard_text:
@@ -3291,10 +3657,16 @@ class PortalApp(ctk.CTk):
                 finally:
                     self.is_receiving_clipboard = False
 
-            try:
-                self.after(0, _paste)
-            except Exception:
+            def _paste_and_pulse() -> None:
                 _paste()
+                self._pulse_portal_widget(
+                    pulse_event="receive", peer_ip=peer_ip
+                )
+
+            try:
+                self.after(0, _paste_and_pulse)
+            except Exception:
+                _paste_and_pulse()
             self._log_from_thread(
                 f"📋 Буфер обмена обновлен ({len(clipboard_text)} символов) — Ctrl+V для вставки"
             )
@@ -3337,8 +3709,8 @@ class PortalApp(ctk.CTk):
         log: Callable[[str], None],
         context_label: str,
         attach_secret: bool = True,
-    ) -> None:
-        """Записать снимок в сокет (ответ get_clipboard или входящий push clipboard_*)."""
+    ) -> bool:
+        """Записать снимок в сокет (ответ get_clipboard или входящий push clipboard_*). Возвращает успех."""
         def _sec(d: Dict[str, Any]) -> Dict[str, Any]:
             return merge_outgoing_shared_secret(d) if attach_secret else d
 
@@ -3347,7 +3719,7 @@ class PortalApp(ctk.CTk):
             resp = json.dumps(_sec({"type": "clipboard", "text": t}), ensure_ascii=False)
             client_socket.sendall(resp.encode("utf-8") + b"\n")
             log(f"📋 {context_label} → текст ({len(t)} симв.)")
-            return
+            return True
 
         if kind == "files":
             paths = payload.get("paths") or []
@@ -3364,7 +3736,7 @@ class PortalApp(ctk.CTk):
                 )
                 client_socket.sendall(resp.encode("utf-8") + b"\n")
                 log(f"📋 {context_label} → файлы не прочитались, отдан текст/пусто")
-                return
+                return True
             if len(valid_paths) == 1:
                 one = Path(valid_paths[0])
                 try:
@@ -3395,11 +3767,11 @@ class PortalApp(ctk.CTk):
                         log(
                             f"📋 {context_label} → один файл «{one.name}» ({sz} байт); ответ: {okp[:32]!r}"
                         )
-                    else:
-                        log(
-                            f"📋 {context_label} → один файл «{one.name}» ({sz} байт)"
-                        )
-                    return
+                        return bool(okp.startswith(b"OK"))
+                    log(
+                        f"📋 {context_label} → один файл «{one.name}» ({sz} байт)"
+                    )
+                    return True
             specs = [
                 {"filename": os.path.basename(p), "filesize": os.path.getsize(p)}
                 for p in valid_paths
@@ -3421,7 +3793,7 @@ class PortalApp(ctk.CTk):
             log(
                 f"📋 {context_label} → {len(valid_paths)} файл(ов); ответ: {okp[:24]!r}"
             )
-            return
+            return bool(okp.startswith(b"OK"))
 
         if kind == "image":
             image_bytes = payload.get("image_bytes") or b""
@@ -3431,7 +3803,7 @@ class PortalApp(ctk.CTk):
                 )
                 client_socket.sendall(resp.encode("utf-8") + b"\n")
                 log(f"📋 {context_label} → картинка слишком большая")
-                return
+                return False
             mime = payload.get("mime", "image/png")
             hdr = _sec(
                 {
@@ -3451,11 +3823,12 @@ class PortalApp(ctk.CTk):
             log(
                 f"📋 {context_label} → картинка clipboard_rich; ответ: {okp[:24]!r}"
             )
-            return
+            return bool(okp.startswith(b"OK"))
 
         resp = json.dumps(_sec({"type": "clipboard", "text": ""}), ensure_ascii=False)
         client_socket.sendall(resp.encode("utf-8") + b"\n")
         log(f"📋 {context_label} → неизвестный снимок буфера")
+        return True
     
     def send_clipboard_response(self, client_socket: socket.socket):
         """
@@ -3610,11 +3983,24 @@ class PortalApp(ctk.CTk):
                 finally:
                     self.is_receiving_clipboard = False
                 self.last_clipboard = text
+                try:
+                    self.after(
+                        0,
+                        lambda ip=target_ip: self._pulse_portal_widget(
+                            pulse_event="receive", peer_ip=ip
+                        ),
+                    )
+                except Exception:
+                    pass
             elif message.get("type") == "clipboard_files":
-                self.receive_clipboard_files(client_socket, message, prefix=rest)
+                self.receive_clipboard_files(
+                    client_socket, message, prefix=rest, peer_ip=target_ip
+                )
                 _log("📋 Файлы с удалённого ПК получены (см. строки выше)")
             elif message.get("type") == "clipboard_rich":
-                self.receive_clipboard_rich(client_socket, message, prefix=rest)
+                self.receive_clipboard_rich(
+                    client_socket, message, prefix=rest, peer_ip=target_ip
+                )
                 _log("📋 Данные clipboard_rich с удалённого ПК получены")
             elif message.get("type") == "clipboard_file":
                 raw_name = message.get("filename", "remote_clipboard_file")
@@ -3640,9 +4026,12 @@ class PortalApp(ctk.CTk):
                 refresh_windows_shell_after_new_file(filepath)
                 _log(f"✅ Файл из буфера удалённого ПК сохранён: {filepath.name}")
 
-                def _finish_pull_file():
+                def _finish_pull_file(ip: str = target_ip):
                     try:
                         self._apply_incoming_clipboard_files([str(filepath.resolve())])
+                        self._pulse_portal_widget(
+                            pulse_event="receive_file", peer_ip=ip
+                        )
                     except Exception as ex:
                         self.log(f"❌ После приёма файла из буфера: {ex}")
 
@@ -3662,7 +4051,7 @@ class PortalApp(ctk.CTk):
                 if len(data) < need:
                     raise ValueError("Обрезаны данные картинки")
 
-                def _apply_png_pull():
+                def _apply_png_pull(ip: str = target_ip):
                     self.is_receiving_clipboard = True
                     try:
                         raw = bytes(data)
@@ -3674,6 +4063,7 @@ class PortalApp(ctk.CTk):
                             )
                         else:
                             _log("⚠️ Картинка получена, но не удалось записать в буфер ОС")
+                        self._pulse_portal_widget(pulse_event="receive", peer_ip=ip)
                     finally:
                         self.is_receiving_clipboard = False
 
@@ -3880,6 +4270,15 @@ class PortalApp(ctk.CTk):
             
             if response.startswith(b"OK"):
                 self.log(f"✅ Файл успешно отправлен: {filename}")
+                try:
+                    self.after(
+                        0,
+                        lambda ip_=target_ip: self._pulse_portal_widget(
+                            pulse_event="send", peer_ip=ip_
+                        ),
+                    )
+                except Exception:
+                    pass
             else:
                 self.log(
                     f"⚠️ Ответ приёма файлов: {response!r} — смотри лог на ПК-получателе (ошибка приёма / JSON)"
@@ -3967,13 +4366,23 @@ class PortalApp(ctk.CTk):
                         return
                     raise
                 sock.settimeout(600)
-                self._emit_resolved_clipboard_payload(
+                sent_ok = self._emit_resolved_clipboard_payload(
                     sock,
                     kind,
                     payload,
                     log=self.log,
                     context_label=f"push → {ip}",
                 )
+                if sent_ok:
+                    try:
+                        self.after(
+                            0,
+                            lambda ip_=ip: self._pulse_portal_widget(
+                                pulse_event="send", peer_ip=ip_
+                            ),
+                        )
+                    except Exception:
+                        pass
             except Exception as e:
                 err = str(e)
                 if "10061" in err:
@@ -4047,9 +4456,18 @@ class PortalApp(ctk.CTk):
                 json.dumps(message, ensure_ascii=False).encode("utf-8"),
             )
             client_socket.close()
-            
+
             self.log(f"✅ Текст отправлен ({len(clipboard_text)} символов)")
-                
+            try:
+                self.after(
+                    0,
+                    lambda ip_=target_ip: self._pulse_portal_widget(
+                        pulse_event="send", peer_ip=ip_
+                    ),
+                )
+            except Exception:
+                pass
+
         except Exception as e:
             err_msg = str(e)
             if "timed out" in err_msg.lower():

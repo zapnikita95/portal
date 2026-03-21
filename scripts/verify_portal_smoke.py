@@ -43,6 +43,10 @@ def main() -> int:
             "widget_window_xy",
             "save_widget_geometry_settings",
             "WIDGET_CORNER_LABELS_RU",
+            "format_widget_preset_rules_for_editor",
+            "parse_widget_preset_rules_editor",
+            "resolve_widget_pulse_media_path",
+            "load_widget_preset_rules",
         ]
         for name in need:
             if not hasattr(portal_config, name):
@@ -87,6 +91,7 @@ def main() -> int:
             "choose_receive_dir",
             "handle_client",
             "_receive_clipboard_file_payload",
+            "save_widget_preset_rules_from_ui",
         )
         for m in required_methods:
             if not hasattr(PortalApp, m):

@@ -1,19 +1,46 @@
-# PyInstaller: из корня репозитория portal/
-#   pip install pyinstaller
+# PyInstaller — из корня репозитория portal/
+#
+#   pip install -r requirements.txt pyinstaller
+#   python3 scripts/generate_branding_icons.py
 #   pyinstaller pyinstaller_portal.spec
 #
-# На macOS для .app: проверь права и quarantine (xattr -dr com.apple.quarantine dist/...).
+# Windows → dist/Portal/Portal.exe
+# macOS   → dist/Portal.app
+#
+# См. BUILD_DESKTOP.md (карантин Mac, иконки, отладка).
 
 import sys
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+
 block_cipher = None
 root = Path(SPECPATH).resolve()
 assets = root / "assets"
+brand = root / "assets" / "branding"
 
 datas = []
 if assets.is_dir():
     datas.append((str(assets), "assets"))
+
+# CustomTkinter — темы и ресурсы
+try:
+    datas += collect_data_files("customtkinter")
+except Exception:
+    pass
+
+# certifi — CA для GitHub / APK
+try:
+    datas += collect_data_files("certifi")
+except Exception:
+    pass
+
+binaries = []
+if sys.platform == "win32":
+    try:
+        binaries += collect_dynamic_libs("pywin32")
+    except Exception:
+        pass
 
 hiddenimports = [
     "customtkinter",
@@ -26,21 +53,44 @@ hiddenimports = [
     "portal_clipboard_rich",
     "portal_widget",
     "portal_tk_compat",
+    "portal_github",
+    "certifi",
+    "urllib",
+    "ssl",
+    "pynput",
+    "pynput.keyboard",
+    "tkinterdnd2",
+    "portal_mac_hotkey_helper",
 ]
 
+if sys.platform == "win32":
+    hiddenimports.extend(["windnd", "win32clipboard", "win32con", "win32gui"])
+
 if sys.platform == "darwin":
-    hiddenimports.extend(["AppKit", "Foundation"])
+    hiddenimports.extend(
+        [
+            "AppKit",
+            "Foundation",
+            "objc",
+            "PyObjCTools",
+        ]
+    )
+
+ico_path = brand / "portal.ico"
+icns_path = brand / "portal.icns"
+win_icon = str(ico_path) if ico_path.is_file() and sys.platform == "win32" else None
+mac_icon = str(icns_path) if icns_path.is_file() and sys.platform == "darwin" else None
 
 a = Analysis(
     [str(root / "portal.py")],
     pathex=[str(root)],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=["matplotlib", "numpy", "pandas"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -49,6 +99,7 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# Без консоли — как обычное GUI-приложение
 exe = EXE(
     pyz,
     a.scripts,
@@ -59,12 +110,13 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False if sys.platform == "win32" else True,
+    console=False,
     disable_windowed_traceback=False,
-    argv_emulation=False,
+    argv_emulation=sys.platform == "darwin",
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=win_icon,
 )
 
 coll = COLLECT(
@@ -82,6 +134,13 @@ if sys.platform == "darwin":
     app = BUNDLE(
         coll,
         name="Portal.app",
-        icon=None,
-        bundle_identifier="app.portal.desktop",
+        icon=mac_icon,
+        bundle_identifier="org.portal.desktop",
+        info_plist={
+            "NSHighResolutionCapable": True,
+            "CFBundleName": "Portal",
+            "CFBundleDisplayName": "Portal",
+            "CFBundleShortVersionString": "1.0.0",
+            "NSHumanReadableCopyright": "MIT",
+        },
     )

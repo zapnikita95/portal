@@ -9,12 +9,38 @@ from __future__ import annotations
 
 import json
 import shutil
+import ssl
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Optional, Tuple
 
 DEFAULT_WORKFLOW_FILE = "portal-android-apk.yml"
+
+
+def _github_ssl_context() -> ssl.SSLContext:
+    """
+    На macOS «голый» python.org часто без цепочки в Keychain → CERTIFICATE_VERIFY_FAILED.
+    certifi даёт актуальный bundle CA.
+    """
+    ctx = ssl.create_default_context()
+    try:
+        import certifi
+
+        ctx.load_verify_locations(cafile=certifi.where())
+    except Exception:
+        pass
+    return ctx
+
+
+def _urlopen(
+    req: urllib.request.Request,
+    *,
+    timeout: float,
+):
+    return urllib.request.urlopen(req, timeout=timeout, context=_github_ssl_context())
+
+
 # Должны совпадать с шагом «Publish to GitHub Release» в .github/workflows/portal-android-apk.yml
 APK_RELEASE_TAG = "portal-android-latest"
 
@@ -65,7 +91,7 @@ def get_apk_asset_download_url(
         req.add_header("User-Agent", "PortalDesktop/1.0")
         if with_auth and tok:
             req.add_header("Authorization", f"Bearer {tok}")
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with _urlopen(req, timeout=60) as resp:
             raw = resp.read().decode("utf-8")
         return json.loads(raw)
 
@@ -139,7 +165,7 @@ def download_apk_to_file(
         req.add_header("User-Agent", "PortalDesktop/1.0")
         if with_auth and tok:
             req.add_header("Authorization", f"Bearer {tok}")
-        return urllib.request.urlopen(req, timeout=900)
+        return _urlopen(req, timeout=900)
 
     tmp = dest_file.with_suffix(dest_file.suffix + ".part")
     try:
@@ -193,7 +219,7 @@ def dispatch_android_apk_workflow(
     req.add_header("X-GitHub-Api-Version", "2022-11-28")
     req.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(req, timeout=90) as resp:
+        with _urlopen(req, timeout=90) as resp:
             code = getattr(resp, "status", None) or resp.getcode()
             if code in (200, 201, 204):
                 return (

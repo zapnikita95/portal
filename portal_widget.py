@@ -292,6 +292,8 @@ class PortalWidget:
         self._static_rgba_full: Optional[Image.Image] = None
         self._static_open_photo: Optional[ImageTk.PhotoImage] = None
         self._static_anim_steps: int = 18
+        # Временная подмена GIF/WebP на импульс (пресеты по IP / событию)
+        self._transient_media_path: Optional[str] = None
 
         self.setup_window()
 
@@ -678,6 +680,9 @@ class PortalWidget:
 
     def _find_portal_asset(self) -> Optional[str]:
         """Пользовательский путь из config или GIF/PNG в assets/ (portal*.gif / portal*.png)."""
+        t = getattr(self, "_transient_media_path", None)
+        if t and os.path.isfile(t):
+            return t
         custom = portal_config.load_widget_media_path()
         if custom and os.path.isfile(custom):
             return custom
@@ -944,8 +949,28 @@ class PortalWidget:
 
             traceback.print_exc()
 
+    def set_transient_portal_media(self, path: Optional[str]) -> None:
+        """Временно показать другой ассет (пресет); None — сбросить на обычный config/assets."""
+        self._transient_media_path = path if path and os.path.isfile(path) else None
+        self._cancel_anim()
+        self.gif_frames = []
+        self.gif_frames_raw = []
+        self._gif_frame_durations = []
+        self._portal_media_static_visual = False
+        self._static_rgba_full = None
+        self._static_open_photo = None
+        self._mac_using_rgba_window = False
+        self.anim_state = self.ANIM_HIDDEN
+        self.anim_frame_idx = 0
+        self.load_portal_gif()
+
+    def clear_transient_portal_media(self) -> None:
+        """Убрать подмену и перечитать обычное медиа."""
+        self.set_transient_portal_media(None)
+
     def reload_portal_media(self) -> None:
         """Перечитать путь/режим из config и заново загрузить медиа (только главный поток Tk)."""
+        self._transient_media_path = None
         self._cancel_anim()
         self.gif_frames = []
         self.gif_frames_raw = []
@@ -2263,23 +2288,27 @@ class GlobalHotkeyManager:
         if hw is None:
             return
         helper = Path(__file__).resolve().parent / "portal_mac_hotkey_helper.py"
-        if not helper.is_file():
+        frozen = getattr(sys, "frozen", False)
+        if not frozen and not helper.is_file():
             self._log(f"⚠️ Нет {helper.name} — глобальные хоткеи отключены")
             try:
                 os.close(hw)
             except OSError:
                 pass
             return
+        env = os.environ.copy()
+        env["PORTAL_HOTKEY_HELPER_SUBPROCESS"] = "1"
         try:
             proc = subprocess.Popen(
-                [sys.executable, "-u", str(helper)],
+                [sys.executable],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 stdin=subprocess.DEVNULL,
                 bufsize=1,
                 text=True,
-                cwd=str(helper.parent),
+                cwd=str(helper.parent) if not frozen else None,
                 close_fds=True,
+                env=env,
             )
             self._hotkey_helper_proc = proc
         except Exception as e:

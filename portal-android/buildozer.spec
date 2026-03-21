@@ -4,12 +4,15 @@ package.name = portalshare
 package.domain = org.portal
 source.dir = .
 source.include_exts = py,png,jpg,jpeg,kv,atlas,json,gif,xml
-version = 0.2.0
+version = 0.3.0
 requirements = python3,kivy==2.3.0,android
 orientation = portrait
 fullscreen = 0
 
 source.include_patterns = assets/*
+
+# Иконка лаунчера (положи icon.png через scripts/generate_branding_icons.py)
+icon.filename = %(source.dir)s/assets/icon.png
 
 # Share Sheet → PythonActivity
 android.manifest.intent_filters = intent_filters.xml

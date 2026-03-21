@@ -404,8 +404,8 @@ def save_shared_secret(secret: Optional[str]) -> bool:
     return _write_all(data)
 
 
-def generate_shared_secret(length: int = 8) -> str:
-    """Случайный код (по умолчанию 8 символов)."""
+def generate_shared_secret(length: int = 12) -> str:
+    """Случайный код без O/0/I/1 (по умолчанию 12 символов, мин. 6, макс. 32)."""
     n = max(6, min(int(length), 32))
     return "".join(secrets.choice(_SHARED_SECRET_ALPHABET) for _ in range(n))
 
@@ -579,3 +579,205 @@ def save_widget_geometry_settings(
     except (TypeError, ValueError):
         data["widget_margin_y"] = 96
     return _write_all(data)
+
+
+# ── Пресеты портала (анимация по событию и IP) ───────────────────────
+
+WIDGET_PRESET_EVENT_LABELS_RU: Dict[str, str] = {
+    "receive": "Приём в буфер / rich",
+    "receive_file": "Приём файла",
+    "send": "Отправка на другой ПК",
+}
+
+_VALID_WIDGET_PRESET_EVENTS = frozenset({"receive", "receive_file", "send"})
+
+# rel_path относительно папки с portal_config.py (корень приложения «portal»)
+DEFAULT_WIDGET_PRESETS_CATALOG: List[Dict[str, Any]] = [
+    {"id": "main", "name": "Как поле «Медиа» выше", "rel_path": None},
+    {
+        "id": "blue",
+        "name": "Синий стандарт",
+        "rel_path": "assets/presets/blue_standard.gif",
+    },
+    {
+        "id": "yellow",
+        "name": "Жёлтый стандарт",
+        "rel_path": "assets/presets/yellow_standard.gif",
+    },
+    {"id": "classic", "name": "Classic", "rel_path": "assets/presets/classic.gif"},
+    {"id": "space", "name": "Space", "rel_path": "assets/presets/space.gif"},
+    {"id": "strange", "name": "Strange", "rel_path": "assets/presets/strange.gif"},
+    {"id": "rick", "name": "Rick", "rel_path": "assets/presets/rick.gif"},
+    {"id": "giphy", "name": "Giphy WebP", "rel_path": "assets/presets/giphy.webp"},
+]
+
+DEFAULT_WIDGET_PRESET_RULES: List[Dict[str, str]] = [
+    {"peer": "*", "event": "receive", "preset": "main"},
+    {"peer": "*", "event": "receive_file", "preset": "main"},
+    {"peer": "*", "event": "send", "preset": "main"},
+]
+
+
+def portal_package_dir() -> Path:
+    return Path(__file__).resolve().parent
+
+
+def load_widget_presets_catalog() -> List[Dict[str, Any]]:
+    data = _load_all()
+    raw = data.get("widget_presets_catalog")
+    if isinstance(raw, list) and raw:
+        out: List[Dict[str, Any]] = []
+        for x in raw:
+            if isinstance(x, dict) and str(x.get("id", "")).strip():
+                out.append(
+                    {
+                        "id": str(x["id"]).strip(),
+                        "name": str(x.get("name") or x["id"]).strip(),
+                        "rel_path": x.get("rel_path"),
+                    }
+                )
+        if out:
+            return out
+    return [dict(x) for x in DEFAULT_WIDGET_PRESETS_CATALOG]
+
+
+def save_widget_presets_catalog(presets: List[Dict[str, Any]]) -> bool:
+    clean: List[Dict[str, Any]] = []
+    for x in presets:
+        if not isinstance(x, dict):
+            continue
+        pid = str(x.get("id", "")).strip()
+        if not pid:
+            continue
+        clean.append(
+            {
+                "id": pid,
+                "name": str(x.get("name") or pid).strip(),
+                "rel_path": x.get("rel_path"),
+            }
+        )
+    data = _load_all()
+    data["widget_presets_catalog"] = clean
+    return _write_all(data)
+
+
+def _normalize_widget_preset_rules(raw: List[Any]) -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+    for x in raw:
+        if not isinstance(x, dict):
+            continue
+        peer = str(x.get("peer", "*")).strip() or "*"
+        ev = str(x.get("event", "")).strip()
+        if ev not in _VALID_WIDGET_PRESET_EVENTS:
+            continue
+        preset = str(x.get("preset", "main")).strip() or "main"
+        out.append({"peer": peer, "event": ev, "preset": preset})
+    return out
+
+
+def load_widget_preset_rules() -> List[Dict[str, str]]:
+    data = _load_all()
+    raw = data.get("widget_preset_rules")
+    if isinstance(raw, list) and raw:
+        norm = _normalize_widget_preset_rules(raw)
+        if norm:
+            return norm
+    return [dict(x) for x in DEFAULT_WIDGET_PRESET_RULES]
+
+
+def save_widget_preset_rules(rules: List[Dict[str, str]]) -> bool:
+    data = _load_all()
+    data["widget_preset_rules"] = _normalize_widget_preset_rules(rules)
+    return _write_all(data)
+
+
+def format_widget_preset_rules_for_editor(
+    rules: Optional[List[Dict[str, str]]] = None,
+) -> str:
+    if rules is None:
+        rules = load_widget_preset_rules()
+    lines = [
+        "# IP или *     receive | receive_file | send     id_пресета",
+        "# Порядок: сначала совпадёт конкретный IP, затем *.",
+        "",
+    ]
+    for r in rules:
+        lines.append(f'{r["peer"]}\t{r["event"]}\t{r["preset"]}')
+    return "\n".join(lines) + "\n"
+
+
+def parse_widget_preset_rules_editor(text: str) -> List[Dict[str, str]]:
+    rows: List[Dict[str, str]] = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        parts = re.split(r"[\t|,;]+", s)
+        parts = [p.strip() for p in parts if p.strip()]
+        if len(parts) < 3:
+            continue
+        peer, ev, preset = parts[0], parts[1], parts[2]
+        if ev not in _VALID_WIDGET_PRESET_EVENTS:
+            continue
+        rows.append(
+            {"peer": peer or "*", "event": ev, "preset": preset or "main"}
+        )
+    return rows if rows else [dict(x) for x in DEFAULT_WIDGET_PRESET_RULES]
+
+
+def resolve_widget_preset_file_path(preset_id: str) -> Optional[str]:
+    pid = (preset_id or "main").strip() or "main"
+    if pid == "main":
+        mp = load_widget_media_path()
+        if mp and Path(mp).is_file():
+            return str(Path(mp).resolve())
+        return None
+    for pr in load_widget_presets_catalog():
+        if str(pr.get("id", "")).strip() != pid:
+            continue
+        rel = pr.get("rel_path")
+        if rel is None or (isinstance(rel, str) and not rel.strip()):
+            mp = load_widget_media_path()
+            if mp and Path(mp).is_file():
+                return str(Path(mp).resolve())
+            return None
+        p = portal_package_dir() / str(rel).strip().lstrip("/\\")
+        if p.is_file():
+            return str(p.resolve())
+        return None
+    return None
+
+
+def resolve_widget_pulse_media_path(event: str, peer_ip: Optional[str]) -> Optional[str]:
+    """
+    Абсолютный путь к GIF/WebP/PNG для короткого импульса виджета.
+    None — не менять медиа (остаётся как в поле «Медиа» / assets).
+    """
+    ev = (event or "").strip()
+    if ev not in _VALID_WIDGET_PRESET_EVENTS:
+        ev = "receive"
+    peer_ip = (peer_ip or "").strip()
+    rules = load_widget_preset_rules()
+
+    def _sort_key(r: Dict[str, str]) -> Tuple[int, int]:
+        wild = 1 if str(r.get("peer", "*")).strip() == "*" else 0
+        return (wild, 0)
+
+    def _pick(for_ev: str) -> Optional[str]:
+        preset_id: Optional[str] = None
+        for rule in sorted(rules, key=_sort_key):
+            if str(rule.get("event", "")).strip() != for_ev:
+                continue
+            rp = str(rule.get("peer", "*")).strip() or "*"
+            if rp != "*" and rp != peer_ip:
+                continue
+            preset_id = str(rule.get("preset", "main")).strip() or "main"
+            break
+        if preset_id is None:
+            return None
+        return resolve_widget_preset_file_path(preset_id)
+
+    path = _pick(ev)
+    if path is None and ev == "receive_file":
+        path = _pick("receive")
+    return path
