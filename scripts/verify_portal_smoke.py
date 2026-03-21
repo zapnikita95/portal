@@ -51,6 +51,7 @@ def main() -> int:
             "format_widget_preset_rules_for_editor",
             "parse_widget_preset_rules_editor",
             "resolve_widget_pulse_media_path",
+            "default_widget_media_fallback_path",
             "load_widget_preset_rules",
         ]
         for name in need:

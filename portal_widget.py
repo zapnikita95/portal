@@ -24,6 +24,29 @@ try:
 except ImportError:
     PortalApp = None
 
+
+def _resolve_mac_hotkey_helper_script() -> Optional[Path]:
+    """
+    portal_mac_hotkey_helper.py рядом с кодом или в распаковке PyInstaller (_MEIPASS / _internal).
+    """
+    here = Path(__file__).resolve().parent
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            p = Path(meipass) / "portal_mac_hotkey_helper.py"
+            if p.is_file():
+                return p
+        exe_dir = Path(sys.executable).resolve().parent
+        for p in (
+            exe_dir / "portal_mac_hotkey_helper.py",
+            exe_dir / "_internal" / "portal_mac_hotkey_helper.py",
+        ):
+            if p.is_file():
+                return p
+        return None
+    p = here / "portal_mac_hotkey_helper.py"
+    return p if p.is_file() else None
+
 # Хромакей: Windows — почти чёрный; macOS — магента (#FF00FF), чтобы не съесть тёмные края портала
 # Свой цвет: PORTAL_WIDGET_CHROMA=#RRGGBB
 CHROMA_KEY_WIN = "#010101"
@@ -2287,10 +2310,12 @@ class GlobalHotkeyManager:
         hw = self._hk_w
         if hw is None:
             return
-        helper = Path(__file__).resolve().parent / "portal_mac_hotkey_helper.py"
-        frozen = getattr(sys, "frozen", False)
-        if not frozen and not helper.is_file():
-            self._log(f"⚠️ Нет {helper.name} — глобальные хоткеи отключены")
+        hp = _resolve_mac_hotkey_helper_script()
+        if hp is None:
+            self._log(
+                "⚠️ Нет portal_mac_hotkey_helper.py — глобальные хоткеи macOS отключены "
+                "(ожидался файл рядом с приложением или в .app/_internal)."
+            )
             try:
                 os.close(hw)
             except OSError:
@@ -2300,13 +2325,13 @@ class GlobalHotkeyManager:
         env["PORTAL_HOTKEY_HELPER_SUBPROCESS"] = "1"
         try:
             proc = subprocess.Popen(
-                [sys.executable],
+                [sys.executable, str(hp)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 stdin=subprocess.DEVNULL,
                 bufsize=1,
                 text=True,
-                cwd=str(helper.parent) if not frozen else None,
+                cwd=str(hp.parent),
                 close_fds=True,
                 env=env,
             )

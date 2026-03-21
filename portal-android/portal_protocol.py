@@ -80,10 +80,11 @@ def send_text_clipboard(
     timeout: float = 30.0,
     portal_source: str = "",
 ) -> Tuple[bool, str]:
-    """Отправить текст в буфер удалённого ПК (type clipboard)."""
+    """Отправить текст в буфер удалённого ПК (type clipboard). Ждём ответ: clipboard_ok или portal_auth_failed."""
     host = (host or "").strip()
     if not host:
         return False, "bad_host"
+    sock: Optional[socket.socket] = None
     try:
         clip: Dict[str, Any] = {"type": "clipboard", "text": text or ""}
         ps = (portal_source or "").strip()
@@ -95,10 +96,29 @@ def send_text_clipboard(
         sock.settimeout(timeout)
         sock.connect((host, port))
         _sendall(sock, raw)
-        sock.close()
+        # Настольный Portal после приёма шлёт JSON clipboard_ok; при ошибке пароля — portal_auth_failed
+        sock.settimeout(min(12.0, max(4.0, timeout)))
+        try:
+            data = sock.recv(16384)
+        except OSError as e:
+            es = str(e).lower()
+            # Старый настольный Portal не присылал ответ — только таймаут чтения
+            if "timed out" in es or "timeout" in es or "resource temporarily unavailable" in es:
+                return True, "ok"
+            return False, str(e)
+        if not data:
+            return True, "ok"
+        if b"portal_auth_failed" in data:
+            return False, "неверный пароль сети"
         return True, "ok"
     except OSError as e:
         return False, str(e)
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
 
 
 def ping_peer(

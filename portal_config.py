@@ -673,11 +673,15 @@ _VALID_WIDGET_PRESET_EVENTS = frozenset({"receive", "receive_file", "send"})
 
 # rel_path относительно папки с portal_config.py (корень приложения «portal»)
 DEFAULT_WIDGET_PRESETS_CATALOG: List[Dict[str, Any]] = [
-    {"id": "main", "name": "Как поле «Медиа» выше", "rel_path": None},
+    {
+        "id": "main",
+        "name": "Основное медиа виджета",
+        "rel_path": None,
+    },
     {
         "id": "blue",
         "name": "Синий стандарт",
-        "rel_path": "assets/presets/blue_standard.gif",
+        "rel_path": "assets/presets/blue_standard.webp",
     },
     {
         "id": "yellow",
@@ -805,13 +809,29 @@ def parse_widget_preset_rules_editor(text: str) -> List[Dict[str, str]]:
     return rows if rows else [dict(x) for x in DEFAULT_WIDGET_PRESET_RULES]
 
 
+def default_widget_media_fallback_path() -> Optional[str]:
+    """
+    Если поле «Медиа» пусто — те же файлы, что подхватывает виджет по умолчанию (portal_main.gif и т.д.).
+    """
+    assets_dir = portal_package_dir() / "assets"
+    for name in (
+        "portal_main.gif",
+        "portal_main.png",
+        "portal_animated.gif",
+    ):
+        cand = assets_dir / name
+        if cand.is_file():
+            return str(cand.resolve())
+    return None
+
+
 def resolve_widget_preset_file_path(preset_id: str) -> Optional[str]:
     pid = (preset_id or "main").strip() or "main"
     if pid == "main":
         mp = load_widget_media_path()
         if mp and Path(mp).is_file():
             return str(Path(mp).resolve())
-        return None
+        return default_widget_media_fallback_path()
     for pr in load_widget_presets_catalog():
         if str(pr.get("id", "")).strip() != pid:
             continue
@@ -820,10 +840,19 @@ def resolve_widget_preset_file_path(preset_id: str) -> Optional[str]:
             mp = load_widget_media_path()
             if mp and Path(mp).is_file():
                 return str(Path(mp).resolve())
-            return None
+            return default_widget_media_fallback_path()
         p = portal_package_dir() / str(rel).strip().lstrip("/\\")
         if p.is_file():
             return str(p.resolve())
+        # Старые конфиги могли ссылаться на .gif, файл переименован в .webp
+        if p.suffix.lower() == ".gif":
+            alt = p.with_suffix(".webp")
+            if alt.is_file():
+                return str(alt.resolve())
+        if p.suffix.lower() == ".webp":
+            alt = p.with_suffix(".gif")
+            if alt.is_file():
+                return str(alt.resolve())
         return None
     return None
 

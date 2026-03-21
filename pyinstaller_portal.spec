@@ -22,6 +22,8 @@ brand = root / "assets" / "branding"
 datas = []
 if assets.is_dir():
     datas.append((str(assets), "assets"))
+# Отдельный процесс глобальных хоткеев на macOS (Python 3.13+)
+datas.append((str(root / "portal_mac_hotkey_helper.py"), "."))
 
 # CustomTkinter — темы и ресурсы
 try:

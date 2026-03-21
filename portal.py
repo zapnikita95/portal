@@ -1264,8 +1264,10 @@ class PortalApp(ctk.CTk):
         ctk.CTkLabel(
             t_widget,
             text=(
-                "Выбери пресет в списке и нажми «Показать превью в углу» — увидишь, как он выглядит "
-                "в том же углу, что и виджет (коротко, ~4 с)."
+                "Пресет «Основное медиа виджета (main)» — это то же изображение, что в поле «Медиа виджета на столе» "
+                "выше; если поле пустое, подставляется файл по умолчанию из assets (например portal_main.gif). "
+                "Остальные пресеты — готовые файлы из assets/presets/. "
+                "Выбери пресет и нажми «Показать превью в углу» (~4 с)."
             ),
             font=ctk.CTkFont(size=11),
             text_color="gray",
@@ -2395,7 +2397,7 @@ class PortalApp(ctk.CTk):
             labels.append(f"{nm} ({pid})")
             ids.append(pid)
         if not labels:
-            labels = ["Как медиа выше (main)"]
+            labels = ["Основное медиа виджета (main)"]
             ids = ["main"]
         return labels, ids
 
@@ -2573,7 +2575,9 @@ class PortalApp(ctk.CTk):
         media_path = portal_config.resolve_widget_preset_file_path(pid)
         if not media_path:
             self.log(
-                f"⚠️ Нет файла для пресета «{pid}». Для «main» укажи медиа выше или положи GIF в assets/presets/."
+                f"⚠️ Нет файла для пресета «{pid}». "
+                "Для «main»: поле «Медиа» или assets/portal_main.gif. "
+                "Для «Синий стандарт»: assets/presets/blue_standard.webp (или .gif)."
             )
             return
         seconds = 4.0
@@ -3213,6 +3217,16 @@ class PortalApp(ctk.CTk):
                 )
             elif message.get("type") == "clipboard":
                 self.receive_clipboard(message, peer_ip=peer_host)
+                try:
+                    _portal_sendall(
+                        client_socket,
+                        json.dumps(
+                            {"type": "clipboard_ok"},
+                            ensure_ascii=False,
+                        ).encode("utf-8"),
+                    )
+                except Exception:
+                    pass
             elif message.get("type") == "clipboard_file":
                 self._receive_clipboard_file_payload(
                     client_socket, message, prefix=tail, peer_ip=peer_host

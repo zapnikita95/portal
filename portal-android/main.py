@@ -137,7 +137,7 @@ HELP_TEXT = (
     "Portal для Android пересылает файлы и текст на компьютеры в вашей сети (локальная сеть или VPN), "
     "где запущен настольный Portal и активна кнопка «Запустить портал».\n\n"
     "Адреса\n"
-    "Введите те же IP, что указаны в настольном приложении: ⚙ Настройки → «Пиры» "
+    "Введите те же IP, что указаны в настольном приложении: меню Настройки → «Пиры» "
     "(один адрес на строку, при необходимости с подписью).\n\n"
     "Откуда взять адрес\n"
     "В верхней части окна настольного Portal показан текущий адрес "
@@ -153,16 +153,40 @@ HELP_TEXT = (
 )
 
 
-def _portal_gif_path() -> str | None:
-    """GIF в APK (portal-android/assets) или при запуске из корня репозитория."""
+def _kivy_image_uri(abs_path: str) -> str:
+    """На Android SDL часто надёжнее открывает ресурс с префиксом file://."""
+    if not abs_path:
+        return abs_path
+    if abs_path.startswith("file://"):
+        return abs_path
+    if kivy_platform == "android":
+        return "file://" + abs_path
+    return abs_path
+
+
+def _mascot_image_source() -> tuple[str | None, bool]:
+    """
+    Картинка портала в шапке: на Android — в основном PNG (GIF в SDL часто не грузится → «серый квадрат»).
+    Возвращает (uri, use_gif_animation).
+    """
     here = Path(__file__).resolve().parent
-    for candidate in (
-        here / "assets" / "portal_main.gif",
-        here.parent / "assets" / "portal_main.gif",
-    ):
-        if candidate.is_file():
-            return str(candidate)
-    return None
+    icon_apk = here / "assets" / "icon.png"
+    gif_apk = here / "assets" / "portal_main.gif"
+    if icon_apk.is_file():
+        if kivy_platform == "android":
+            return (_kivy_image_uri(str(icon_apk.resolve())), False)
+        if gif_apk.is_file():
+            return (_kivy_image_uri(str(gif_apk.resolve())), True)
+        return (_kivy_image_uri(str(icon_apk.resolve())), False)
+    # Локальный запуск из клона репозитория
+    if kivy_platform != "android":
+        dev_gif = here.parent / "assets" / "portal_main.gif"
+        if dev_gif.is_file():
+            return (str(dev_gif.resolve()), True)
+    dev_png = here.parent / "assets" / "branding" / "portal_icon.png"
+    if dev_png.is_file():
+        return (_kivy_image_uri(str(dev_png.resolve())), False)
+    return (None, False)
 
 
 class Panel(BoxLayout):
@@ -218,6 +242,7 @@ class PeerRow(BoxLayout):
             hint_text="IP узла в сети (например 100.…)",
             text=ip,
             multiline=False,
+            write_tab=False,
             size_hint_x=0.44,
             background_color=(0.16, 0.18, 0.26, 1),
             foreground_color=C_TEXT,
@@ -228,6 +253,7 @@ class PeerRow(BoxLayout):
             hint_text="Подпись (необязательно)",
             text=name,
             multiline=False,
+            write_tab=False,
             size_hint_x=0.36,
             background_color=(0.16, 0.18, 0.26, 1),
             foreground_color=C_TEXT,
@@ -235,10 +261,11 @@ class PeerRow(BoxLayout):
             padding=[dp(10), dp(12), dp(8), dp(8)],
         )
         rm = Button(
-            text="✕",
+            text="Del",
             size_hint_x=0.12,
             background_color=(0.35, 0.18, 0.18, 1),
             color=C_TEXT,
+            font_size=dp(11),
         )
         rm.bind(on_press=lambda *_a: self._do_remove())
         self.add_widget(self.ip_input)
@@ -267,9 +294,23 @@ class PortalAndroidApp(App):
         self._portal_mascot: Image | None = None
         self._conn_status_lbl: Label | None = None
         self._ping_event = None
+        self._portal_mascot_is_gif = False
+
+    def _effective_secret(self) -> str:
+        """Пароль из поля (актуальный) или из последнего сохранённого файла."""
+        if self._secret_field is not None:
+            u = self._secret_field.text.strip()
+            if u:
+                return u
+        return (load_cfg().get("secret") or "").strip()
 
     def build(self):
         Window.clearcolor = C_BG
+        if kivy_platform == "android":
+            try:
+                Window.softinput_mode = "resize"
+            except Exception:
+                pass
         if is_android_runtime():
             bind_new_intent(self._android_on_new_intent)
             try:
@@ -282,7 +323,8 @@ class PortalAndroidApp(App):
         return self._build_settings_ui()
 
     def _build_settings_ui(self):
-        top_pad = dp(12) + (dp(8) if kivy_platform == "android" else 0)
+        # Отступ сверху: статус-бар + меньше ощущения «уехало под вырез»
+        top_pad = dp(14) + (dp(22) if kivy_platform == "android" else dp(8))
         root = BoxLayout(
             orientation="vertical",
             padding=[dp(16), top_pad, dp(16), dp(16)],
@@ -298,10 +340,10 @@ class PortalAndroidApp(App):
             padding=[0, 0, 0, dp(2)],
         )
         menu_btn = Button(
-            text="☰",
+            text="Меню",
             size_hint=(None, None),
-            size=(dp(44), dp(44)),
-            font_size=dp(22),
+            size=(dp(52), dp(44)),
+            font_size=dp(13),
             bold=True,
             background_color=(0.14, 0.16, 0.23, 1),
             color=C_TEXT,
@@ -309,30 +351,26 @@ class PortalAndroidApp(App):
         menu_btn.bind(on_press=lambda *_a: self._open_help_menu())
         header.add_widget(menu_btn)
 
-        gif_src = _portal_gif_path()
-        if gif_src:
-            self._portal_mascot = Image(
-                source=gif_src,
+        masc_src, masc_gif = _mascot_image_source()
+        if masc_src:
+            kw = dict(
+                source=masc_src,
                 size_hint=(None, None),
                 size=(dp(58), dp(58)),
                 allow_stretch=True,
                 keep_ratio=True,
-                anim_delay=_GIF_FRAME_DELAY,
+                mipmap=True,
             )
-            self._portal_mascot.color = (0.4, 0.41, 0.44, 1)
-            header.add_widget(self._portal_mascot)
-        elif _asset_icon_path().is_file():
-            self._portal_mascot = Image(
-                source=str(_asset_icon_path()),
-                size_hint=(None, None),
-                size=(dp(58), dp(58)),
-                allow_stretch=True,
-                keep_ratio=True,
-            )
-            self._portal_mascot.color = (0.4, 0.41, 0.44, 1)
+            if masc_gif:
+                kw["anim_delay"] = _GIF_FRAME_DELAY
+            self._portal_mascot = Image(**kw)
+            self._portal_mascot_is_gif = masc_gif
+            # Серый оттенок = «нет связи»; умножается на реальную текстуру портала, не на пустой квадрат
+            self._portal_mascot.color = (0.42, 0.43, 0.46, 1)
             header.add_widget(self._portal_mascot)
         else:
             self._portal_mascot = None
+            self._portal_mascot_is_gif = False
 
         ht = BoxLayout(
             orientation="vertical",
@@ -464,8 +502,9 @@ class PortalAndroidApp(App):
             )
         )
         sec_hint = Label(
-            text="Тот же пароль, что в настольном Portal: ⚙ Настройки → «Пароль». "
-            "Должен совпадать на телефоне и на компьютерах в вашей сети.",
+            text="Тот же пароль, что в настольном Portal: Настройки → «Пароль». "
+            "Должен совпадать на телефоне и на компьютерах в вашей сети. "
+            "Тест и проверка связи используют пароль из поля ниже (не только из файла после «Сохранить»).",
             font_size=dp(12),
             color=C_MUTED,
             size_hint_y=None,
@@ -480,6 +519,7 @@ class PortalAndroidApp(App):
             size_hint_y=None,
             height=dp(48),
             password=True,
+            write_tab=False,
             background_color=(0.16, 0.18, 0.26, 1),
             foreground_color=C_TEXT,
             hint_text_color=C_MUTED,
@@ -517,6 +557,7 @@ class PortalAndroidApp(App):
         self._test_text = TextInput(
             hint_text="Произвольный текст для проверки",
             multiline=True,
+            write_tab=False,
             size_hint_y=None,
             height=dp(88),
             background_color=(0.16, 0.18, 0.26, 1),
@@ -644,7 +685,8 @@ class PortalAndroidApp(App):
             if masc:
                 masc.color = (1.0, 0.78, 0.42, 1)
                 try:
-                    masc.anim_delay = _GIF_FRAME_DELAY
+                    if self._portal_mascot_is_gif:
+                        masc.anim_delay = _GIF_FRAME_DELAY
                 except Exception:
                     pass
             self._conn_status_lbl.color = C_ACCENT
@@ -660,7 +702,8 @@ class PortalAndroidApp(App):
             if masc:
                 masc.color = (0.38, 0.39, 0.42, 1)
                 try:
-                    masc.anim_delay = _GIF_FROZEN_DELAY
+                    if self._portal_mascot_is_gif:
+                        masc.anim_delay = _GIF_FROZEN_DELAY
                 except Exception:
                     pass
             self._conn_status_lbl.color = C_MUTED
@@ -683,7 +726,6 @@ class PortalAndroidApp(App):
             )
             return
         peers: list[str] = []
-        secret = ""
         try:
             for row in self._peer_rows or []:
                 ip = row.ip_input.text.strip()
@@ -692,10 +734,9 @@ class PortalAndroidApp(App):
                 if not row.chk_send.active:
                     continue
                 peers.append(ip)
-            if self._secret_field:
-                secret = self._secret_field.text.strip()
         except Exception:
-            pass
+            peers = []
+        secret = self._effective_secret()
         if not peers:
             Clock.schedule_once(
                 lambda *_a: self._apply_ping_ui(False, 0, 0, reason="nopeers"),
@@ -968,12 +1009,16 @@ class PortalAndroidApp(App):
                     self._status_label.text = (
                         "Добавьте хотя бы один адрес узла с настольным Portal."
                     )
+                if is_android_runtime():
+                    toast("Добавьте хотя бы один адрес узла.", long=True)
                 return
             if not any(p.get("send") for p in peers):
                 if self._status_label:
                     self._status_label.text = (
                         "Отметьте галочкой хотя бы одного получателя — иначе отправка некуда направлена."
                     )
+                if is_android_runtime():
+                    toast("Отметьте галочкой хотя бы одного получателя.", long=True)
                 return
             cfg = {
                 "peers": peers,
@@ -987,31 +1032,42 @@ class PortalAndroidApp(App):
                     "Далее: «Поделиться» → Portal."
                 )
             Clock.schedule_once(lambda _dt: self._ping_peers_bg(), 0.5)
+            if is_android_runtime():
+                toast("Настройки сохранены.", long=False)
         except Exception as e:
             if self._status_label:
                 self._status_label.text = f"Ошибка: {e}"
+            if is_android_runtime():
+                toast(f"Ошибка сохранения: {e}", long=True)
 
     def send_test_text(self) -> None:
         if not self._test_text:
             return
         if send_text_clipboard is None:
             return
+
+        def _warn(msg: str) -> None:
+            if self._status_label:
+                self._status_label.text = msg
+            if is_android_runtime():
+                toast(msg, long=True)
+
         peers = self._collect_peers()
         if not peers:
-            if self._status_label:
-                self._status_label.text = (
-                    "Сначала укажите адреса и нажмите «Сохранить настройки»."
-                )
+            _warn("Сначала укажите хотя бы один адрес узла.")
             return
         targets = peers_marked_for_send(peers)
         if not targets:
-            if self._status_label:
-                self._status_label.text = (
-                    "Отметьте галочкой хотя бы одного получателя."
-                )
+            _warn("Отметьте галочкой хотя бы одного получателя.")
             return
-        cfg = load_cfg()
-        secret = (cfg.get("secret") or "").strip()
+        secret = self._effective_secret()
+        if not secret:
+            _warn(
+                "Введите пароль сети в поле «Пароль сети» "
+                "(он используется сразу, сохранять необязательно) "
+                "или нажмите «Сохранить настройки»."
+            )
+            return
         txt = self._test_text.text or ""
         errs: list[str] = []
         oks = 0
