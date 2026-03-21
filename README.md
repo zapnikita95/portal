@@ -22,7 +22,7 @@
 - ✨ **Приём файла:** если виджет был скрыт, он **кратко показывается (~3 с)** и снова скрывается (отключить: `PORTAL_WIDGET_PULSE_ON_RECEIVE=0`, длительность: `PORTAL_WIDGET_PULSE_SECONDS=3`)
 - 🔒 **Пароль сети (shared secret)** в настройках — одинаковый на всех своих ПК; шифрование трафика даёт VPN (Tailscale и т.д.), пароль режет доступ к порту **12345** в LAN
 - 🚀 **Работа без браузера** - нативное приложение
-- 💿 **Сборка «как обычная программа»** (без `.command` / `.bat`): **[BUILD_DESKTOP.md](BUILD_DESKTOP.md)** — `pyinstaller -y pyinstaller_portal.spec` → **Windows:** `dist/Portal/Portal.exe`, **macOS:** `dist/Portal.app` (иконка из `portal_main.gif` (скрипт `generate_branding_icons.py`)). **В облаке:** GitHub Actions **Portal Desktop Build** (артефакты или релиз по тегу `v*`, см. BUILD_DESKTOP.md).
+- 💿 **Сборка «как обычная программа»** (без `.command` / `.bat`): **[BUILD_DESKTOP.md](BUILD_DESKTOP.md)** — `pyinstaller -y pyinstaller_portal.spec` → **Windows:** `dist/Portal/Portal.exe`, **macOS:** `dist/Portal.app` (иконка из `portal_main.gif` (скрипт `generate_branding_icons.py`)). **В облаке:** GitHub Actions **Portal Desktop Build** (артефакты или релиз по тегу `v*`, см. BUILD_DESKTOP.md). **Как отдавать пользователям (ZIP / установщики):** [DISTRIBUTION.md](DISTRIBUTION.md).
 
 ## 📋 Требования
 
