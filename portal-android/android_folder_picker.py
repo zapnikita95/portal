@@ -1,6 +1,9 @@
 """
 Выбор папки для сохранения через Storage Access Framework (OPEN_DOCUMENT_TREE).
 Сохраняем content:// URI с persistable permission — путь вручную на Android часто недоступен.
+
+Важно: on_activity_result должен быть зарегистрирован вместе с on_new_intent одним вызовом
+android.activity.bind(...), иначе второй bind затирает первый и проводник «молчит».
 """
 
 from __future__ import annotations
@@ -10,7 +13,6 @@ from typing import Callable, Optional
 
 REQ_OPEN_TREE = 9341
 _on_result: Optional[Callable[[Optional[str]], None]] = None
-_bound = False
 
 
 def is_android_runtime() -> bool:
@@ -24,56 +26,54 @@ def _java_activity():
     return PythonActivity.mActivity
 
 
-def bind_folder_picker() -> None:
-    """Повесить on_activity_result (один раз)."""
-    global _bound
-    if _bound or not is_android_runtime():
+def on_activity_result(request_code, result_code, intent):
+    """
+    Передать в activity_bind(..., on_activity_result=on_activity_result).
+    Обрабатывает только REQ_OPEN_TREE; остальные коды не трогает.
+    """
+    global _on_result
+    if request_code != REQ_OPEN_TREE:
+        return
+    cb = _on_result
+    _on_result = None
+    if cb is None:
+        return
+    # Activity.RESULT_OK == -1
+    if result_code != -1 or intent is None:
+        try:
+            cb(None)
+        except Exception:
+            pass
         return
     try:
-        from android.activity import bind as activity_bind  # type: ignore
-    except Exception:
-        return
-
-    def on_activity_result(request_code, result_code, intent):
-        global _on_result
-        cb = _on_result
-        _on_result = None
-        if request_code != REQ_OPEN_TREE or cb is None:
-            return
-        # Activity.RESULT_OK == -1
-        if result_code != -1 or intent is None:
+        uri = intent.getData()
+        if uri is None:
             cb(None)
             return
+        uri_str = uri.toString()
         try:
-            uri = intent.getData()
-            if uri is None:
-                cb(None)
-                return
-            uri_str = uri.toString()
-            try:
-                from jnius import autoclass  # type: ignore
+            from jnius import autoclass  # type: ignore
 
-                act = _java_activity()
-                Intent = autoclass("android.content.Intent")
-                flags = int(
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                )
-                act.takePersistableUriPermission(uri, flags)
-            except Exception:
-                pass
-            cb(uri_str)
+            act = _java_activity()
+            Intent = autoclass("android.content.Intent")
+            flags = int(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            act.takePersistableUriPermission(uri, flags)
         except Exception:
-            try:
-                cb(None)
-            except Exception:
-                pass
-
-    try:
-        activity_bind(on_activity_result=on_activity_result)
-        _bound = True
+            pass
+        cb(uri_str)
     except Exception:
-        pass
+        try:
+            cb(None)
+        except Exception:
+            pass
+
+
+def bind_folder_picker() -> None:
+    """Совместимость: раньше вешали bind здесь. Теперь см. main.PortalAndroidApp._install_android_activity_bindings."""
+    pass
 
 
 def pick_receive_folder(callback: Callable[[Optional[str]], None]) -> None:
@@ -85,7 +85,6 @@ def pick_receive_folder(callback: Callable[[Optional[str]], None]) -> None:
     if not is_android_runtime():
         callback(None)
         return
-    bind_folder_picker()
     _on_result = callback
     try:
         from jnius import autoclass  # type: ignore
@@ -94,10 +93,12 @@ def pick_receive_folder(callback: Callable[[Optional[str]], None]) -> None:
         Intent = autoclass("android.content.Intent")
         act = _java_activity()
         if act is None:
+            _on_result = None
             callback(None)
             return
 
         def run(*_a):
+            global _on_result
             try:
                 i = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
                 i.addFlags(
@@ -107,9 +108,16 @@ def pick_receive_folder(callback: Callable[[Optional[str]], None]) -> None:
                         | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
                     )
                 )
+                try:
+                    Uri = autoclass("android.net.Uri")
+                    initial = Uri.parse(
+                        "content://com.android.externalstorage.documents/tree/primary%3ADownload"
+                    )
+                    i.putExtra("android.provider.extra.INITIAL_URI", initial)
+                except Exception:
+                    pass
                 act.startActivityForResult(i, REQ_OPEN_TREE)
             except Exception:
-                global _on_result
                 _on_result = None
                 try:
                     callback(None)

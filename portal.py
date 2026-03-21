@@ -382,13 +382,20 @@ def parse_first_json_object_bytes(buf: bytes) -> tuple[Optional[dict], int]:
 
     Важно: нельзя считать «{»/«}» вручную — в имени файла может быть «}» (например doc}.txt),
     тогда ломался разбор, файл не принимался, отправитель получал пустой ответ.
+
+    Смещение по байтам считаем от исходного buf: после utf-8-sig в «строке» BOM не виден,
+    а len(s[:end].encode()) без учёта lead давал бы неверный хвост и битый бинарный файл.
     """
     if not buf:
         return None, 0
+    lead = 3 if buf.startswith(b"\xef\xbb\xbf") else 0
     try:
-        s = buf.decode("utf-8-sig")
+        s = buf[lead:].decode("utf-8")
     except UnicodeDecodeError:
-        s = buf.decode("utf-8", errors="replace")
+        try:
+            s = buf[lead:].decode("utf-8", errors="replace")
+        except Exception:
+            return None, 0
     decoder = json.JSONDecoder()
     i = 0
     n = len(s)
@@ -407,8 +414,8 @@ def parse_first_json_object_bytes(buf: bytes) -> tuple[Optional[dict], int]:
         return None, 0
     if not isinstance(obj, dict):
         return None, 0
-    consumed = s[:end_char].encode("utf-8")
-    return obj, len(consumed)
+    json_end_bytes = lead + len(s[:end_char].encode("utf-8"))
+    return obj, json_end_bytes
 
 
 def _portal_sendall(sock: socket.socket, data: bytes) -> None:
@@ -1337,30 +1344,30 @@ class PortalApp(ctk.CTk):
             text=i18n.tr("recv.per_ip_hint"),
             font=ctk.CTkFont(size=11),
             text_color="gray",
+            wraplength=680,
+            justify="left",
         ).pack(anchor="w", padx=8, pady=(0, 4))
-        peer_recv_row = ctk.CTkFrame(t_recv, fg_color="transparent")
-        peer_recv_row.pack(fill="both", expand=False, padx=8, pady=(0, 8))
-        self.peer_receive_dirs_text = ctk.CTkTextbox(
-            peer_recv_row, width=440, height=100, font=ctk.CTkFont(size=12)
+        peer_recv_wrap = ctk.CTkFrame(t_recv, fg_color="transparent")
+        peer_recv_wrap.pack(fill="both", expand=False, padx=8, pady=(0, 8))
+        self._peer_recv_dirs_scroll = ctk.CTkScrollableFrame(
+            peer_recv_wrap, height=220, fg_color="transparent"
         )
-        self.peer_receive_dirs_text.pack(side="left", padx=(0, 10), anchor="nw", fill="x", expand=True)
-        try:
-            self.peer_receive_dirs_text.insert("1.0", portal_config.format_peer_receive_dirs_for_editor())
-        except Exception:
-            pass
-        pr_btn_col = ctk.CTkFrame(peer_recv_row, fg_color="transparent")
-        pr_btn_col.pack(side="left", fill="y")
+        self._peer_recv_dirs_scroll.pack(fill="both", expand=True)
+        self._peer_recv_dir_rows = []
+        pr_btn_row = ctk.CTkFrame(peer_recv_wrap, fg_color="transparent")
+        pr_btn_row.pack(fill="x", pady=(10, 0))
         ctk.CTkButton(
-            pr_btn_col,
+            pr_btn_row,
             text=i18n.tr("recv.save_ip_list"),
-            width=130,
+            width=180,
             command=self.save_peer_receive_dirs_from_ui,
             font=ctk.CTkFont(size=12),
-        ).pack(pady=(0, 6))
+        ).pack(side="left", padx=(0, 8))
         self.peer_receive_dirs_feedback = ctk.CTkLabel(
-            pr_btn_col, text="", font=ctk.CTkFont(size=11), text_color="gray"
+            pr_btn_row, text="", font=ctk.CTkFont(size=11), text_color="gray"
         )
-        self.peer_receive_dirs_feedback.pack()
+        self.peer_receive_dirs_feedback.pack(side="left")
+        self._rebuild_peer_receive_dir_rows()
 
         ctk.CTkLabel(
             t_recv,
@@ -1562,6 +1569,34 @@ class PortalApp(ctk.CTk):
             wraplength=680,
             justify="left",
         ).pack(anchor="w", padx=8, pady=(0, 4))
+        hdr = ctk.CTkFrame(t_widget, fg_color="transparent")
+        hdr.pack(fill="x", padx=8, pady=(0, 2))
+        ctk.CTkLabel(
+            hdr,
+            text=i18n.tr("widget.rules_col_peer"),
+            width=160,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="gray",
+            anchor="w",
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(
+            hdr,
+            text=i18n.tr("widget.rules_col_event"),
+            width=200,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="gray",
+            anchor="w",
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(
+            hdr,
+            text=i18n.tr("widget.rules_col_preset"),
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="gray",
+            anchor="w",
+        ).pack(side="left", padx=(0, 6), fill="x", expand=True)
+        ctk.CTkLabel(hdr, text=i18n.tr("widget.rules_col_del"), width=40).pack(
+            side="left", padx=(4, 0)
+        )
         self._widget_preset_rules_scroll = ctk.CTkScrollableFrame(
             t_widget, height=220, fg_color="transparent"
         )
@@ -2082,6 +2117,10 @@ class PortalApp(ctk.CTk):
             self.rebuild_peer_checkboxes()
             self.check_peer_connection_async(silent=False)
             self._arm_peer_poll()
+            try:
+                self._rebuild_peer_receive_dir_rows()
+            except Exception:
+                pass
         else:
             self.log("❌ Не удалось сохранить список IP")
             if hasattr(self, "ip_saved_feedback"):
@@ -2151,15 +2190,85 @@ class PortalApp(ctk.CTk):
             self.receive_dir_entry.delete(0, "end")
             self.receive_dir_entry.insert(0, d)
 
-    def save_peer_receive_dirs_from_ui(self) -> None:
-        """Сохранить маппинг IP → папка приёма из текстового поля настроек."""
-        if not hasattr(self, "peer_receive_dirs_text"):
+    def _rebuild_peer_receive_dir_rows(self) -> None:
+        """По одному блоку на каждый сохранённый IP (вкладка «Пиры»)."""
+        sc = getattr(self, "_peer_recv_dirs_scroll", None)
+        if sc is None:
             return
         try:
-            raw = self.peer_receive_dirs_text.get("1.0", "end")
+            for w in sc.winfo_children():
+                w.destroy()
         except Exception:
+            pass
+        self._peer_recv_dir_rows = []
+        ips = portal_config.load_peer_ips()
+        dirs_map = portal_config.load_peer_receive_dirs()
+        if not ips:
+            ctk.CTkLabel(
+                sc,
+                text=i18n.tr("recv.per_ip_empty"),
+                font=ctk.CTkFont(size=11),
+                text_color="gray",
+                wraplength=640,
+                justify="left",
+            ).pack(anchor="w", pady=(4, 8))
             return
-        mapping = portal_config.parse_peer_receive_dirs_editor(raw)
+        ph = i18n.tr("recv.per_ip_path_placeholder")
+        for ip in ips:
+            fr = ctk.CTkFrame(sc, fg_color="transparent")
+            fr.pack(fill="x", pady=(0, 10))
+            ctk.CTkLabel(
+                fr,
+                text=portal_config.peer_display_label(ip),
+                width=200,
+                anchor="w",
+                font=ctk.CTkFont(size=12, weight="bold"),
+            ).pack(side="left", padx=(0, 10))
+            ent = ctk.CTkEntry(fr, placeholder_text=ph, font=ctk.CTkFont(size=12))
+            ent.pack(side="left", padx=(0, 8), fill="x", expand=True)
+            prev = (dirs_map.get(ip) or "").strip()
+            if prev:
+                ent.insert(0, prev)
+            wire_ctk_entry_paste(ent)
+            ctk.CTkButton(
+                fr,
+                text=i18n.tr("recv.browse"),
+                width=88,
+                command=lambda e=ent: self._choose_dir_for_peer_entry(e),
+                font=ctk.CTkFont(size=12),
+            ).pack(side="left")
+            self._peer_recv_dir_rows.append({"ip": ip, "entry": ent, "frame": fr})
+
+    def _choose_dir_for_peer_entry(self, entry) -> None:
+        from tkinter import filedialog
+
+        if entry is None:
+            return
+        cur = entry.get().strip()
+        base = str(portal_config.receive_dir_path())
+        exp = os.path.expanduser(cur)
+        initial = cur if cur and os.path.isdir(exp) else base
+        d = filedialog.askdirectory(
+            title=i18n.tr("recv.per_ip_filedialog"),
+            initialdir=initial,
+        )
+        if d:
+            entry.delete(0, "end")
+            entry.insert(0, d)
+
+    def save_peer_receive_dirs_from_ui(self) -> None:
+        """Сохранить маппинг IP → папка из блоков по списку пиров."""
+        rows = getattr(self, "_peer_recv_dir_rows", None)
+        mapping: Dict[str, str] = {}
+        if rows:
+            for row in rows:
+                ip = str(row.get("ip", "")).strip()
+                ent = row.get("entry")
+                if not ip or ent is None:
+                    continue
+                p = (ent.get() or "").strip()
+                if p:
+                    mapping[ip] = p
         ok = portal_config.save_peer_receive_dirs(mapping)
         if ok:
             self.log(
@@ -2673,15 +2782,19 @@ class PortalApp(ctk.CTk):
         labels, ids = self._widget_preset_labels_and_ids()
         fr = ctk.CTkFrame(sc, fg_color="transparent")
         fr.pack(fill="x", pady=3)
-        ip_e = ctk.CTkEntry(
+        peer_s = (peer or "").strip() or "*"
+        ip_vals = ["*"] + [p for p in portal_config.load_peer_ips() if str(p).strip()]
+        if peer_s not in ip_vals:
+            ip_vals.insert(1, peer_s)
+        ip_e = ctk.CTkComboBox(
             fr,
-            width=128,
-            placeholder_text=i18n.tr("widget.rule_ip_placeholder"),
+            width=160,
+            values=ip_vals,
             font=ctk.CTkFont(size=12),
+            state="normal",
         )
-        ip_e.insert(0, peer)
+        ip_e.set(peer_s if peer_s in ip_vals else ip_vals[0])
         ip_e.pack(side="left", padx=(0, 6))
-        wire_ctk_entry_paste(ip_e)
         ev_map = i18n.widget_preset_event_labels()
         ev_labels = list(ev_map.values())
         ev_m = ctk.CTkOptionMenu(
@@ -3673,7 +3786,11 @@ class PortalApp(ctk.CTk):
                         else:
                             self._apply_portal_clipboard_files([p])
                     else:
-                        self._apply_receive_mode_after_saved_file(p, reveal_mac_allowed=reveal_ok)
+                        self._apply_receive_mode_after_saved_file(
+                            p,
+                            reveal_mac_allowed=reveal_ok,
+                            from_mobile=_portal_message_from_mobile(msg_local),
+                        )
                 except Exception as ex:
                     self.log(f"❌ После приёма (Finder/буфер): {ex}")
                 else:
@@ -3695,7 +3812,9 @@ class PortalApp(ctk.CTk):
         except Exception as e:
             self._log_from_thread(f"❌ Ошибка приёма файла: {e}")
 
-    def _apply_receive_mode_after_saved_file(self, p: Path, *, reveal_mac_allowed: bool) -> None:
+    def _apply_receive_mode_after_saved_file(
+        self, p: Path, *, reveal_mac_allowed: bool, from_mobile: bool = False
+    ) -> None:
         """Обычный приём файла: режим both / disk_only / clipboard_only (не portal_clipboard)."""
         mode = portal_config.receive_files_mode()
         if not p.is_file():
@@ -3714,7 +3833,9 @@ class PortalApp(ctk.CTk):
                 )
             except Exception:
                 pass
-        if mode in ("both", "clipboard_only"):
+        # С телефона — только файл на диске, без подмены системного буфера обмена.
+        copy_clip = (not from_mobile) and mode in ("both", "clipboard_only")
+        if copy_clip:
             self._apply_portal_clipboard_files([p])
             self.log(f"📋 В буфере для вставки: {p.name}")
 
@@ -4224,6 +4345,7 @@ class PortalApp(ctk.CTk):
         try:
             self._fill_peer_ips_textbox()
             self.rebuild_peer_checkboxes()
+            self._rebuild_peer_receive_dir_rows()
         except Exception as e:
             print(f"[Portal] Ошибка обновления списка IP: {e}")
     

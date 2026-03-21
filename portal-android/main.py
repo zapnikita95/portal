@@ -38,7 +38,6 @@ except ImportError:
 try:
     from android_share import (
         SharePayload,
-        bind_new_intent,
         finish_activity,
         is_android_runtime,
         is_share_intent,
@@ -62,10 +61,6 @@ except ImportError:
 
     def finish_activity():
         pass
-
-    def bind_new_intent(_cb):
-        pass
-
 
 PORTAL_SOURCE_ANDROID = "android"
 PORTAL_PORT = 12345
@@ -684,6 +679,11 @@ class PortalAndroidApp(App):
         self._recv_server: Optional[ReceiveServer] = None
         self._receive_saf_uri: str = ""
         self._cold_share_container: Optional[BoxLayout] = None
+        self._settings_popup = None
+        self._settings_save_btn = None
+        self._header_save_btn = None
+        self._settings_dirty = False
+        self._loading_ui = False
 
     # ── конфиг ──────────────────────────────────────────────────────────────
 
@@ -694,6 +694,277 @@ class PortalAndroidApp(App):
                 return u
         return (load_cfg().get("secret") or "").strip()
 
+    def _install_android_activity_bindings(self) -> None:
+        """Один bind и для Share (on_new_intent), и для выбора папки (on_activity_result)."""
+        if kivy_platform != "android":
+            return
+        try:
+            from android.activity import bind as activity_bind  # type: ignore
+            from android_folder_picker import on_activity_result as tree_activity_result  # type: ignore
+
+            activity_bind(
+                on_new_intent=self._android_new_intent,
+                on_activity_result=tree_activity_result,
+            )
+        except Exception as e:
+            print(f"[Portal] activity bind: {e}", flush=True)
+
+    def _on_any_settings_change(self, *_args) -> None:
+        if getattr(self, "_loading_ui", False):
+            return
+        self._settings_dirty = True
+        self._refresh_save_buttons()
+
+    def _refresh_save_buttons(self) -> None:
+        d = bool(self._settings_dirty)
+        hb = self._header_save_btn
+        if hb is not None:
+            hb.disabled = not d
+            hb.opacity = 1.0 if d else 0.0
+            hb.width = dp(88) if d else 0
+        sb = self._settings_save_btn
+        if sb is not None:
+            sb.disabled = not d
+
+    def _clear_dirty_after_save(self) -> None:
+        self._settings_dirty = False
+        self._refresh_save_buttons()
+
+    def _wire_peer_row(self, row: PeerRow) -> None:
+        row.ip_input.bind(text=self._on_any_settings_change)
+        row.name_input.bind(text=self._on_any_settings_change)
+        row.chk_send.bind(active=self._on_any_settings_change)
+
+    def _build_settings_popup(self) -> None:
+        if self._settings_popup is not None:
+            return
+        cfg = load_cfg()
+        outer = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(10))
+        scroll = ScrollView(
+            do_scroll_x=False,
+            bar_width=dp(5),
+            size_hint_y=1,
+        )
+        body = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            spacing=dp(12),
+            padding=(0, 0, 0, dp(8)),
+        )
+        body.bind(minimum_height=body.setter("height"))
+
+        sec_card = Card()
+        sec_card.add_widget(SectionTitle("Пароль сети"))
+        sec_card.add_widget(
+            Hint(
+                "Как в настольном Portal: ⚙ Настройки → пароль. "
+                "Должен совпадать на телефоне и на ПК."
+            )
+        )
+        sec_row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(50),
+            spacing=dp(8),
+        )
+        self._secret_field = _input("Пароль сети", password=False, height=dp(50))
+        self._secret_field.size_hint_x = 1
+        sec_paste = _btn("Вставить", bg=(0.18, 0.22, 0.32, 1), height=dp(50), font_size=dp(12))
+        sec_paste.size_hint = (None, None)
+        sec_paste.width = dp(100)
+        sec_paste.bind(on_press=lambda *_: self._paste_clipboard_into(self._secret_field))
+        sec_row.add_widget(self._secret_field)
+        sec_row.add_widget(sec_paste)
+        sec_card.add_widget(sec_row)
+        body.add_widget(sec_card)
+
+        recv_card = Card()
+        recv_card.add_widget(SectionTitle("Папка для входящих файлов"))
+        recv_card.add_widget(
+            Hint(
+                'Куда класть файлы с ПК. «Загрузки» по умолчанию. '
+                '«Выбрать папку» — системный проводник (можно создать папку).'
+            )
+        )
+        self._receive_dir_field = _input(hint=_default_receive_dir())
+        recv_card.add_widget(self._receive_dir_field)
+        pick_row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(44),
+            spacing=dp(8),
+        )
+        pick_btn = _btn("Выбрать папку", bg=C_BLUE, height=dp(44), font_size=dp(13))
+        pick_btn.bind(on_press=lambda *_: self._pick_receive_folder())
+        reset_btn = _btn("Загрузки", bg=(0.18, 0.2, 0.28, 1), height=dp(44), font_size=dp(12))
+        reset_btn.bind(on_press=lambda *_: self._reset_receive_folder_default())
+        pick_row.add_widget(pick_btn)
+        pick_row.add_widget(reset_btn)
+        recv_card.add_widget(pick_row)
+        body.add_widget(recv_card)
+
+        test_card = Card()
+        test_card.add_widget(SectionTitle("Тест: отправить текст на ПК"))
+        self._test_text = TextInput(
+            hint_text="Текст для проверки",
+            multiline=True,
+            write_tab=False,
+            use_bubble=True,
+            use_handles=True,
+            size_hint_y=None,
+            height=dp(80),
+            background_color=C_INPUT,
+            foreground_color=C_TEXT,
+            hint_text_color=C_MUTED,
+            padding=[dp(12), dp(10), dp(8), dp(8)],
+        )
+        test_card.add_widget(self._test_text)
+        test_paste_row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(40),
+            spacing=dp(8),
+        )
+        test_paste_btn = _btn(
+            "Вставить из буфера",
+            bg=(0.18, 0.22, 0.32, 1),
+            height=dp(40),
+            font_size=dp(12),
+        )
+        test_paste_btn.bind(on_press=lambda *_: self._paste_clipboard_into(self._test_text))
+        test_paste_row.add_widget(test_paste_btn)
+        test_card.add_widget(test_paste_row)
+        send_txt_btn = _btn("Отправить текст →", bg=C_ACCENT, height=dp(48))
+        send_txt_btn.bind(on_press=lambda *_: self.send_test_text())
+        test_card.add_widget(send_txt_btn)
+        body.add_widget(test_card)
+
+        scroll.add_widget(body)
+        outer.add_widget(scroll)
+
+        btn_row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(50),
+            spacing=dp(10),
+        )
+        self._settings_save_btn = _btn("Сохранить", bg=C_BLUE, height=dp(50))
+        self._settings_save_btn.disabled = True
+        self._settings_save_btn.bind(
+            on_press=lambda *_: self._settings_save_and_close_popup()
+        )
+        close_btn = _btn("Закрыть", bg=(0.18, 0.22, 0.32, 1), height=dp(50), font_size=dp(12))
+        btn_row.add_widget(self._settings_save_btn)
+        btn_row.add_widget(close_btn)
+        outer.add_widget(btn_row)
+
+        self._settings_popup = Popup(
+            title="Настройки Portal",
+            content=outer,
+            size_hint=(0.92, 0.88),
+            separator_height=0,
+        )
+        close_btn.bind(on_press=lambda *_: self._settings_popup.dismiss())
+
+        self._loading_ui = True
+        if self._secret_field:
+            self._secret_field.text = cfg.get("secret", "") or ""
+        self._receive_saf_uri = (cfg.get("receive_saf_tree_uri") or "").strip()
+        if self._receive_dir_field:
+            if self._receive_saf_uri:
+                self._receive_dir_field.text = (
+                    'Папка выбрана в проводнике — нажми «Сохранить».'
+                )
+            else:
+                rdir = cfg.get("receive_dir", "") or ""
+                self._receive_dir_field.text = rdir or _default_receive_dir()
+        if self._test_text:
+            self._test_text.text = ""
+        self._secret_field.bind(text=self._on_any_settings_change)
+        self._receive_dir_field.bind(text=self._on_any_settings_change)
+        self._test_text.bind(text=self._on_any_settings_change)
+        self._loading_ui = False
+        self._refresh_save_buttons()
+
+    def _open_settings_popup(self) -> None:
+        self._build_settings_popup()
+        if self._settings_popup:
+            self._settings_popup.open()
+
+    def _settings_save_and_close_popup(self) -> None:
+        if self.save_settings() and self._settings_popup:
+            self._settings_popup.dismiss()
+
+    def _show_ping_popup(self) -> None:
+        lbl = Label(
+            text="Проверяю…",
+            font_size=dp(14),
+            color=C_TEXT,
+            size_hint_y=None,
+            halign="left",
+            valign="top",
+        )
+        lbl.bind(width=lambda inst, w: setattr(inst, "text_size", (max(w - dp(8), dp(200)), None)))
+        lbl.bind(
+            texture_size=lambda inst, ts: setattr(inst, "height", max(ts[1] + dp(8), dp(36)))
+        )
+        box = BoxLayout(orientation="vertical", spacing=dp(12), padding=dp(16))
+        box.add_widget(lbl)
+        close_btn = _btn("Закрыть", bg=(0.18, 0.22, 0.32, 1), height=dp(44), font_size=dp(13))
+        pop = Popup(
+            title="Связь с ПК",
+            content=box,
+            size_hint=(0.88, 0.42),
+            separator_height=0,
+        )
+        close_btn.bind(on_press=pop.dismiss)
+        box.add_widget(close_btn)
+
+        def run_ping():
+            if ping_peer is None:
+                def no_ping(_dt):
+                    lbl.text = "Модуль проверки недоступен."
+                    self._log("[🔌] ping: модуль недоступен")
+                Clock.schedule_once(no_ping, 0)
+                return
+            peers = [
+                row.ip_input.text.strip()
+                for row in (self._peer_rows or [])
+                if row.ip_input.text.strip() and row.chk_send.active
+            ]
+            secret = self._effective_secret()
+            if not peers:
+                def no_peers(_dt):
+                    lbl.text = "Нет адреса с галочкой «отправка». Добавь IP на главном экране."
+                    self._log("[🔌] Нет пиров для проверки")
+                Clock.schedule_once(no_peers, 0)
+                return
+            ok = 0
+            for ip in peers:
+                try:
+                    if ping_peer(ip, secret=secret, timeout=4.0):
+                        ok += 1
+                except Exception:
+                    pass
+
+            def done(_dt):
+                total = len(peers)
+                if ok == total:
+                    msg = f"[OK] Все {total} ПК отвечают."
+                elif ok:
+                    msg = f"[~] Ответили {ok} из {total}."
+                else:
+                    msg = "[!] Нет ответа. Проверь IP, Wi‑Fi и пароль сети."
+                lbl.text = msg
+                self._log(f"[🔌] {msg}")
+                self._apply_ping_ui(ok > 0, ok, total)
+
+            Clock.schedule_once(done, 0)
+
+        self._log("[🔌] Ручная проверка связи…")
+        pop.open()
+        threading.Thread(target=run_ping, daemon=True).start()
+
     # ── build ────────────────────────────────────────────────────────────────
 
     def build(self):
@@ -703,14 +974,8 @@ class PortalAndroidApp(App):
                 Window.softinput_mode = "resize"
             except Exception:
                 pass
-            try:
-                from android_folder_picker import bind_folder_picker as _bind_tree_picker
-
-                _bind_tree_picker()
-            except Exception:
-                pass
+            self._install_android_activity_bindings()
         if is_android_runtime():
-            bind_new_intent(self._android_new_intent)
             try:
                 if is_share_intent():
                     self._share_boot = True
@@ -816,10 +1081,32 @@ class PortalAndroidApp(App):
         title_col.add_widget(self._conn_lbl)
         header.add_widget(title_col)
 
+        self._header_save_btn = _btn("Сохранить", bg=C_BLUE, height=dp(40), font_size=dp(12))
+        self._header_save_btn.size_hint = (None, None)
+        self._header_save_btn.bind(on_press=lambda *_: self.save_settings())
+        self._header_save_btn.disabled = True
+        self._header_save_btn.opacity = 0
+        self._header_save_btn.width = 0
+        header.add_widget(self._header_save_btn)
+
+        plug_btn = _btn("🔌", bg=(0.18, 0.38, 0.22, 1), height=dp(40), font_size=dp(16))
+        plug_btn.size_hint = (None, None)
+        plug_btn.size = (dp(44), dp(40))
+        plug_btn.pos_hint = {"center_y": 0.5}
+        plug_btn.bind(on_press=lambda *_: self._show_ping_popup())
+        header.add_widget(plug_btn)
+
+        gear_btn = _btn("⚙", bg=(0.14, 0.17, 0.25, 1), height=dp(40), font_size=dp(18))
+        gear_btn.size_hint = (None, None)
+        gear_btn.size = (dp(44), dp(40))
+        gear_btn.pos_hint = {"center_y": 0.5}
+        gear_btn.bind(on_press=lambda *_: self._open_settings_popup())
+        header.add_widget(gear_btn)
+
         menu_btn = _btn("Справка", bg=(0.14, 0.17, 0.25, 1), height=dp(40), font_size=dp(12))
-        menu_btn.size_hint   = (None, None)
-        menu_btn.size        = (dp(72), dp(40))
-        menu_btn.pos_hint    = {"center_y": 0.5}
+        menu_btn.size_hint = (None, None)
+        menu_btn.size = (dp(72), dp(40))
+        menu_btn.pos_hint = {"center_y": 0.5}
         menu_btn.bind(on_press=lambda *_: self._help())
         header.add_widget(menu_btn)
 
@@ -853,114 +1140,16 @@ class PortalAndroidApp(App):
         )
         self._peers_box.bind(minimum_height=self._peers_box.setter("height"))
         peers_card.add_widget(self._peers_box)
-
+        peers_card.add_widget(
+            Hint(
+                "Пароль, папка приёма и тест текста — кнопка ⚙ сверху. "
+                "«Сохранить» появится, если что-то изменилось."
+            )
+        )
         add_btn = _btn("+ Добавить адрес", bg=C_BLUE, height=dp(44))
         add_btn.bind(on_press=lambda *_: self._add_peer_row())
         peers_card.add_widget(add_btn)
         body.add_widget(peers_card)
-
-        # ── Пароль ─────────────────────────────────────────────────────────
-        sec_card = Card()
-        sec_card.add_widget(SectionTitle("Пароль сети"))
-        sec_card.add_widget(
-            Hint(
-                "Должен совпадать с паролем в настольном Portal: Настройки -> Пароль. "
-                "Обновляется сразу после ввода - сохранять перед тестом не обязательно."
-            )
-        )
-        sec_row = BoxLayout(
-            orientation="horizontal",
-            size_hint_y=None,
-            height=dp(50),
-            spacing=dp(8),
-        )
-        self._secret_field = _input("Пароль сети", password=False, height=dp(50))
-        self._secret_field.size_hint_x = 1
-        sec_paste = _btn("Вставить", bg=(0.18, 0.22, 0.32, 1), height=dp(50), font_size=dp(12))
-        sec_paste.size_hint = (None, None)
-        sec_paste.width = dp(100)
-        sec_paste.bind(on_press=lambda *_: self._paste_clipboard_into(self._secret_field))
-        sec_row.add_widget(self._secret_field)
-        sec_row.add_widget(sec_paste)
-        sec_card.add_widget(sec_row)
-        body.add_widget(sec_card)
-
-        # ── Папка приёма ───────────────────────────────────────────────────
-        recv_card = Card()
-        recv_card.add_widget(SectionTitle("Папка для входящих файлов"))
-        recv_card.add_widget(
-            Hint(
-                'Файлы с ПК сохраняются сюда. По умолчанию - системная папка "Загрузки". '
-                'Кнопка "Выбрать папку" открывает проводник Android (можно создать папку там же).'
-            )
-        )
-        self._receive_dir_field = _input(
-            hint=_default_receive_dir(),
-        )
-        recv_card.add_widget(self._receive_dir_field)
-        pick_row = BoxLayout(
-            orientation="horizontal",
-            size_hint_y=None,
-            height=dp(44),
-            spacing=dp(8),
-        )
-        pick_btn = _btn("Выбрать папку", bg=C_BLUE, height=dp(44), font_size=dp(13))
-        pick_btn.bind(on_press=lambda *_: self._pick_receive_folder())
-        reset_btn = _btn("Загрузки", bg=(0.18, 0.2, 0.28, 1), height=dp(44), font_size=dp(12))
-        reset_btn.bind(on_press=lambda *_: self._reset_receive_folder_default())
-        pick_row.add_widget(pick_btn)
-        pick_row.add_widget(reset_btn)
-        recv_card.add_widget(pick_row)
-        body.add_widget(recv_card)
-
-        # ── Кнопки сохранить/проверить связь ──────────────────────────────
-        act_card = Card()
-        row1 = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(10))
-        save_btn = _btn("Сохранить", bg=C_BLUE, height=dp(50))
-        save_btn.bind(on_press=lambda *_: self.save_settings())
-        ping_btn = _btn("Проверить связь", bg=(0.18, 0.38, 0.22, 1), height=dp(50))
-        ping_btn.bind(on_press=lambda *_: self._ping_peers_bg())
-        row1.add_widget(save_btn)
-        row1.add_widget(ping_btn)
-        act_card.add_widget(row1)
-        body.add_widget(act_card)
-
-        # ── Тест отправки текста ──────────────────────────────────────────
-        test_card = Card()
-        test_card.add_widget(SectionTitle("Тест: отправить текст на ПК"))
-        self._test_text = TextInput(
-            hint_text="Текст для проверки",
-            multiline=True,
-            write_tab=False,
-            use_bubble=True,
-            use_handles=True,
-            size_hint_y=None,
-            height=dp(80),
-            background_color=C_INPUT,
-            foreground_color=C_TEXT,
-            hint_text_color=C_MUTED,
-            padding=[dp(12), dp(10), dp(8), dp(8)],
-        )
-        test_card.add_widget(self._test_text)
-        test_paste_row = BoxLayout(
-            orientation="horizontal",
-            size_hint_y=None,
-            height=dp(40),
-            spacing=dp(8),
-        )
-        test_paste_btn = _btn(
-            "Вставить из буфера",
-            bg=(0.18, 0.22, 0.32, 1),
-            height=dp(40),
-            font_size=dp(12),
-        )
-        test_paste_btn.bind(on_press=lambda *_: self._paste_clipboard_into(self._test_text))
-        test_paste_row.add_widget(test_paste_btn)
-        test_card.add_widget(test_paste_row)
-        send_txt_btn = _btn("Отправить текст ->", bg=C_ACCENT, height=dp(48))
-        send_txt_btn.bind(on_press=lambda *_: self.send_test_text())
-        test_card.add_widget(send_txt_btn)
-        body.add_widget(test_card)
 
         # ── Лог активности ─────────────────────────────────────────────────
         log_card = Card(bg_color=(0.08, 0.09, 0.14, 1))
@@ -995,7 +1184,7 @@ class PortalAndroidApp(App):
 
         # ── Статусная строка ───────────────────────────────────────────────
         self._status_lbl = Label(
-            text='Сохраните настройки. Для отправки: "Поделиться" -> Portal.',
+            text='Адреса ниже; пароль и папка — ⚙. Отправка: «Поделиться» → Portal.',
             font_size=dp(12),
             color=C_MUTED,
             size_hint_y=None,
@@ -1011,23 +1200,20 @@ class PortalAndroidApp(App):
         scroll.add_widget(body)
         root.add_widget(scroll)
 
-        # Загрузить конфиг
+        self._secret_field = None
+        self._receive_dir_field = None
+        self._test_text = None
         cfg = load_cfg()
-        if self._secret_field:
-            self._secret_field.text = cfg.get("secret", "") or ""
         self._receive_saf_uri = (cfg.get("receive_saf_tree_uri") or "").strip()
-        if self._receive_dir_field:
-            if self._receive_saf_uri:
-                self._receive_dir_field.text = (
-                    'Папка выбрана в проводнике - нажми "Сохранить".'
-                )
-            else:
-                rdir = cfg.get("receive_dir", "") or ""
-                self._receive_dir_field.text = rdir or _default_receive_dir()
+        self._loading_ui = True
         for pr in normalize_peers(cfg.get("peers")):
             self._add_peer_row(ip=pr["ip"], name=pr.get("name") or pr["ip"], send=pr.get("send", True))
         if not self._peer_rows:
             self._add_peer_row()
+        self._loading_ui = False
+        for row in self._peer_rows:
+            self._wire_peer_row(row)
+        self._clear_dirty_after_save()
 
         return root
 
@@ -1036,13 +1222,6 @@ class PortalAndroidApp(App):
     def on_start(self):
         # ВАЖНО: при старте из Share Sheet раньше не поднимали ReceiveServer - исправлено.
         Clock.schedule_once(lambda _dt: self._start_receive_server(), 0.05)
-        if kivy_platform == "android":
-            try:
-                from android_folder_picker import bind_folder_picker
-
-                bind_folder_picker()
-            except Exception:
-                pass
         if self._share_boot:
             Clock.schedule_once(lambda _dt: self._mount_cold_share_ui(), 0.2)
         else:
@@ -1196,14 +1375,18 @@ class PortalAndroidApp(App):
             if row in self._peer_rows:
                 self._peer_rows.remove(row)
             self._peers_box.remove_widget(row)
+            if not getattr(self, "_loading_ui", False):
+                self._on_any_settings_change()
 
         row = PeerRow(ip=ip, name=name, send=send, on_remove=on_remove)
         self._peer_rows.append(row)
         self._peers_box.add_widget(row)
+        if not getattr(self, "_loading_ui", False):
+            self._wire_peer_row(row)
 
     # ── Сохранить ───────────────────────────────────────────────────────────
 
-    def save_settings(self) -> None:
+    def save_settings(self) -> bool:
         try:
             peers = [
                 {
@@ -1216,10 +1399,19 @@ class PortalAndroidApp(App):
             ]
             if not peers:
                 self._set_status("Добавьте хотя бы один IP-адрес.")
-                return
+                return False
 
-            secret = self._secret_field.text.strip() if self._secret_field else ""
-            recv_txt = (self._receive_dir_field.text or "").strip() if self._receive_dir_field else ""
+            prev = load_cfg()
+            secret = (
+                self._secret_field.text.strip()
+                if self._secret_field is not None
+                else (prev.get("secret") or "").strip()
+            )
+            recv_txt = (
+                (self._receive_dir_field.text or "").strip()
+                if self._receive_dir_field is not None
+                else (prev.get("receive_dir") or "").strip()
+            )
             saf = (self._receive_saf_uri or "").strip()
             if saf:
                 recv_dir = _default_receive_dir()
@@ -1249,9 +1441,12 @@ class PortalAndroidApp(App):
             self._log(f"Настройки сохранены ({len(peers)} адрес(ов), пароль: {'да' if secret else 'нет'})")
             if is_android_runtime():
                 toast("Настройки сохранены", long=False)
+            self._clear_dirty_after_save()
             Clock.schedule_once(lambda _dt: self._ping_peers_bg(), 0.4)
+            return True
         except Exception as e:
             self._set_status(f"Ошибка: {e}")
+            return False
 
     def _paste_clipboard_into(self, widget) -> None:
         """Android: долгое нажатие в Kivy часто не открывает «Вставить» — явная кнопка."""
@@ -1291,6 +1486,7 @@ class PortalAndroidApp(App):
                         'Папка выбрана в проводнике - нажми "Сохранить".'
                     )
                 self._set_status('Папка выбрана. Нажми "Сохранить".')
+                self._on_any_settings_change()
             Clock.schedule_once(apply, 0)
 
         pick_receive_folder(on_uri)
@@ -1302,6 +1498,7 @@ class PortalAndroidApp(App):
             self._receive_dir_field.text = d
         self._set_status(f"Сброс на Загрузки: {d}")
         toast("Указана папка Загрузки - сохрани настройки", long=False)
+        self._on_any_settings_change()
 
     def _set_status(self, msg: str) -> None:
         if self._status_lbl:

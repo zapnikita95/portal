@@ -293,17 +293,9 @@ def is_share_intent(activity=None, intent=None) -> bool:
         return False
 
 
-def bind_new_intent(callback) -> None:
-    """callback(intent: Java Intent) — при share из уже запущенного приложения."""
-    try:
-        from android.activity import bind as activity_bind  # type: ignore
-
-        def _wrap(intent):
-            try:
-                callback(intent)
-            except Exception:
-                pass
-
-        activity_bind(on_new_intent=_wrap)
-    except Exception:
-        pass
+def bind_new_intent(_callback) -> None:
+    """
+    Устарело: второй activity_bind затирает on_activity_result (SAF).
+    on_new_intent вешается в PortalAndroidApp._install_android_activity_bindings.
+    """
+    return

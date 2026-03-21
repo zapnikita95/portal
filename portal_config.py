@@ -682,9 +682,9 @@ def save_widget_geometry_settings(
 # ── Пресеты портала (анимация по событию и IP) ───────────────────────
 
 WIDGET_PRESET_EVENT_LABELS_RU: Dict[str, str] = {
-    "receive": "Приём в буфер / rich",
-    "receive_file": "Приём файла",
-    "send": "Отправка на другой ПК",
+    "receive": "С ПК пришёл буфер (текст или картинка)",
+    "receive_file": "По сети пришёл файл",
+    "send": "С этого ПК ушла отправка на другой",
 }
 
 _VALID_WIDGET_PRESET_EVENTS = frozenset({"receive", "receive_file", "send"})
