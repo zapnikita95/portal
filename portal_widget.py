@@ -1596,7 +1596,8 @@ class GlobalHotkeyManager:
                 except Exception as e:
                     self._log(f"after(local monitor): {e}")
                 self._log(
-                    "✅ Хоткеи: Cmd+Option+P / Cmd+Shift+C/V (global+local NSEvent, см. Accessibility)"
+                    "✅ Глобальные хоткеи: по умолчанию Cmd+Ctrl+P/C/V; "
+                    "PORTAL_MAC_HOTKEY_LEGACY=1 — Cmd+Option+P, Cmd+Shift+C/V (NSEvent + Accessibility)"
                 )
             else:
                 # Python 3.13+: pynput в том же процессе, что и Tk → часто Trace/BPT (CGEventTap).
@@ -1608,7 +1609,8 @@ class GlobalHotkeyManager:
                     "yes",
                 ):
                     self._log(
-                        "PORTAL_MAC_NO_HOTKEY_HELPER=1 — только Cmd+Shift+C/P/V при фокусе на окне Портала"
+                        "PORTAL_MAC_NO_HOTKEY_HELPER=1 — хоткеи только при фокусе (Tk: Cmd+Ctrl+P/C/V; "
+                        "на русской — з/с/м; LEGACY=1 — старые сочетания)"
                     )
                 else:
                     try:
@@ -1711,8 +1713,31 @@ class GlobalHotkeyManager:
                         "<Meta-Option-v>",
                         "<Meta-Option-V>",
                     ]
+                    # Legacy + русская раскладка (физические C→с, V→м, P→з)
+                    toggle_seqs += [
+                        "<Command-Option-з>",
+                        "<Command-Option-З>",
+                        "<Meta-Option-з>",
+                        "<Meta-Option-З>",
+                    ]
+                    push_seqs += [
+                        "<Command-Shift-с>",
+                        "<Command-Shift-С>",
+                        "<Meta-Shift-с>",
+                        "<Meta-Shift-С>",
+                    ]
+                    pull_seqs += [
+                        "<Command-Shift-м>",
+                        "<Command-Shift-М>",
+                        "<Meta-Shift-м>",
+                        "<Meta-Shift-М>",
+                        "<Command-Option-м>",
+                        "<Command-Option-М>",
+                        "<Meta-Option-м>",
+                        "<Meta-Option-М>",
+                    ]
                 else:
-                    # Не-legacy: Cmd+Ctrl (меньше конфликтов) + те же дубли, что в hotkey-helper
+                    # Только Cmd+Ctrl — без Cmd+Shift (часто занят Terminal / IDE)
                     toggle_seqs = [
                         "<Command-Control-p>",
                         "<Command-Control-P>",
@@ -1720,36 +1745,39 @@ class GlobalHotkeyManager:
                         "<Control-Command-P>",
                         "<Meta-Control-p>",
                         "<Meta-Control-P>",
-                        "<Command-Option-p>",
-                        "<Command-Alt-p>",
-                        "<Meta-Option-p>",
-                        "<Meta-Alt-p>",
-                        "<Command-Option-P>",
-                        "<Meta-Option-P>",
                     ]
                     push_seqs = [
                         "<Command-Control-c>",
                         "<Command-Control-C>",
                         "<Control-Command-c>",
                         "<Control-Command-C>",
-                        "<Command-Shift-C>",
-                        "<Command-Shift-c>",
-                        "<Meta-Shift-C>",
-                        "<Meta-Shift-c>",
                     ]
                     pull_seqs = [
                         "<Command-Control-v>",
                         "<Command-Control-V>",
                         "<Control-Command-v>",
                         "<Control-Command-V>",
-                        "<Command-Shift-V>",
-                        "<Command-Shift-v>",
-                        "<Meta-Shift-V>",
-                        "<Meta-Shift-v>",
-                        "<Command-Option-v>",
-                        "<Command-Option-V>",
-                        "<Meta-Option-v>",
-                        "<Meta-Option-V>",
+                    ]
+                    # ЙЦУКЕН: те же физические клавиши (P→з, C→с, V→м)
+                    toggle_seqs += [
+                        "<Command-Control-з>",
+                        "<Command-Control-З>",
+                        "<Control-Command-з>",
+                        "<Control-Command-З>",
+                        "<Meta-Control-з>",
+                        "<Meta-Control-З>",
+                    ]
+                    push_seqs += [
+                        "<Command-Control-с>",
+                        "<Command-Control-С>",
+                        "<Control-Command-с>",
+                        "<Control-Command-С>",
+                    ]
+                    pull_seqs += [
+                        "<Command-Control-м>",
+                        "<Command-Control-М>",
+                        "<Control-Command-м>",
+                        "<Control-Command-М>",
                     ]
             else:
                 # Несколько вариантов: раскладка/регистр, AltGr, порядок модификаторов
@@ -1828,7 +1856,7 @@ class GlobalHotkeyManager:
 
             if is_mac:
                 self._log(
-                    "Tk bind_all (macOS: legacy=Cmd+Opt/Shift иначе Cmd+Ctrl — см. PORTAL_MAC_HOTKEY_LEGACY)"
+                    "Tk bind_all (macOS: по умолчанию Cmd+Ctrl+P/C/V; legacy: PORTAL_MAC_HOTKEY_LEGACY=1)"
                 )
             else:
                 self._log("Tk bind_all + bind на виджет (фокус на Портале)")
@@ -1968,23 +1996,9 @@ class GlobalHotkeyManager:
             else:
                 if keycode == self._KEY_P and (f & CMD) and (f & CTRL) and not (f & ALT) and not (f & SHIFT):
                     return "t"
-                if keycode == self._KEY_P and (f & CMD) and (f & ALT) and not (f & SHIFT):
-                    return "t"
                 if keycode == self._KEY_C and (f & CMD) and (f & CTRL) and not (f & ALT) and not (f & SHIFT):
                     return "c"
-                if keycode == self._KEY_C and (f & CMD) and (f & SHIFT) and not (f & ALT):
-                    return "c"
                 if keycode == self._KEY_V and (f & CMD) and (f & CTRL) and not (f & ALT) and not (f & SHIFT):
-                    return "v"
-                if keycode == self._KEY_V and (f & CMD) and (f & SHIFT) and not (f & ALT):
-                    return "v"
-                if (
-                    keycode == self._KEY_V
-                    and (f & CMD)
-                    and (f & ALT)
-                    and not (f & SHIFT)
-                    and not (f & CTRL)
-                ):
                     return "v"
         except Exception:
             pass

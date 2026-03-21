@@ -330,7 +330,7 @@ def apply_clipboard_payload(
             if ok:
                 return (
                     f"файлы в буфере ({len(existing)} шт.) — в Finder: открой папку, клик в окно, "
-                    "Cmd+V (вставка). Cmd+Shift+V у Портала = «забрать с другого ПК», не вставка."
+                    "Cmd+V (вставка). Cmd+Ctrl+V у Портала = «забрать с другого ПК», не вставка (legacy: Cmd+Shift+V)."
                 )
             import pyperclip
 

@@ -396,7 +396,7 @@ class PortalApp(ctk.CTk):
         self._ui_signal_queue: queue.SimpleQueue = queue.SimpleQueue()
         self.portal_widget_ref: Optional[Any] = None
         self._hotkey_mgr: Optional[Any] = None
-
+        
         # Создание UI
         self.create_ui()
         
@@ -405,7 +405,7 @@ class PortalApp(ctk.CTk):
         
         # Запуск мониторинга буфера обмена
         self.start_clipboard_monitor()
-
+        
         # pynput / windnd → только очередь; разбор здесь (главный поток), иначе GIL crash Py3.12 + Tk
         self.after(30, self._drain_ui_signal_queue)
 
@@ -711,14 +711,16 @@ class PortalApp(ctk.CTk):
                     "🔑 macOS (режим PORTAL_MAC_HOTKEY_LEGACY=1 — может конфликтовать с Терминалом):\n"
                     "   Портал — Cmd+Option+P\n"
                     "   Отправить буфер — Cmd+Shift+C\n"
-                    "   Забрать буфер — Cmd+Shift+V (дубль: Cmd+Option+V, если не занято приложением)"
+                    "   Забрать буфер — Cmd+Shift+V (дубль: Cmd+Option+V, если не занято приложением)\n"
+                    "   Русская раскладка — Cmd+Option+з, Cmd+Shift+с / м (дубль: Cmd+Option+м)"
                 )
             else:
                 hotkey_text = (
                     "🔑 macOS по умолчанию (Cmd+Ctrl — реже лезет в Терминал):\n"
                     "   Показать/скрыть портал — Cmd+Ctrl+P\n"
                     "   Отправить буфер на другие ПК — Cmd+Ctrl+C\n"
-                    "   Забрать буфер с первого отмеченного IP — Cmd+Ctrl+V (дубль: Cmd+Option+V)"
+                    "   Забрать буфер с первого отмеченного IP — Cmd+Ctrl+V\n"
+                    "   Русская раскладка (те же физические клавиши) — Cmd+Ctrl+з / с / м"
                 )
             hotkey_text += (
                 "\n📌 Забрать буфер = **первый отмеченный IP**. На том ПК в логе будет get_clipboard — это ответ твоему запросу."
@@ -788,7 +790,7 @@ class PortalApp(ctk.CTk):
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(side="left", padx=(12, 0))
-
+        
         # Кнопки управления
         button_frame = ctk.CTkFrame(main_frame)
         button_frame.pack(fill="x", padx=20, pady=20)
@@ -1368,7 +1370,7 @@ class PortalApp(ctk.CTk):
             self.log(f"📂 Открыта папка: {folder}")
         except Exception as e:
             self.log(f"❌ Не удалось открыть папку: {e}")
-
+    
     def log(self, message: str):
         """Лог в UI; безопасен с любого потока (Tk на macOS только из главного)."""
         try:
@@ -1431,7 +1433,7 @@ class PortalApp(ctk.CTk):
             except Exception:
                 pass
         return "break"
-
+    
     def toggle_server(self):
         """Запуск/остановка сервера"""
         if not self.is_server_running:
@@ -1446,7 +1448,7 @@ class PortalApp(ctk.CTk):
                 "⚠️ Tailscale IP не определён — сервер всё равно запускается на 0.0.0.0 "
                 f"(порт {PORTAL_PORT}). Укажи на других ПК свой LAN / Tailscale IP этого компа."
             )
-
+        
         try:
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -1499,7 +1501,7 @@ class PortalApp(ctk.CTk):
                 client_socket, addr = self.server_socket.accept()
                 # Не логируем каждое соединение: авто-ping со второго ПК каждые ~20 с
                 # путает с «вот-вот пришлют файл». Тип запроса пишем в handle_client.
-
+                
                 # Обработка клиента в отдельном потоке
                 client_thread = threading.Thread(
                     target=self.handle_client,
@@ -1518,7 +1520,7 @@ class PortalApp(ctk.CTk):
             self.after(0, lambda m=message: self.log(m))
         except Exception:
             print(f"[Portal] {message}", flush=True)
-
+    
     def handle_client(self, client_socket: socket.socket, addr):
         """Обработка клиентского подключения"""
         try:
@@ -1532,7 +1534,7 @@ class PortalApp(ctk.CTk):
             req = message.get("type")
             if req != "ping":
                 self._log_from_thread(f"🔗 {addr[0]} · {req}")
-
+            
             if message.get("type") == "file":
                 self.receive_file(client_socket, message, prefix=tail)
             elif message.get("type") == "clipboard_files":
@@ -1557,12 +1559,12 @@ class PortalApp(ctk.CTk):
                 self._log_from_thread(
                     f"⚠️ Неизвестный тип запроса: {req!r} — обнови Портал на обоих ПК до одной версии"
                 )
-
+            
         except Exception as e:
             self._log_from_thread(f"❌ Ошибка обработки клиента: {str(e)}")
         finally:
             client_socket.close()
-
+    
     def _receive_clipboard_file_payload(
         self,
         client_socket: socket.socket,
@@ -1639,16 +1641,16 @@ class PortalApp(ctk.CTk):
 
             receive_dir = portal_config.receive_dir_path()
             receive_dir.mkdir(parents=True, exist_ok=True)
-
-            filepath = receive_dir / filename
+        
+        filepath = receive_dir / filename
             if filepath.exists():
                 stem, suf = filepath.stem, filepath.suffix
                 filepath = receive_dir / f"{stem}_{int(time.time())}{suf}"
-
+        
             remaining = filesize
             chunk_buf = prefix
             with open(filepath, "wb") as f:
-                while remaining > 0:
+            while remaining > 0:
                     if chunk_buf:
                         take = min(len(chunk_buf), remaining)
                         f.write(chunk_buf[:take])
@@ -1656,11 +1658,11 @@ class PortalApp(ctk.CTk):
                         remaining -= take
                         continue
                     chunk = client_socket.recv(min(65536, remaining))
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    remaining -= len(chunk)
-
+                if not chunk:
+                    break
+                f.write(chunk)
+                remaining -= len(chunk)
+        
             self._log_from_thread(f"✅ Файл сохранен: {filepath}")
 
             _portal_sendall(client_socket, b"OK")
@@ -1883,7 +1885,7 @@ class PortalApp(ctk.CTk):
                     msg = (
                         f"файлы в буфере ({len(paths)} шт.) — в Finder: открой нужную папку, "
                         "кликни в список файлов, Cmd+V. "
-                        "(Cmd+Shift+V у Портала = «забрать буфер с пира», не вставка.)"
+                        "(Cmd+Ctrl+V у Портала = «забрать буфер с пира», не вставка; legacy: Cmd+Shift+V.)"
                     )
                 else:
                     msg = portal_clip_rich.apply_clipboard_payload(
@@ -2007,18 +2009,18 @@ class PortalApp(ctk.CTk):
                 )
             except Exception:
                 pass
-
+    
     def receive_clipboard(self, message: dict):
         """Прием буфера обмена (push с другого ПК) — вставка на главном потоке."""
         clipboard_text = message.get("text", "")
         if clipboard_text:
             def _paste():
-                self.is_receiving_clipboard = True
+            self.is_receiving_clipboard = True
                 try:
-                    pyperclip.copy(clipboard_text)
-                    self.last_clipboard = clipboard_text
+            pyperclip.copy(clipboard_text)
+            self.last_clipboard = clipboard_text
                 finally:
-                    self.is_receiving_clipboard = False
+            self.is_receiving_clipboard = False
             try:
                 self.after(0, _paste)
             except Exception:
@@ -2170,7 +2172,7 @@ class PortalApp(ctk.CTk):
         resp = json.dumps({"type": "clipboard", "text": ""}, ensure_ascii=False)
         client_socket.sendall(resp.encode("utf-8") + b"\n")
         log(f"📋 {context_label} → неизвестный снимок буфера")
-
+    
     def send_clipboard_response(self, client_socket: socket.socket):
         """
         Ответ на get_clipboard: portal_clipboard_rich (как на Windows) + фолбэк для macOS.
@@ -2221,7 +2223,7 @@ class PortalApp(ctk.CTk):
     def _end_clipboard_wave(self) -> None:
         with self._clipboard_push_lock:
             self._clipboard_push_wave_active = False
-
+    
     def push_shared_clipboard_hotkey(self):
         """Ctrl+Alt+C / Cmd+Ctrl+C (legacy: Cmd+Shift+C) — отправить локальный буфер на выбранные ПК"""
         if not self.get_target_ips():
@@ -2306,7 +2308,7 @@ class PortalApp(ctk.CTk):
                         if set_system_clipboard_file_paths(resolved):
                             _log(f"📋 С буфера удалённого ПК: {len(resolved)} файл(ов) (пути есть локально)")
                         else:
-                            pyperclip.copy(text)
+                pyperclip.copy(text)
                             _log(f"📋 Текст с удалённого ПК ({len(text)} символов)")
                     else:
                         pyperclip.copy(text)
@@ -2379,7 +2381,7 @@ class PortalApp(ctk.CTk):
                         else:
                             _log("⚠️ Картинка получена, но не удалось записать в буфер ОС")
                     finally:
-                        self.is_receiving_clipboard = False
+                self.is_receiving_clipboard = False
 
                 try:
                     self.after(0, _apply_png_pull)
@@ -2418,11 +2420,11 @@ class PortalApp(ctk.CTk):
         if targets:
             self.log(f"📤 Отправка на {len(targets)} ПК: {', '.join(targets)}")
             for ip in targets:
-                threading.Thread(
-                    target=self.send_file,
+            threading.Thread(
+                target=self.send_file,
                     args=(filepath, ip),
-                    daemon=True,
-                ).start()
+                daemon=True,
+            ).start()
         else:
             self.log("⚠️ Сначала сохрани список IP и отметь получателей")
             self.send_file_to_dialog(filepath)
@@ -2515,7 +2517,7 @@ class PortalApp(ctk.CTk):
         """Отправка файла; portal_clipboard — на приёме положить в буфер ОС."""
         try:
             self.log(f"📤 Отправка файла на {target_ip}...")
-
+            
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client_socket.settimeout(15)
             try:
@@ -2547,10 +2549,10 @@ class PortalApp(ctk.CTk):
                 else:
                     self.log(f"❌ Ошибка сети: {str(e)}")
                 return
-
+            
             filename = os.path.basename(filepath)
             filesize = os.path.getsize(filepath)
-
+            
             message: Dict[str, Any] = {
                 "type": "file",
                 "filename": filename,
@@ -2573,14 +2575,14 @@ class PortalApp(ctk.CTk):
                     if not chunk:
                         break
                     _portal_sendall(client_socket, chunk)
-
+            
             client_socket.settimeout(180)
             response = _recv_ok_prefix(client_socket)
             try:
-                client_socket.close()
+            client_socket.close()
             except OSError:
                 pass
-
+            
             if response.startswith(b"OK"):
                 self.log(f"✅ Файл успешно отправлен: {filename}")
             else:
@@ -2709,7 +2711,7 @@ class PortalApp(ctk.CTk):
         else:
             summary = f"📤 Буфер → {len(targets)} ПК"
         self.log(summary)
-
+    
     def send_clipboard(self, target_ip: str):
         """Синхронизация / совместимость: отправить текущий текст буфера."""
         text = pyperclip.paste() or ""
@@ -2723,9 +2725,9 @@ class PortalApp(ctk.CTk):
             if not clipboard_text:
                 self.log("⚠️ Буфер обмена пуст")
                 return
-
+            
             self.log(f"📤 Отправка текста на {target_ip}...")
-
+            
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client_socket.settimeout(10)
             try:
@@ -2748,9 +2750,9 @@ class PortalApp(ctk.CTk):
                 json.dumps(message, ensure_ascii=False).encode("utf-8"),
             )
             client_socket.close()
-
+            
             self.log(f"✅ Текст отправлен ({len(clipboard_text)} символов)")
-
+                
         except Exception as e:
             err_msg = str(e)
             if "timed out" in err_msg.lower():
@@ -2763,23 +2765,23 @@ class PortalApp(ctk.CTk):
     def start_clipboard_monitor(self):
         """Мониторинг буфера на главном потоке (after) — без NSPasteboard warning"""
         try:
-            self.last_clipboard = pyperclip.paste()
+        self.last_clipboard = pyperclip.paste()
         except Exception:
             self.last_clipboard = ""
         self._clipboard_tick()
 
     def _clipboard_tick(self):
         """Один тик проверки буфера — вызывается на главном потоке"""
-        try:
-            if not self.is_receiving_clipboard:
+            try:
+                if not self.is_receiving_clipboard:
                 if time.monotonic() < getattr(
                     self, "_clipboard_ignore_until", 0.0
                 ):
                     self.after(1000, self._clipboard_tick)
                     return
-                current = pyperclip.paste()
-                if current != self.last_clipboard:
-                    self.last_clipboard = current
+                    current = pyperclip.paste()
+                    if current != self.last_clipboard:
+                        self.last_clipboard = current
                     if self.sync_clipboard_enabled:
                         ips = self.get_target_ips()
                         if ips:
@@ -2794,11 +2796,11 @@ class PortalApp(ctk.CTk):
                                     finally:
                                         self._end_clipboard_wave()
 
-                                threading.Thread(
+                            threading.Thread(
                                     target=_auto_wave, daemon=True
-                                ).start()
+                            ).start()
         except Exception:
-            pass
+                pass
         self.after(1000, self._clipboard_tick)
 
 
@@ -2814,9 +2816,9 @@ if __name__ == "__main__":
         or "-sp" in sys.argv
         or os.environ.get("PORTAL_SHOW_ON_START", "").strip().lower() in ("1", "true", "yes")
     )
-
+    
     app = PortalApp()
-
+    
     # Виджет запускается всегда (если не отключен явно)
     if show_widget:
         from portal_widget import PortalWidget, GlobalHotkeyManager, debug_log_path
@@ -2831,7 +2833,9 @@ if __name__ == "__main__":
             app._hotkey_mgr = hk
             hk.start()
             widget.root.withdraw()
-            app.log("✅ Виджет скрыт по умолчанию — Ctrl+Alt+P (Win) / Cmd+Option+P (Mac) чтобы показать")
+            app.log(
+                "✅ Виджет скрыт по умолчанию — Ctrl+Alt+P (Win) / Cmd+Ctrl+P (Mac; LEGACY: Cmd+Option+P) чтобы показать"
+            )
             app.log("💡 Список IP и галочки «кому слать» — в главном окне Портала")
             app.log("⌨️ Смотри строки «⌨️ …» ниже: если жмёшь хоткей — должны появляться сообщения.")
             app.log(
@@ -2843,5 +2847,5 @@ if __name__ == "__main__":
             import traceback
 
             app.log(traceback.format_exc())
-
+    
     app.mainloop()

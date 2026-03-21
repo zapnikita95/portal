@@ -77,7 +77,7 @@ if ! python3 -c "import tkinter" 2>/dev/null; then
     exit 1
 fi
 
-echo "💡 Виджет/буфер (macOS): по умолчанию Cmd+Ctrl+P / C / V | legacy: PORTAL_MAC_HOTKEY_LEGACY=1 → Cmd+Opt+P, Cmd+Shift+C/V"
+echo "💡 Виджет/буфер (macOS): Cmd+Ctrl+P/C/V (русская: з/с/м) | legacy: PORTAL_MAC_HOTKEY_LEGACY=1 → Cmd+Opt+P, Cmd+Shift+C/V"
 echo "💡 По умолчанию: запуск в ФОНЕ (Терминал не должен всплывать при хоткеях). Лог: $LOG"
 echo "💡 Виджет не виден? Запусти с: PORTAL_MAC_CHROMA_ONLY=1 $0"
 echo "💡 Обязательно: Настройки → Конфиденциальность → Мониторинг ввода + Универсальный доступ"
