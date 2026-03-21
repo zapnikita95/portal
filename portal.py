@@ -1569,6 +1569,34 @@ class PortalApp(ctk.CTk):
             wraplength=680,
             justify="left",
         ).pack(anchor="w", padx=8, pady=(0, 4))
+        ctk.CTkLabel(
+            t_widget,
+            text=i18n.tr("widget.rules_rows_intro"),
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=680,
+            justify="left",
+        ).pack(anchor="w", padx=8, pady=(0, 6))
+        wpr_row = ctk.CTkFrame(t_widget, fg_color="transparent")
+        wpr_row.pack(fill="x", padx=8, pady=(0, 8))
+        ctk.CTkButton(
+            wpr_row,
+            text=i18n.tr("widget.add_rule"),
+            width=280,
+            command=self._widget_preset_add_rule_row,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            wpr_row,
+            text=i18n.tr("widget.save_rules"),
+            width=200,
+            command=self.save_widget_preset_rules_from_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 8))
+        self.widget_preset_rules_feedback = ctk.CTkLabel(
+            wpr_row, text="", font=ctk.CTkFont(size=12), text_color="gray"
+        )
+        self.widget_preset_rules_feedback.pack(side="left")
         hdr = ctk.CTkFrame(t_widget, fg_color="transparent")
         hdr.pack(fill="x", padx=8, pady=(0, 2))
         ctk.CTkLabel(
@@ -1601,26 +1629,6 @@ class PortalApp(ctk.CTk):
             t_widget, height=220, fg_color="transparent"
         )
         self._widget_preset_rules_scroll.pack(fill="x", padx=8, pady=(0, 6))
-        wpr_row = ctk.CTkFrame(t_widget, fg_color="transparent")
-        wpr_row.pack(fill="x", padx=8, pady=(0, 8))
-        ctk.CTkButton(
-            wpr_row,
-            text=i18n.tr("widget.add_rule"),
-            width=150,
-            command=self._widget_preset_add_rule_row,
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(
-            wpr_row,
-            text=i18n.tr("widget.save_rules"),
-            width=210,
-            command=self.save_widget_preset_rules_from_ui,
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 8))
-        self.widget_preset_rules_feedback = ctk.CTkLabel(
-            wpr_row, text="", font=ctk.CTkFont(size=12), text_color="gray"
-        )
-        self.widget_preset_rules_feedback.pack(side="left")
         self._rebuild_widget_preset_rule_rows()
 
         ctk.CTkLabel(
@@ -2811,7 +2819,7 @@ class PortalApp(ctk.CTk):
         pr_m = ctk.CTkOptionMenu(
             fr,
             values=labels,
-            width=268,
+            width=340,
             font=ctk.CTkFont(size=12),
         )
         if preset_id in ids:

@@ -689,6 +689,11 @@ WIDGET_PRESET_EVENT_LABELS_RU: Dict[str, str] = {
 
 _VALID_WIDGET_PRESET_EVENTS = frozenset({"receive", "receive_file", "send"})
 
+# Новые ассеты каталога — одноразово дописываются к уже сохранённому списку пресетов
+WIDGET_PRESET_BUNDLE_20260322 = frozenset(
+    {"fuzzy_portal", "tech_portal", "stargate_portal"}
+)
+
 # rel_path относительно папки с portal_config.py (корень приложения «portal»)
 DEFAULT_WIDGET_PRESETS_CATALOG: List[Dict[str, Any]] = [
     {
@@ -711,6 +716,21 @@ DEFAULT_WIDGET_PRESETS_CATALOG: List[Dict[str, Any]] = [
     {"id": "strange", "name": "Strange", "rel_path": "assets/presets/strange.gif"},
     {"id": "rick", "name": "Rick", "rel_path": "assets/presets/rick.gif"},
     {"id": "giphy", "name": "Giphy WebP", "rel_path": "assets/presets/giphy.webp"},
+    {
+        "id": "fuzzy_portal",
+        "name": "Fuzzy Portal",
+        "rel_path": "assets/presets/fuzzy_portal.gif",
+    },
+    {
+        "id": "tech_portal",
+        "name": "Tech Portal",
+        "rel_path": "assets/presets/tech_portal.png",
+    },
+    {
+        "id": "stargate_portal",
+        "name": "Stargate Portal",
+        "rel_path": "assets/presets/stargate_portal.gif",
+    },
 ]
 
 DEFAULT_WIDGET_PRESET_RULES: List[Dict[str, str]] = [
@@ -760,6 +780,20 @@ def load_widget_presets_catalog() -> List[Dict[str, Any]]:
         if out:
             if _migrate_widget_presets_catalog_inplace(out):
                 save_widget_presets_catalog(out)
+            data_all = _load_all()
+            if not data_all.get("widget_presets_bundle_20260322"):
+                ids_existing = {str(x.get("id", "")).strip() for x in out}
+                to_add: List[Dict[str, Any]] = []
+                for d in DEFAULT_WIDGET_PRESETS_CATALOG:
+                    pid = str(d.get("id", "")).strip()
+                    if pid in WIDGET_PRESET_BUNDLE_20260322 and pid not in ids_existing:
+                        to_add.append(dict(d))
+                if to_add:
+                    out.extend(to_add)
+                    save_widget_presets_catalog(out)
+                data_all = _load_all()
+                data_all["widget_presets_bundle_20260322"] = True
+                _write_all(data_all)
             return out
     return [dict(x) for x in DEFAULT_WIDGET_PRESETS_CATALOG]
 
