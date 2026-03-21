@@ -1,6 +1,6 @@
 """
 Виджет-портал для рабочего стола: прозрачный фон, drag&drop, горячие клавиши.
-Анимация только при открытии/закрытии — без бесконечного цикла.
+GIF: проигрывание кадров при открытии/закрытии; пока открыт — зацикленное воспроизведение.
 """
 
 import tkinter as tk
@@ -10,7 +10,7 @@ import time
 import sys
 import platform
 from pathlib import Path
-from PIL import Image, ImageTk, ImageSequence, ImageDraw, ImageFilter
+from PIL import Image, ImageTk, ImageSequence
 import os
 from typing import Optional, Any, List
 
@@ -112,9 +112,10 @@ class PortalWidget:
         self._anim_after_id = None
         self._anim_speed_ms = 42  # ~24fps
 
-        # GIF-кадры (открытие/статика)
+        # GIF-кадры
         self.gif_frames: List[ImageTk.PhotoImage] = []
-        self.gif_frames_raw: List[Image.Image] = []  # PIL-объекты для обратного воспроизведения
+        self.gif_frames_raw: List[Image.Image] = []
+        self._gif_frame_durations: List[int] = []  # мс на кадр (из GIF)
         self._last_photo: Optional[ImageTk.PhotoImage] = None  # держим ссылку, чтобы GC не удалил
 
         # Fallback-рисованный портал
@@ -204,7 +205,11 @@ class PortalWidget:
     # ───────────────────────────── ЗАГРУЗКА GIF ─────────────────────
 
     def load_portal_gif(self):
-        """Загрузить кадры GIF, вырезать круг, сделать фон прозрачным."""
+        """
+        Загрузить кадры GIF: кроп по центру, ресайз.
+        Без круговой маски и Gaussian blur — они давали «зернистый» ореол на дизерном GIF.
+        Прозрачность берётся из самого файла (RGBA).
+        """
         assets_dir = os.path.join(os.path.dirname(__file__), "assets")
         search_paths = [
             os.path.join(assets_dir, "portal_main.gif"),
@@ -227,34 +232,25 @@ class PortalWidget:
         try:
             gif = Image.open(gif_path)
             raw_frames: List[Image.Image] = []
+            durations: List[int] = []
 
             for frame in ImageSequence.Iterator(gif):
                 img = frame.convert("RGBA")
+                ms = int(frame.info.get("duration", 80) or 80)
+                if ms <= 0:
+                    ms = 80
+                durations.append(ms)
 
-                # Кроп до центрального квадрата
                 w, h = img.size
                 sq = min(w, h)
                 left = (w - sq) // 2
-                top  = (h - sq) // 2
+                top = (h - sq) // 2
                 img = img.crop((left, top, left + sq, top + sq))
-
-                # Ресайз до размера виджета
                 img = img.resize((self.size, self.size), Image.Resampling.LANCZOS)
-
-                # Антиалиасный круглый вырез — за пределами круга прозрачно
-                mask = Image.new("L", (self.size, self.size), 0)
-                draw = ImageDraw.Draw(mask)
-                margin = 4
-                draw.ellipse(
-                    [margin, margin, self.size - margin - 1, self.size - margin - 1],
-                    fill=255,
-                )
-                mask = mask.filter(ImageFilter.GaussianBlur(3))
-                img.putalpha(mask)
-
                 raw_frames.append(img)
 
             self.gif_frames_raw = raw_frames
+            self._gif_frame_durations = durations
             self.gif_frames = [ImageTk.PhotoImage(f) for f in raw_frames]
             print(f"[Portal] Загружено {len(self.gif_frames)} кадров из {gif_path}")
 
@@ -270,6 +266,11 @@ class PortalWidget:
             except Exception:
                 pass
             self._anim_after_id = None
+
+    def _gif_delay_for_idx(self, idx: int) -> int:
+        if self._gif_frame_durations and 0 <= idx < len(self._gif_frame_durations):
+            return max(16, self._gif_frame_durations[idx])
+        return max(16, self._anim_speed_ms)
 
     def _show_frame(self, idx: int):
         """Отрисовать один кадр на canvas."""
@@ -296,24 +297,49 @@ class PortalWidget:
 
         total = len(self.gif_frames) if self.gif_frames else 20
 
+        # Пока портал открыт — зацикливаем GIF с таймингами из файла
+        if self.anim_state == self.ANIM_OPEN and self.gif_frames:
+            self.anim_frame_idx = (self.anim_frame_idx + 1) % len(self.gif_frames)
+            self._show_frame(self.anim_frame_idx)
+            d = self._gif_delay_for_idx(self.anim_frame_idx)
+            self._anim_after_id = self.root.after(d, self._animate_step)
+            return
+
         self._show_frame(self.anim_frame_idx)
 
         if self.anim_state == self.ANIM_OPENING:
-            if self.anim_frame_idx < total - 1:
-                self.anim_frame_idx += 1
-                self._anim_after_id = self.root.after(self._anim_speed_ms, self._animate_step)
+            if self.gif_frames:
+                if self.anim_frame_idx < total - 1:
+                    self.anim_frame_idx += 1
+                    d = self._gif_delay_for_idx(self.anim_frame_idx)
+                    self._anim_after_id = self.root.after(d, self._animate_step)
+                else:
+                    self.anim_state = self.ANIM_OPEN
+                    d = self._gif_delay_for_idx(self.anim_frame_idx)
+                    self._anim_after_id = self.root.after(d, self._animate_step)
             else:
-                # Анимация открытия завершена — стоим на последнем кадре
-                self.anim_state = self.ANIM_OPEN
+                if self.anim_frame_idx < total - 1:
+                    self.anim_frame_idx += 1
+                    self._anim_after_id = self.root.after(self._anim_speed_ms, self._animate_step)
+                else:
+                    self.anim_state = self.ANIM_OPEN
 
         elif self.anim_state == self.ANIM_CLOSING:
-            if self.anim_frame_idx > 0:
-                self.anim_frame_idx -= 1
-                self._anim_after_id = self.root.after(self._anim_speed_ms, self._animate_step)
+            if self.gif_frames:
+                if self.anim_frame_idx > 0:
+                    self.anim_frame_idx -= 1
+                    d = self._gif_delay_for_idx(self.anim_frame_idx)
+                    self._anim_after_id = self.root.after(d, self._animate_step)
+                else:
+                    self.anim_state = self.ANIM_HIDDEN
+                    self.root.withdraw()
             else:
-                # Анимация закрытия завершена — скрыть окно
-                self.anim_state = self.ANIM_HIDDEN
-                self.root.withdraw()
+                if self.anim_frame_idx > 0:
+                    self.anim_frame_idx -= 1
+                    self._anim_after_id = self.root.after(self._anim_speed_ms, self._animate_step)
+                else:
+                    self.anim_state = self.ANIM_HIDDEN
+                    self.root.withdraw()
 
     def start_opening_animation(self):
         """Запустить анимацию разворачивания (вызывается при init)."""
