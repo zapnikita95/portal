@@ -1641,16 +1641,16 @@ class PortalApp(ctk.CTk):
 
             receive_dir = portal_config.receive_dir_path()
             receive_dir.mkdir(parents=True, exist_ok=True)
-        
-        filepath = receive_dir / filename
+
+            filepath = receive_dir / filename
             if filepath.exists():
                 stem, suf = filepath.stem, filepath.suffix
                 filepath = receive_dir / f"{stem}_{int(time.time())}{suf}"
-        
+
             remaining = filesize
             chunk_buf = prefix
             with open(filepath, "wb") as f:
-            while remaining > 0:
+                while remaining > 0:
                     if chunk_buf:
                         take = min(len(chunk_buf), remaining)
                         f.write(chunk_buf[:take])
@@ -1658,11 +1658,11 @@ class PortalApp(ctk.CTk):
                         remaining -= take
                         continue
                     chunk = client_socket.recv(min(65536, remaining))
-                if not chunk:
-                    break
-                f.write(chunk)
-                remaining -= len(chunk)
-        
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    remaining -= len(chunk)
+
             self._log_from_thread(f"✅ Файл сохранен: {filepath}")
 
             _portal_sendall(client_socket, b"OK")
@@ -2015,12 +2015,13 @@ class PortalApp(ctk.CTk):
         clipboard_text = message.get("text", "")
         if clipboard_text:
             def _paste():
-            self.is_receiving_clipboard = True
+                self.is_receiving_clipboard = True
                 try:
-            pyperclip.copy(clipboard_text)
-            self.last_clipboard = clipboard_text
+                    pyperclip.copy(clipboard_text)
+                    self.last_clipboard = clipboard_text
                 finally:
-            self.is_receiving_clipboard = False
+                    self.is_receiving_clipboard = False
+
             try:
                 self.after(0, _paste)
             except Exception:
@@ -2308,7 +2309,7 @@ class PortalApp(ctk.CTk):
                         if set_system_clipboard_file_paths(resolved):
                             _log(f"📋 С буфера удалённого ПК: {len(resolved)} файл(ов) (пути есть локально)")
                         else:
-                pyperclip.copy(text)
+                            pyperclip.copy(text)
                             _log(f"📋 Текст с удалённого ПК ({len(text)} символов)")
                     else:
                         pyperclip.copy(text)
@@ -2381,7 +2382,7 @@ class PortalApp(ctk.CTk):
                         else:
                             _log("⚠️ Картинка получена, но не удалось записать в буфер ОС")
                     finally:
-                self.is_receiving_clipboard = False
+                        self.is_receiving_clipboard = False
 
                 try:
                     self.after(0, _apply_png_pull)
@@ -2420,11 +2421,11 @@ class PortalApp(ctk.CTk):
         if targets:
             self.log(f"📤 Отправка на {len(targets)} ПК: {', '.join(targets)}")
             for ip in targets:
-            threading.Thread(
-                target=self.send_file,
+                threading.Thread(
+                    target=self.send_file,
                     args=(filepath, ip),
-                daemon=True,
-            ).start()
+                    daemon=True,
+                ).start()
         else:
             self.log("⚠️ Сначала сохрани список IP и отметь получателей")
             self.send_file_to_dialog(filepath)
@@ -2579,7 +2580,7 @@ class PortalApp(ctk.CTk):
             client_socket.settimeout(180)
             response = _recv_ok_prefix(client_socket)
             try:
-            client_socket.close()
+                client_socket.close()
             except OSError:
                 pass
             
@@ -2765,23 +2766,23 @@ class PortalApp(ctk.CTk):
     def start_clipboard_monitor(self):
         """Мониторинг буфера на главном потоке (after) — без NSPasteboard warning"""
         try:
-        self.last_clipboard = pyperclip.paste()
+            self.last_clipboard = pyperclip.paste()
         except Exception:
             self.last_clipboard = ""
         self._clipboard_tick()
 
     def _clipboard_tick(self):
         """Один тик проверки буфера — вызывается на главном потоке"""
-            try:
-                if not self.is_receiving_clipboard:
+        try:
+            if not self.is_receiving_clipboard:
                 if time.monotonic() < getattr(
                     self, "_clipboard_ignore_until", 0.0
                 ):
                     self.after(1000, self._clipboard_tick)
                     return
-                    current = pyperclip.paste()
-                    if current != self.last_clipboard:
-                        self.last_clipboard = current
+                current = pyperclip.paste()
+                if current != self.last_clipboard:
+                    self.last_clipboard = current
                     if self.sync_clipboard_enabled:
                         ips = self.get_target_ips()
                         if ips:
@@ -2796,11 +2797,11 @@ class PortalApp(ctk.CTk):
                                     finally:
                                         self._end_clipboard_wave()
 
-                            threading.Thread(
+                                threading.Thread(
                                     target=_auto_wave, daemon=True
-                            ).start()
+                                ).start()
         except Exception:
-                pass
+            pass
         self.after(1000, self._clipboard_tick)
 
 
