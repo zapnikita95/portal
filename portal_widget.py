@@ -1,6 +1,6 @@
 """
 Виджет-портал для рабочего стола: прозрачный фон, drag&drop, горячие клавиши.
-GIF: проигрывание кадров при открытии/закрытии; пока открыт — зацикленное воспроизведение.
+Анимация только при открытии/закрытии — без бесконечного цикла.
 """
 
 import tkinter as tk
@@ -10,7 +10,7 @@ import time
 import sys
 import platform
 from pathlib import Path
-from PIL import Image, ImageTk, ImageSequence
+from PIL import Image, ImageTk, ImageSequence, ImageDraw, ImageFilter
 import os
 from typing import Optional, Any, List
 
@@ -21,8 +21,26 @@ try:
 except ImportError:
     PortalApp = None
 
-# Хромакей для Windows (fallback)
-CHROMA_KEY = "#010101"
+# Хромакей: Windows — почти чёрный; macOS — магента (#FF00FF), чтобы не съесть тёмные края портала
+# Свой цвет: PORTAL_WIDGET_CHROMA=#RRGGBB
+CHROMA_KEY_WIN = "#010101"
+CHROMA_KEY_MAC = "#FF00FF"
+
+
+def _hex_to_rgb(h: str) -> tuple:
+    h = (h or "").strip().lstrip("#")
+    if len(h) != 6:
+        return (1, 1, 1)
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def widget_chroma_hex() -> str:
+    env = os.environ.get("PORTAL_WIDGET_CHROMA", "").strip()
+    if env:
+        return env if env.startswith("#") else f"#{env}"
+    if platform.system() == "Darwin":
+        return CHROMA_KEY_MAC
+    return CHROMA_KEY_WIN
 
 
 # ── Логгинг из фоновых потоков ────────────────────────────────────────────────
@@ -79,20 +97,27 @@ class PortalWidget:
 
     def __init__(self, main_app: Any):
         self.main_app = main_app
+        self._chroma_hex = widget_chroma_hex()
+        self._chroma_rgb = _hex_to_rgb(self._chroma_hex)
         self._dnd_tkinterdnd2 = False
         self._windnd_ok = False
 
-        # macOS/Linux: TkinterDnD._require на Toplevel даёт Tcl-ошибки; патчим главное CTk-окно
-        # Python 3.13+: _require может вызывать segfault — пропускаем
+        # macOS/Linux: TkinterDnD._require на главное CTk-окно — drag&drop на canvas виджета
+        # Отключить: PORTAL_NO_MAC_DND=1 (если краш на Python 3.13+)
         if platform.system() != "Windows" and main_app is not None:
             try:
                 from tkinterdnd2 import TkinterDnD
-                if sys.version_info >= (3, 13):
-                    print("[Portal] Python 3.13+: пропускаем tkinterdnd2._require (возможен segfault)")
+                if os.environ.get("PORTAL_NO_MAC_DND", "").strip() in ("1", "true", "yes"):
+                    print("[Portal] tkinterdnd2 отключён (PORTAL_NO_MAC_DND)")
                     self._dnd_tkinterdnd2 = False
                 else:
                     TkinterDnD._require(main_app)
                     self._dnd_tkinterdnd2 = True
+                    if sys.version_info >= (3, 13):
+                        print(
+                            "[Portal] tkinterdnd2 включён (Python 3.13). "
+                            "При падении запускай с PORTAL_NO_MAC_DND=1"
+                        )
             except Exception as e:
                 self._dnd_tkinterdnd2 = False
                 print(f"[Portal] tkinterdnd2 (главное окно): {e}")
@@ -112,10 +137,9 @@ class PortalWidget:
         self._anim_after_id = None
         self._anim_speed_ms = 42  # ~24fps
 
-        # GIF-кадры
+        # GIF-кадры (открытие/статика)
         self.gif_frames: List[ImageTk.PhotoImage] = []
-        self.gif_frames_raw: List[Image.Image] = []
-        self._gif_frame_durations: List[int] = []  # мс на кадр (из GIF)
+        self.gif_frames_raw: List[Image.Image] = []  # PIL-объекты для обратного воспроизведения
         self._last_photo: Optional[ImageTk.PhotoImage] = None  # держим ссылку, чтобы GC не удалил
 
         # Fallback-рисованный портал
@@ -127,17 +151,20 @@ class PortalWidget:
         if not self.target_ip:
             self.target_ip = portal_config.load_remote_ip()
 
-        self.load_portal_gif()
         self.setup_window()
 
         self.canvas = tk.Canvas(
             self.root,
             width=self.size,
             height=self.size,
-            bg=CHROMA_KEY,
+            bg=self._chroma_hex,
             highlightthickness=0,
+            bd=0,
         )
         self.canvas.pack()
+
+        # GIF после canvas: PhotoImage(master=...) обязателен на macOS, иначе картинка не рисуется
+        self.load_portal_gif()
 
         self.setup_transparency()
         self.root.update_idletasks()
@@ -155,6 +182,10 @@ class PortalWidget:
 
     def setup_window(self):
         """Позиция, поверх остальных окон, без рамки"""
+        try:
+            self.root.configure(highlightthickness=0, bd=0, bg=self._chroma_hex)
+        except tk.TclError:
+            pass
         try:
             self.root.attributes("-topmost", True)
         except tk.TclError:
@@ -178,38 +209,49 @@ class PortalWidget:
         self.drag_start_y = 0
 
     def setup_transparency(self):
-        """Прозрачный фон по платформе"""
-        if platform.system() == "Darwin":
-            # wm_attributes("-transparent", True) на части macOS (в т.ч. новых) даёт SIGTRAP в Tk/AppKit.
-            # По умолчанию — только systemTransparent + круглая альфа в GIF; окно без «дырявого» флага.
+        """
+        Windows: хромакей + -transparentcolor.
+        macOS: магента (или PORTAL_WIDGET_CHROMA) + transparentcolor + -transparent.
+        Отключить «дырявое» окно виджета: PORTAL_WIDGET_NO_MAC_TRANSPARENT=1
+        Старый флаг PORTAL_MAC_TRANSPARENT=1 всё ещё включает -transparent (дубль не страшен).
+        """
+        self.root.configure(bg=self._chroma_hex)
+        self.canvas.configure(bg=self._chroma_hex)
+        if platform.system() == "Windows":
             try:
-                self.root.configure(bg="systemTransparent")
-                self.canvas.configure(bg="systemTransparent")
+                self.root.attributes("-transparentcolor", self._chroma_hex)
             except tk.TclError:
                 pass
-            if os.environ.get("PORTAL_MAC_TRANSPARENT", "").strip() in ("1", "true", "yes"):
+            return
+
+        if platform.system() == "Darwin":
+            try:
+                self.root.attributes("-transparentcolor", self._chroma_hex)
+            except tk.TclError:
+                try:
+                    self.root.wm_attributes("-transparentcolor", self._chroma_hex)
+                except tk.TclError:
+                    pass
+            no_transparent = os.environ.get(
+                "PORTAL_WIDGET_NO_MAC_TRANSPARENT", ""
+            ).strip() in ("1", "true", "yes")
+            want_transparent = (
+                os.environ.get("PORTAL_MAC_TRANSPARENT", "").strip()
+                in ("1", "true", "yes")
+            ) or not no_transparent
+            if want_transparent:
                 try:
                     self.root.wm_attributes("-transparent", True)
                 except tk.TclError:
                     pass
             return
 
-        self.root.configure(bg=CHROMA_KEY)
-        self.canvas.configure(bg=CHROMA_KEY)
-        if platform.system() == "Windows":
-            try:
-                self.root.attributes("-transparentcolor", CHROMA_KEY)
-            except tk.TclError:
-                pass
+        # Linux: сплошной фон хромакея (уже задан выше)
 
     # ───────────────────────────── ЗАГРУЗКА GIF ─────────────────────
 
     def load_portal_gif(self):
-        """
-        Загрузить кадры GIF: кроп по центру, ресайз.
-        Без круговой маски и Gaussian blur — они давали «зернистый» ореол на дизерном GIF.
-        Прозрачность берётся из самого файла (RGBA).
-        """
+        """Загрузить кадры GIF, вырезать круг, сделать фон прозрачным."""
         assets_dir = os.path.join(os.path.dirname(__file__), "assets")
         search_paths = [
             os.path.join(assets_dir, "portal_main.gif"),
@@ -232,26 +274,42 @@ class PortalWidget:
         try:
             gif = Image.open(gif_path)
             raw_frames: List[Image.Image] = []
-            durations: List[int] = []
 
             for frame in ImageSequence.Iterator(gif):
                 img = frame.convert("RGBA")
-                ms = int(frame.info.get("duration", 80) or 80)
-                if ms <= 0:
-                    ms = 80
-                durations.append(ms)
 
+                # Кроп до центрального квадрата
                 w, h = img.size
                 sq = min(w, h)
                 left = (w - sq) // 2
-                top = (h - sq) // 2
+                top  = (h - sq) // 2
                 img = img.crop((left, top, left + sq, top + sq))
+
+                # Ресайз до размера виджета
                 img = img.resize((self.size, self.size), Image.Resampling.LANCZOS)
-                raw_frames.append(img)
+
+                # Антиалиасный круглый вырез — за пределами круга прозрачно
+                mask = Image.new("L", (self.size, self.size), 0)
+                draw = ImageDraw.Draw(mask)
+                margin = 4
+                draw.ellipse(
+                    [margin, margin, self.size - margin - 1, self.size - margin - 1],
+                    fill=255,
+                )
+                mask = mask.filter(ImageFilter.GaussianBlur(3))
+                img.putalpha(mask)
+
+                # Композиция на хромакей — тот же цвет, что -transparentcolor
+                r, g, b = self._chroma_rgb
+                bg = Image.new("RGBA", (self.size, self.size), (r, g, b, 255))
+                composed = Image.alpha_composite(bg, img)
+                raw_frames.append(composed)
 
             self.gif_frames_raw = raw_frames
-            self._gif_frame_durations = durations
-            self.gif_frames = [ImageTk.PhotoImage(f) for f in raw_frames]
+            master = self.root
+            self.gif_frames = [
+                ImageTk.PhotoImage(f.convert("RGB"), master=master) for f in raw_frames
+            ]
             print(f"[Portal] Загружено {len(self.gif_frames)} кадров из {gif_path}")
 
         except Exception as e:
@@ -266,11 +324,6 @@ class PortalWidget:
             except Exception:
                 pass
             self._anim_after_id = None
-
-    def _gif_delay_for_idx(self, idx: int) -> int:
-        if self._gif_frame_durations and 0 <= idx < len(self._gif_frame_durations):
-            return max(16, self._gif_frame_durations[idx])
-        return max(16, self._anim_speed_ms)
 
     def _show_frame(self, idx: int):
         """Отрисовать один кадр на canvas."""
@@ -297,49 +350,24 @@ class PortalWidget:
 
         total = len(self.gif_frames) if self.gif_frames else 20
 
-        # Пока портал открыт — зацикливаем GIF с таймингами из файла
-        if self.anim_state == self.ANIM_OPEN and self.gif_frames:
-            self.anim_frame_idx = (self.anim_frame_idx + 1) % len(self.gif_frames)
-            self._show_frame(self.anim_frame_idx)
-            d = self._gif_delay_for_idx(self.anim_frame_idx)
-            self._anim_after_id = self.root.after(d, self._animate_step)
-            return
-
         self._show_frame(self.anim_frame_idx)
 
         if self.anim_state == self.ANIM_OPENING:
-            if self.gif_frames:
-                if self.anim_frame_idx < total - 1:
-                    self.anim_frame_idx += 1
-                    d = self._gif_delay_for_idx(self.anim_frame_idx)
-                    self._anim_after_id = self.root.after(d, self._animate_step)
-                else:
-                    self.anim_state = self.ANIM_OPEN
-                    d = self._gif_delay_for_idx(self.anim_frame_idx)
-                    self._anim_after_id = self.root.after(d, self._animate_step)
+            if self.anim_frame_idx < total - 1:
+                self.anim_frame_idx += 1
+                self._anim_after_id = self.root.after(self._anim_speed_ms, self._animate_step)
             else:
-                if self.anim_frame_idx < total - 1:
-                    self.anim_frame_idx += 1
-                    self._anim_after_id = self.root.after(self._anim_speed_ms, self._animate_step)
-                else:
-                    self.anim_state = self.ANIM_OPEN
+                # Анимация открытия завершена — стоим на последнем кадре
+                self.anim_state = self.ANIM_OPEN
 
         elif self.anim_state == self.ANIM_CLOSING:
-            if self.gif_frames:
-                if self.anim_frame_idx > 0:
-                    self.anim_frame_idx -= 1
-                    d = self._gif_delay_for_idx(self.anim_frame_idx)
-                    self._anim_after_id = self.root.after(d, self._animate_step)
-                else:
-                    self.anim_state = self.ANIM_HIDDEN
-                    self.root.withdraw()
+            if self.anim_frame_idx > 0:
+                self.anim_frame_idx -= 1
+                self._anim_after_id = self.root.after(self._anim_speed_ms, self._animate_step)
             else:
-                if self.anim_frame_idx > 0:
-                    self.anim_frame_idx -= 1
-                    self._anim_after_id = self.root.after(self._anim_speed_ms, self._animate_step)
-                else:
-                    self.anim_state = self.ANIM_HIDDEN
-                    self.root.withdraw()
+                # Анимация закрытия завершена — скрыть окно
+                self.anim_state = self.ANIM_HIDDEN
+                self.root.withdraw()
 
     def start_opening_animation(self):
         """Запустить анимацию разворачивания (вызывается при init)."""
@@ -607,10 +635,9 @@ class PortalWidget:
 
 class GlobalHotkeyManager:
     """
-    macOS: AppKit NSEvent (global = когда другое приложение в фокусе,
-                           local  = когда Portal в фокусе) + Tk bind_all.
+    macOS: NSEvent global monitor → очередь → poll на главном потоке (без GIL crash);
+           плюс Tk bind_all когда окно Портала в фокусе (Apple не шлёт global в своё приложение).
     Windows: pynput GlobalHotKeys.
-    Логи пишутся в консоль, GUI и файл /tmp/portal_hotkey_debug.log.
     """
 
     # macOS virtual keycodes (US layout, layout-independent)
@@ -631,6 +658,10 @@ class GlobalHotkeyManager:
         self._global_monitor = None   # держим ссылку — иначе GC удалит
         self._local_monitor  = None
         self._handle_ref     = None   # держим ссылку на callback-блок
+        # macOS: pipe — из NSEvent callback только os.write (без queue/GIL сюрпризов)
+        self._hk_r: Optional[int] = None
+        self._hk_w: Optional[int] = None
+        self._last_toggle_debounce = 0.0
 
     def _log(self, msg: str, prefix: str = "⌨️") -> None:
         portal_thread_log(self.main_app, msg, prefix)
@@ -643,14 +674,28 @@ class GlobalHotkeyManager:
         self._bind_tk_all()
 
         if platform.system() == "Darwin":
-            # 2. NSEvent local monitor — scheduleим на главном потоке Tk
             try:
-                self.main_app.after(300, self._setup_nslocal_monitor)
+                import fcntl
+
+                self._hk_r, self._hk_w = os.pipe()
+                fcntl.fcntl(self._hk_r, fcntl.F_SETFL, os.O_NONBLOCK)
+            except Exception as e:
+                self._log(f"⚠️ pipe хоткеев не создан: {e}")
+                self._hk_r = self._hk_w = None
+            self._schedule_hotkey_poll()
+            t = threading.Thread(
+                target=self._run_mac_global, daemon=True, name="portal-hotkeys-global"
+            )
+            t.start()
+            # Local monitor: когда в фокусе сам Портал (global такие события не получает)
+            try:
+                self.main_app.after(350, self._setup_nslocal_monitor)
             except Exception as e:
                 self._log(f"after(local monitor): {e}")
-            # 3. NSEvent global monitor — фоновый поток с NSRunLoop
-            t = threading.Thread(target=self._run_mac_global, daemon=True, name="portal-hotkeys-global")
-            t.start()
+            self._log(
+                "✅ Хоткеи: Cmd+Option+P / Cmd+Shift+C/V — из других приложений (Accessibility→Терминал или Python) "
+                "и из окна Портала"
+            )
         else:
             t = threading.Thread(target=self._run_win, daemon=True, name="portal-hotkeys-win")
             t.start()
@@ -679,70 +724,177 @@ class GlobalHotkeyManager:
             return "break"
 
         is_mac = platform.system() == "Darwin"
-        root = self.main_app  # главное окно ловит bind_all
+        # CTk + Toplevel виджета — биндим на все корни, иначе часть событий теряется
+        roots: List[Any] = []
+        try:
+            roots.append(self.main_app)
+        except Exception:
+            pass
+        try:
+            tl = self.main_app.winfo_toplevel()
+            if tl not in roots:
+                roots.append(tl)
+        except Exception:
+            pass
+        try:
+            if self.widget.root not in roots:
+                roots.append(self.widget.root)
+        except Exception:
+            pass
 
         try:
             if is_mac:
                 toggle_seqs = [
                     "<Command-Option-p>", "<Command-Alt-p>",
-                    "<Meta-Option-p>",    "<Meta-Alt-p>",
+                    "<Meta-Option-p>", "<Meta-Alt-p>",
+                    "<Command-Option-P>", "<Meta-Option-P>",
                 ]
-                push_seqs = ["<Command-Shift-C>", "<Command-Shift-c>", "<Meta-Shift-C>"]
-                pull_seqs = ["<Command-Shift-V>", "<Command-Shift-v>", "<Meta-Shift-V>"]
+                push_seqs = [
+                    "<Command-Shift-C>", "<Command-Shift-c>",
+                    "<Meta-Shift-C>", "<Meta-Shift-c>",
+                ]
+                pull_seqs = [
+                    "<Command-Shift-V>", "<Command-Shift-v>",
+                    "<Meta-Shift-V>", "<Meta-Shift-v>",
+                ]
             else:
                 toggle_seqs = ["<Control-Alt-p>"]
                 push_seqs   = ["<Control-Alt-c>"]
                 pull_seqs   = ["<Control-Alt-v>"]
 
+            # bind_all — один раз на весь процесс (иначе дубли)
+            primary = roots[0] if roots else self.main_app
             for seq in toggle_seqs:
                 try:
-                    root.bind_all(seq, _toggle)
+                    primary.bind_all(seq, _toggle)
                 except Exception:
                     pass
             for seq in push_seqs:
                 try:
-                    root.bind_all(seq, _push)
+                    primary.bind_all(seq, _push)
                 except Exception:
                     pass
             for seq in pull_seqs:
                 try:
-                    root.bind_all(seq, _pull)
+                    primary.bind_all(seq, _pull)
                 except Exception:
                     pass
+            # Дополнительно на Toplevel виджета (иногда CTk перехватывает фокус)
+            for win in roots[1:]:
+                for seq in toggle_seqs:
+                    try:
+                        win.bind(seq, _toggle)
+                    except Exception:
+                        pass
+                for seq in push_seqs:
+                    try:
+                        win.bind(seq, _push)
+                    except Exception:
+                        pass
+                for seq in pull_seqs:
+                    try:
+                        win.bind(seq, _pull)
+                    except Exception:
+                        pass
 
-            self._log("Tk bind_all зарегистрирован (работает когда Portal в фокусе)")
+            self._log("Tk bind_all + bind на виджет (фокус на Портале)")
         except Exception as e:
             self._log(f"bind_all ошибка: {e}")
 
-    # ── 2. NSEvent local monitor (главный поток) ───────────────────────────────
+    def _schedule_hotkey_poll(self) -> None:
+        try:
+            self.main_app.after(25, self._poll_hotkey_queue)
+        except Exception:
+            pass
 
-    def _setup_nslocal_monitor(self):
-        """Вызывается НА ГЛАВНОМ ПОТОКЕ через after(). Ловит события внутри нашего приложения."""
+    def _poll_hotkey_queue(self) -> None:
+        """Главный поток Tk: читаем pipe от глобального NSEvent (только os.write в колбэке)."""
+        if not self._running:
+            return
+        if self._hk_r is not None:
+            try:
+                while True:
+                    chunk = os.read(self._hk_r, 64)
+                    if not chunk:
+                        break
+                    for c in chunk:
+                        if c == ord("t"):
+                            self._log("🔑 Глобальный хоткей: Cmd+Option+P → виджет", "🔑")
+                            self._toggle_ui()
+                        elif c == ord("c"):
+                            self._log("🔑 Глобальный хоткей: Cmd+Shift+C → буфер", "🔑")
+                            self._on_push()
+                        elif c == ord("v"):
+                            self._log("🔑 Глобальный хоткей: Cmd+Shift+V → буфер", "🔑")
+                            self._on_pull()
+            except BlockingIOError:
+                pass
+            except OSError:
+                pass
+        self._schedule_hotkey_poll()
+
+    def _setup_nslocal_monitor(self) -> None:
+        """События внутри приложения Портал (global их не видит)."""
         try:
             from AppKit import NSEvent
         except ImportError:
             return
 
-        handle = self._make_nshandle(source="local")
-        self._handle_ref = handle  # держим от GC
+        mgr = self
+
+        def local_cb(event):
+            cmd = mgr._nsevent_match_command(event)
+            if cmd:
+                try:
+                    mgr.main_app.after(0, lambda c=cmd: mgr._dispatch_local_hotkey(c))
+                except Exception:
+                    pass
+            return event
 
         try:
-            # Local monitor возвращает обработанное (или None чтобы сглотнуть) событие
-            def local_cb(event):
-                handle(event)
-                return event  # не блокируем событие
-
             self._local_monitor = NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
                 self._NSKeyDownMask, local_cb
             )
             if self._local_monitor:
-                self._log("✅ NSEvent local monitor активен (Portal в фокусе)")
-            else:
-                self._log("⚠️ NSEvent local monitor не создан")
+                self._log("✅ NSEvent local monitor (фокус на Портале)")
         except Exception as e:
-            self._log(f"NSEvent local monitor ошибка: {e}")
+            self._log(f"NSEvent local: {e}")
 
-    # ── 3. NSEvent global monitor (фоновый поток) ─────────────────────────────
+    def _dispatch_local_hotkey(self, cmd: str) -> None:
+        if cmd == "t":
+            self._log("🔑 Local: Cmd+Option+P", "🔑")
+            self._toggle_ui()
+        elif cmd == "c":
+            self._log("🔑 Local: Cmd+Shift+C", "🔑")
+            self._on_push()
+        elif cmd == "v":
+            self._log("🔑 Local: Cmd+Shift+V", "🔑")
+            self._on_pull()
+
+    def _nsevent_match_command(self, event) -> Optional[str]:
+        """Возвращает 't'|'c'|'v' или None. Модификаторы — по битам, не строгое равенство."""
+        try:
+            CMD, ALT, SHIFT = self._NSCmd, self._NSAlt, self._NSShift
+            try:
+                from AppKit import NSDeviceIndependentModifierFlagsMask
+
+                mask = int(NSDeviceIndependentModifierFlagsMask)
+            except Exception:
+                mask = self._NSMask
+            f = int(event.modifierFlags()) & mask
+            keycode = int(event.keyCode())
+            # Cmd+Option+P (без требования «ровно два» бита — CapsLock и др. не ломают)
+            if keycode == self._KEY_P and (f & CMD) and (f & ALT) and not (f & SHIFT):
+                return "t"
+            if keycode == self._KEY_C and (f & CMD) and (f & SHIFT) and not (f & ALT):
+                return "c"
+            if keycode == self._KEY_V and (f & CMD) and (f & SHIFT) and not (f & ALT):
+                return "v"
+        except Exception:
+            pass
+        return None
+
+    # ── 2. NSEvent global monitor (фоновый поток) ─────────────────────────────
 
     def _run_mac_global(self):
         """Фоновый поток с NSRunLoop. Ловит события когда ДРУГОЕ приложение в фокусе."""
@@ -753,7 +905,8 @@ class GlobalHotkeyManager:
             self._log("⚠️ pyobjc/AppKit не найден — глобальные хоткеи отключены")
             return
 
-        handle = self._make_nshandle(source="global")
+        # Только os.write в pipe — никакого Tk / after / логов в этом потоке
+        handle = self._make_nshandle_global()
 
         try:
             self._global_monitor = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
@@ -777,32 +930,26 @@ class GlobalHotkeyManager:
         except Exception as e:
             self._log(f"NSRunLoop завершён: {e}")
 
-    def _make_nshandle(self, source: str):
-        """Создаёт callback для NSEvent монитора."""
-        CMD, ALT, SHIFT, MASK = self._NSCmd, self._NSAlt, self._NSShift, self._NSMask
-        KEY_P, KEY_C, KEY_V   = self._KEY_P, self._KEY_C, self._KEY_V
-
+    def _make_nshandle_global(self):
+        """Callback глобального монитора: только os.write (1 байт) в pipe."""
         mgr = self
 
         def handle(event):
             try:
-                flags   = int(event.modifierFlags()) & MASK
-                keycode = int(event.keyCode())
-
-                if flags == (CMD | ALT) and keycode == KEY_P:
-                    mgr._log(f"🔑 NSEvent[{source}] Cmd+Option+P → виджет", "🔑")
-                    mgr.widget.root.after(0, mgr._toggle_ui)
-
-                elif flags == (CMD | SHIFT) and keycode == KEY_C:
-                    mgr._log(f"🔑 NSEvent[{source}] Cmd+Shift+C → буфер отправить", "🔑")
-                    mgr._on_push()
-
-                elif flags == (CMD | SHIFT) and keycode == KEY_V:
-                    mgr._log(f"🔑 NSEvent[{source}] Cmd+Shift+V → буфер получить", "🔑")
-                    mgr._on_pull()
-
-            except Exception as e:
-                print(f"[Portal] NSEvent handle ошибка: {e}", flush=True)
+                w = mgr._hk_w
+                if w is None:
+                    return
+                cmd = mgr._nsevent_match_command(event)
+                if cmd == "t":
+                    os.write(w, b"t")
+                elif cmd == "c":
+                    os.write(w, b"c")
+                elif cmd == "v":
+                    os.write(w, b"v")
+            except (OSError, BlockingIOError, TypeError, ValueError):
+                pass
+            except Exception:
+                pass
 
         return handle
 
@@ -831,6 +978,10 @@ class GlobalHotkeyManager:
 
     def _toggle_ui(self):
         """Всегда на главном потоке Tk."""
+        now = time.monotonic()
+        if now - self._last_toggle_debounce < 0.2:
+            return
+        self._last_toggle_debounce = now
         state = self.widget.anim_state
         if state in (self.widget.ANIM_OPEN, self.widget.ANIM_OPENING):
             self.widget.hide()

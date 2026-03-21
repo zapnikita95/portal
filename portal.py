@@ -36,80 +36,74 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 
-# Таймаут проверки «пара онлайн» (медленный Tailscale / Wi‑Fi)
-PROBE_TIMEOUT_SEC = 10.0
-
-
-def probe_portal_peer(
-    host: str,
-    port: int = PORTAL_PORT,
-    timeout: float = PROBE_TIMEOUT_SEC,
-    debug_steps: Optional[List[str]] = None,
-) -> tuple[bool, str]:
+def probe_portal_peer(host: str, port: int = PORTAL_PORT, timeout: float = 3.0) -> tuple[bool, str]:
     """
-    Проверка Портала на host: TCP + ping → pong.
-    Возвращает (успех, код): ok | refused | timeout | bad_reply | dns | error | legacy_port_open
-    Если debug_steps передан — в него пишутся пошаговые сообщения для лога.
+    Проверка, что на host действительно отвечает Портал (ping → pong).
+    Возвращает (успех, код): код — ok | refused | timeout | bad_reply | dns | error
     """
     host = (host or "").strip()
     if not host:
         return False, "no_host"
-
-    def _d(msg: str):
-        if debug_steps is not None:
-            debug_steps.append(msg)
-
-    s = None
-    tcp_connected = False
     try:
-        _d(f"1/4 Создаю сокет…")
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(timeout)
-        _d(f"2/4 Подключаюсь к {host}:{port} (timeout {timeout}s)…")
         s.connect((host, port))
-        tcp_connected = True
-        _d(f"3/4 TCP OK, шлю ping…")
         s.sendall(json.dumps({"type": "ping"}, ensure_ascii=False).encode("utf-8"))
-        s.settimeout(min(5.0, timeout))
-        _d(f"4/4 Жду pong (5s)…")
         data = s.recv(4096)
+        s.close()
         if not data:
-            _d("4/4 Получен пустой ответ (соединение закрыто без данных)")
-            return False, "legacy_port_open"
-        _d(f"4/4 Получено {len(data)} байт")
-        msg = json.loads(data.decode("utf-8", errors="replace"))
-        if msg.get("type") == "pong":
-            _d("4/4 pong OK")
+            return False, "bad_reply"
+        msg = parse_portal_json_message(data)
+        if msg and msg.get("type") == "pong":
             return True, "ok"
-        _d(f"4/4 Ответ не pong: {list(msg.keys())[:5]}")
         return False, "bad_reply"
     except ConnectionRefusedError:
-        _d("2/4 Ошибка: Connection refused (порт закрыт / не слушает)")
         return False, "refused"
     except socket.timeout:
-        if tcp_connected:
-            _d("4/4 Таймаут на recv — TCP есть, pong не пришёл (старая версия на паре?)")
-            return False, "legacy_port_open"
-        _d("2/4 Таймаут на connect — нет маршрута до хоста")
         return False, "timeout"
     except socket.gaierror:
-        _d("2/4 Ошибка DNS (адрес не найден)")
         return False, "dns"
-    except OSError as e:
-        _d(f"Ошибка: {type(e).__name__}: {e}")
+    except OSError:
         return False, "error"
-    except json.JSONDecodeError as e:
-        _d(f"4/4 JSON ошибка: {e}")
+    except json.JSONDecodeError:
         return False, "bad_reply"
-    except Exception as e:
-        _d(f"Ошибка: {type(e).__name__}: {e}")
+    except Exception:
         return False, "error"
-    finally:
-        if s is not None:
-            try:
-                s.close()
-            except Exception:
-                pass
+
+
+def parse_portal_json_message(data: bytes) -> Optional[dict]:
+    """
+    Разбор первого JSON-объекта из буфера (ping/pong и др.).
+    Устойчиво к пробелам и лишнему тексту до/после — как при разных recv на Windows/macOS.
+    """
+    msg, _ = parse_first_json_object_bytes(data)
+    return msg
+
+
+def parse_first_json_object_bytes(buf: bytes) -> tuple[Optional[dict], int]:
+    """
+    Первый полный JSON-объект в буфере + сколько байт он занял.
+    Нужно для ping и для file (после JSON сразу идут бинарные чанки в том же recv).
+    """
+    if not buf:
+        return None, 0
+    start = buf.find(b"{")
+    if start < 0:
+        return None, 0
+    depth = 0
+    for i in range(start, len(buf)):
+        c = buf[i]
+        if c == ord("{"):
+            depth += 1
+        elif c == ord("}"):
+            depth -= 1
+            if depth == 0:
+                try:
+                    obj = json.loads(buf[start : i + 1].decode("utf-8"))
+                    return obj, i + 1
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    return None, 0
+    return None, 0
 
 
 class PortalApp(ctk.CTk):
@@ -117,8 +111,8 @@ class PortalApp(ctk.CTk):
         super().__init__()
         
         self.title("🌀 Портал")
-        self.geometry("980x880")
-        self.minsize(820, 780)
+        self.geometry("820x760")
+        self.minsize(640, 520)
         
         # Переменные
         self.server_socket: Optional[socket.socket] = None
@@ -205,148 +199,237 @@ class PortalApp(ctk.CTk):
             return None
     
     def create_ui(self):
-        """Создание интерфейса — сетка: сверху компактные контролы, снизу журнал (всегда виден)."""
-        main_frame = ctk.CTkFrame(self)
-        main_frame.pack(fill="both", expand=True, padx=16, pady=16)
-        main_frame.grid_columnconfigure(0, weight=1)
-        main_frame.grid_rowconfigure(1, weight=1)  # журнал тянется
-
-        # ─── Верхний блок (компактный) ─────────────────────────────────────────
-        top_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        top_frame.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
-        top_frame.grid_columnconfigure(0, weight=1)
-
-        row0 = ctk.CTkFrame(top_frame, fg_color="transparent")
-        row0.pack(fill="x", pady=(0, 6))
-        title = ctk.CTkLabel(row0, text="🌀 ПОРТАЛ", font=ctk.CTkFont(size=26, weight="bold"))
-        title.pack(side="left")
+        """Создание интерфейса"""
+        # Всё в одном вертикальном скролле — до журнала можно долистать колёсиком / трекпадом
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+        outer = ctk.CTkFrame(self, fg_color="transparent")
+        outer.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
+        outer.grid_columnconfigure(0, weight=1)
+        outer.grid_rowconfigure(0, weight=1)
+        main_frame = ctk.CTkScrollableFrame(outer, fg_color="transparent")
+        main_frame.grid(row=0, column=0, sticky="nsew")
+        outer.grid_rowconfigure(0, weight=1)
+        outer.grid_columnconfigure(0, weight=1)
+        
+        # Заголовок
+        title_label = ctk.CTkLabel(
+            main_frame,
+            text="🌀 ПОРТАЛ",
+            font=ctk.CTkFont(size=32, weight="bold")
+        )
+        title_label.pack(pady=(20, 10))
+        
+        subtitle = ctk.CTkLabel(
+            main_frame,
+            text="Передача файлов и синхронизация буфера обмена",
+            font=ctk.CTkFont(size=14),
+            text_color="gray"
+        )
+        subtitle.pack(pady=(0, 30))
+        
+        # Информация о подключении
+        info_frame = ctk.CTkFrame(main_frame)
+        info_frame.pack(fill="x", padx=20, pady=10)
+        
         if self.tailscale_ip:
-            ip_txt = f"📍 {self.tailscale_ip}" + (" (Tailscale)" if self.tailscale_ip.startswith("100.") else "")
-            ip_color = "gray" if self.tailscale_ip.startswith("100.") else "orange"
-            ctk.CTkLabel(row0, text=ip_txt, font=ctk.CTkFont(size=12), text_color=ip_color).pack(side="left", padx=(16, 0))
+            if self.tailscale_ip.startswith("100."):
+                ip_label = ctk.CTkLabel(
+                    info_frame,
+                    text=f"📍 Tailscale IP: {self.tailscale_ip}",
+                    font=ctk.CTkFont(size=12)
+                )
+                ip_label.pack(pady=10)
+            else:
+                ip_label = ctk.CTkLabel(
+                    info_frame,
+                    text=f"📍 Локальный IP: {self.tailscale_ip} (Tailscale не обнаружен)",
+                    font=ctk.CTkFont(size=12),
+                    text_color="orange"
+                )
+                ip_label.pack(pady=10)
         else:
-            ctk.CTkLabel(row0, text="⚠️ IP не определён", font=ctk.CTkFont(size=12), text_color="orange").pack(side="left", padx=(16, 0))
-
-        # IP пары + кнопки в одну строку
-        row1 = ctk.CTkFrame(top_frame, fg_color="transparent")
-        row1.pack(fill="x", pady=(0, 4))
-        ctk.CTkLabel(row1, text="🖥 IP пары:", font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", padx=(0, 8))
-        self.peer_ip_entry = ctk.CTkEntry(row1, width=200, placeholder_text="100.65.63.84")
-        self.peer_ip_entry.pack(side="left", padx=(0, 8))
+            warning_label = ctk.CTkLabel(
+                info_frame,
+                text="⚠️ IP адрес не определен",
+                font=ctk.CTkFont(size=12),
+                text_color="orange"
+            )
+            warning_label.pack(pady=10)
+        
+        # IP второго компьютера (сохраняется в %APPDATA%/Portal или ~/Library/...)
+        peer_frame = ctk.CTkFrame(main_frame)
+        peer_frame.pack(fill="x", padx=20, pady=(0, 10))
+        ctk.CTkLabel(
+            peer_frame,
+            text="🖥 IP второго компьютера (Tailscale / LAN) — указывается один раз:",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+        ctk.CTkLabel(
+            peer_frame,
+            text="Сохраняется на диск. Отправка файлов/буфера и виджет используют его без повторных вопросов.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+        ).pack(anchor="w", padx=12, pady=(0, 4))
+        ctk.CTkLabel(
+            peer_frame,
+            text=f"💡 Указывай только IP (например 100.65.63.84), порт :{PORTAL_PORT} добавляется автоматически.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray70",
+        ).pack(anchor="w", padx=12, pady=(0, 8))
+        row = ctk.CTkFrame(peer_frame, fg_color="transparent")
+        row.pack(fill="x", padx=12, pady=(0, 12))
+        self.peer_ip_entry = ctk.CTkEntry(row, width=280, placeholder_text="например 100.65.63.84")
+        self.peer_ip_entry.pack(side="left", padx=(0, 10))
         if self.remote_peer_ip:
             self.peer_ip_entry.insert(0, self.remote_peer_ip)
         self.peer_ip_entry.bind("<KeyRelease>", self._on_peer_ip_edited)
-        ctk.CTkButton(row1, text="Сохранить IP", width=110, command=self.save_peer_ip_from_ui, font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 8))
-        self.ip_saved_feedback = ctk.CTkLabel(row1, text="", font=ctk.CTkFont(size=12, weight="bold"), text_color="#3dd68c")
-        self.ip_saved_feedback.pack(side="left")
-
-        # Статус связи (одна строка)
-        self._peer_poll_job = None
-        row2 = ctk.CTkFrame(top_frame, fg_color="transparent")
-        row2.pack(fill="x", pady=(0, 4))
-        self.local_link_status_label = ctk.CTkLabel(row2, text="⏸ Приём: выключен", font=ctk.CTkFont(size=11), text_color="gray")
-        self.local_link_status_label.pack(side="left", padx=(0, 16))
-        self.peer_link_status_label = ctk.CTkLabel(row2, text="⚪ Пара: укажи IP", font=ctk.CTkFont(size=11), text_color="gray")
-        self.peer_link_status_label.pack(side="left", padx=(0, 12))
-        ctk.CTkButton(row2, text="🔄 Проверить", width=100, command=lambda: self.check_peer_connection_async(silent=False), font=ctk.CTkFont(size=11)).pack(side="left")
-
-        # Хоткеи (одна строка)
-        row3 = ctk.CTkFrame(top_frame, fg_color="transparent")
-        row3.pack(fill="x", pady=(0, 6))
-        hk = "Ctrl+Alt+P показ | C/V буфер" if platform.system() != "Darwin" else "Cmd+Option+P | Cmd+Shift+C/V"
-        ctk.CTkLabel(row3, text=f"🔑 {hk}", font=ctk.CTkFont(size=11), text_color="gray70").pack(side="left")
-
-        # Кнопки
-        btn_row = ctk.CTkFrame(top_frame, fg_color="transparent")
-        btn_row.pack(fill="x", pady=(0, 4))
-        self.start_button = ctk.CTkButton(btn_row, text="🚀 Запустить портал", command=self.toggle_server, font=ctk.CTkFont(size=13, weight="bold"), height=36, width=180)
-        self.start_button.pack(side="left", padx=(0, 10))
-        self.send_button = ctk.CTkButton(btn_row, text="📤 Файл", command=self.send_file_dialog, font=ctk.CTkFont(size=13), height=36, width=120, state="disabled")
-        self.send_button.pack(side="left", padx=(0, 8))
-        self.clipboard_button = ctk.CTkButton(btn_row, text="📋 Буфер", command=self.send_clipboard_dialog, font=ctk.CTkFont(size=13), height=36, width=120, state="disabled")
-        self.clipboard_button.pack(side="left", padx=(0, 8))
-        self.status_label = ctk.CTkLabel(btn_row, text="⏸ Портал остановлен", font=ctk.CTkFont(size=11), text_color="gray")
-        self.status_label.pack(side="left", padx=(16, 0))
-
-        # ─── Журнал (всегда виден, занимает оставшееся место) ──────────────────
-        log_frame = ctk.CTkFrame(main_frame)
-        log_frame.grid(row=1, column=0, sticky="nsew", padx=0, pady=(12, 0))
-        log_frame.grid_columnconfigure(0, weight=1)
-        log_frame.grid_rowconfigure(1, weight=1)
-        log_hdr = ctk.CTkFrame(log_frame, fg_color="transparent")
-        log_hdr.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 4))
-        log_hdr.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(log_hdr, text="📋 Журнал активности", font=ctk.CTkFont(size=13, weight="bold")).grid(row=0, column=0, sticky="w")
         ctk.CTkButton(
-            log_hdr,
-            text="📋 Копировать всё",
-            width=130,
+            row,
+            text="Сохранить IP",
+            width=120,
+            command=self.save_peer_ip_from_ui,
+            font=ctk.CTkFont(size=13),
+        ).pack(side="left")
+        self.ip_saved_feedback = ctk.CTkLabel(
+            row,
+            text="",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color="#3dd68c",
+        )
+        self.ip_saved_feedback.pack(side="left", padx=(10, 0))
+
+        # Подсказки по хоткеям (виджет + общий буфер)
+        hotkey_frame = ctk.CTkFrame(peer_frame, fg_color="transparent")
+        hotkey_frame.pack(fill="x", padx=12, pady=(0, 10))
+        if platform.system() == "Darwin":
+            hotkey_text = (
+                "🔑 Быстрые клавиши (из любого приложения, нужен Accessibility → Терминал):\n"
+                "   Показать или скрыть портал — Cmd+Option+P\n"
+                "   Отправить буфер на другой ПК — Cmd+Shift+C\n"
+                "   Вставить буфер с другого ПК — Cmd+Shift+V"
+            )
+        else:
+            hotkey_text = (
+                "🔑 Быстрые клавиши:\n"
+                "   Показать или скрыть портал — Ctrl+Alt+P (запас: Win+Shift+P)\n"
+                "   Отправить буфер на другой ПК — Ctrl+Alt+C\n"
+                "   Вставить буфер с другого ПК — Ctrl+Alt+V"
+            )
+        ctk.CTkLabel(
+            hotkey_frame,
+            text=hotkey_text,
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+            justify="left",
+            anchor="w",
+        ).pack(anchor="w")
+
+        # Статус связи с парой (ping/pong к Порталу на другом ПК)
+        self._peer_poll_job = None
+        conn_frame = ctk.CTkFrame(peer_frame, fg_color="transparent")
+        conn_frame.pack(fill="x", padx=12, pady=(4, 10))
+        ctk.CTkLabel(
+            conn_frame,
+            text="📡 Статус связи",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", pady=(0, 4))
+        self.local_link_status_label = ctk.CTkLabel(
+            conn_frame,
+            text="⏸ Локальный приём: неизвестно",
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+            justify="left",
+            anchor="w",
+        )
+        self.local_link_status_label.pack(anchor="w")
+        self.peer_link_status_label = ctk.CTkLabel(
+            conn_frame,
+            text="⚪ Пара: укажи IP и нажми «Сохранить IP»",
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+            justify="left",
+            anchor="w",
+        )
+        self.peer_link_status_label.pack(anchor="w", pady=(2, 6))
+        probe_row = ctk.CTkFrame(conn_frame, fg_color="transparent")
+        probe_row.pack(anchor="w", fill="x")
+        ctk.CTkButton(
+            probe_row,
+            text="🔄 Проверить связь",
+            width=160,
+            command=lambda: self.check_peer_connection_async(silent=False),
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left")
+        ctk.CTkLabel(
+            probe_row,
+            text=f"авто каждые {PEER_STATUS_POLL_MS // 1000} с, если указан IP",
             font=ctk.CTkFont(size=11),
-            command=self.copy_log_to_clipboard,
-        ).grid(row=0, column=1, sticky="e", padx=(8, 0))
-        self.log_text = ctk.CTkTextbox(log_frame, height=280, font=ctk.CTkFont(size=12))
-        self.log_text.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+            text_color="gray",
+        ).pack(side="left", padx=(12, 0))
+        
+        # Кнопки управления
+        button_frame = ctk.CTkFrame(main_frame)
+        button_frame.pack(fill="x", padx=20, pady=20)
+        
+        self.start_button = ctk.CTkButton(
+            button_frame,
+            text="🚀 Запустить портал",
+            command=self.toggle_server,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            height=40
+        )
+        self.start_button.pack(side="left", padx=10, pady=10, fill="x", expand=True)
+        
+        self.send_button = ctk.CTkButton(
+            button_frame,
+            text="📤 Отправить файл",
+            command=self.send_file_dialog,
+            font=ctk.CTkFont(size=14),
+            height=40,
+            state="disabled"
+        )
+        self.send_button.pack(side="left", padx=10, pady=10, fill="x", expand=True)
+        
+        self.clipboard_button = ctk.CTkButton(
+            button_frame,
+            text="📋 Отправить буфер",
+            command=self.send_clipboard_dialog,
+            font=ctk.CTkFont(size=14),
+            height=40,
+            state="disabled"
+        )
+        self.clipboard_button.pack(side="left", padx=10, pady=10, fill="x", expand=True)
+        
+        # Статус
+        self.status_label = ctk.CTkLabel(
+            main_frame,
+            text="⏸ Портал остановлен",
+            font=ctk.CTkFont(size=12),
+            text_color="gray"
+        )
+        self.status_label.pack(pady=10)
+        
+        # Лог: внутри общего скролла + своя прокрутка в текстбоксе
+        log_frame = ctk.CTkFrame(main_frame)
+        log_frame.pack(fill="x", expand=False, padx=12, pady=16)
+        
+        log_title = ctk.CTkLabel(
+            log_frame,
+            text="📋 Журнал активности (колёсиком листай всё окно ↓ и сам журнал)",
+            font=ctk.CTkFont(size=14, weight="bold")
+        )
+        log_title.pack(pady=(10, 5))
+        
+        self.log_text = ctk.CTkTextbox(log_frame, height=300, wrap="word")
+        self.log_text.pack(fill="x", expand=False, padx=10, pady=(0, 10))
         self.log_text.insert("1.0", "Готов к работе...\n")
-        self._setup_log_text_selectable_readonly()
+        self.log_text.configure(state="disabled")
+        self._log_max_lines = 400
 
         self._refresh_local_link_status_label()
         self.after(800, lambda: self.check_peer_connection_async(silent=True))
         self._arm_peer_poll()
-
-    def _log_inner_text_widget(self):
-        """Внутренний Tk Text у CTkTextbox — для bind клавиш."""
-        return getattr(self.log_text, "_textbox", self.log_text)
-
-    def _setup_log_text_selectable_readonly(self) -> None:
-        """
-        Без state=disabled — иначе в Windows нельзя выделить и Ctrl+C.
-        Режим только чтения: блокируем ввод, разрешаем копирование и навигацию.
-        """
-        self.log_text.configure(state="normal")
-        inner = self._log_inner_text_widget()
-        inner.bind("<Key>", self._on_log_key_readonly)
-        inner.bind("<<Paste>>", lambda _e: "break")
-        inner.bind("<<Cut>>", lambda _e: "break")
-        # Явно гасим вставку
-        for seq in ("<Control-v>", "<Control-V>", "<Shift-Insert>"):
-            try:
-                inner.bind(seq, lambda _e: "break")
-            except Exception:
-                pass
-
-    def _on_log_key_readonly(self, event):
-        keysym = event.keysym
-        # Ctrl+C, Ctrl+A, Ctrl+Insert (копирование)
-        if event.state & 0x4 and keysym.lower() in ("c", "a"):
-            return
-        if event.state & 0x4 and keysym == "Insert":
-            return
-        # Навигация и выделение
-        nav = ("Left", "Right", "Up", "Down", "Home", "End", "Next", "Prior")
-        if keysym == "Tab":
-            return "break"
-        if keysym in nav:
-            return
-        if event.state & 0x1 and keysym in nav:
-            return
-        # Не даём удалять/редактировать
-        if keysym in ("BackSpace", "Delete", "Return", "KP_Enter", "Linefeed"):
-            return "break"
-        if event.char and event.char.isprintable() and not (event.state & 0x4):
-            return "break"
-        return "break"
-
-    def copy_log_to_clipboard(self) -> None:
-        """Весь журнал в буфер (если мышью не копируется)."""
-        try:
-            txt = self.log_text.get("1.0", "end").strip()
-            if txt:
-                pyperclip.copy(txt)
-                self.log("📋 Весь журнал скопирован в буфер обмена (Ctrl+V)")
-            else:
-                self.log("⚠️ Журнал пуст")
-        except Exception as e:
-            self.log(f"❌ Не удалось скопировать журнал: {e}")
 
     def setup_main_window_drag_drop(self):
         """Drag & Drop файлов в главное окно (не только в виджет)."""
@@ -531,24 +614,34 @@ class PortalApp(ctk.CTk):
         return self.remote_peer_ip
 
     def _format_peer_probe_result(self, ip: str, ok: bool, code: str) -> tuple[str, str]:
-        """Текст и цвет для строки статуса пары (короткий для компактного UI)."""
+        """Текст и цвет для строки статуса пары."""
         if not ip:
-            return "⚪ Пара: укажи IP", "gray"
+            return "⚪ Пара: укажи IP и «Сохранить IP»", "gray"
         if ok:
-            return f"🟢 Пара ({ip}): онлайн", "#3dd68c"
+            return (
+                f"🟢 Пара ({ip}): Портал на :{PORTAL_PORT} отвечает",
+                "#3dd68c",
+            )
         if code == "refused":
-            return f"🔌 ({ip}): порт закрыт", "#e74c3c"
+            return (
+                f"🔌 Пара ({ip}): порт {PORTAL_PORT} закрыт — на том ПК «Запустить портал»",
+                "#e74c3c",
+            )
         if code == "timeout":
-            return f"⏱ ({ip}): таймаут", "#e67e22"
+            return (
+                f"⏱ Пара ({ip}): таймаут — Tailscale, IP или файрвол",
+                "#e67e22",
+            )
         if code == "dns":
-            return f"❓ ({ip}): DNS", "#e74c3c"
+            return f"❓ Пара ({ip}): адрес не найден (DNS)", "#e74c3c"
         if code == "bad_reply":
-            return f"⚠ ({ip}): не Портал", "#f39c12"
-        if code == "legacy_port_open":
-            return f"🟠 ({ip}): порт открыт, нет pong — обнови Портал на паре", "#e67e22"
+            return (
+                f"⚠ Пара ({ip}): порт открыт, но ответ не Портал",
+                "#f39c12",
+            )
         if code == "no_host":
             return "⚪ Пара: укажи IP", "gray"
-        return f"❌ ({ip}): {code}", "#e74c3c"
+        return f"❌ Пара ({ip}): ошибка ({code})", "#e74c3c"
 
     def _refresh_local_link_status_label(self) -> None:
         if not hasattr(self, "local_link_status_label"):
@@ -556,12 +649,18 @@ class PortalApp(ctk.CTk):
         if self.is_server_running:
             ip = self.tailscale_ip or "?"
             self.local_link_status_label.configure(
-                text=f"🟢 Приём: {ip}:{PORTAL_PORT}",
+                text=(
+                    f"🟢 Этот ПК принимает: {ip}:{PORTAL_PORT} "
+                    "(второй комп шлёт сюда файлы/буфер)"
+                ),
                 text_color="#3dd68c",
             )
         else:
             self.local_link_status_label.configure(
-                text=f"⏸ Приём: выключен (:{PORTAL_PORT})",
+                text=(
+                    f"⏸ Этот ПК не принимает — нажми «Запустить портал» "
+                    f"(слушать :{PORTAL_PORT})"
+                ),
                 text_color="#95a5a6",
             )
 
@@ -600,16 +699,13 @@ class PortalApp(ctk.CTk):
             return
 
         def worker():
-            steps: List[str] = []
-            ok, code = probe_portal_peer(ip, debug_steps=steps)
+            ok, code = probe_portal_peer(ip)
             msg_t, msg_c = self._format_peer_probe_result(ip, ok, code)
 
             def apply():
                 if hasattr(self, "peer_link_status_label"):
                     self.peer_link_status_label.configure(text=msg_t, text_color=msg_c)
                 if not silent:
-                    for line in steps:
-                        self.log(f"   {line}")
                     if ok:
                         self.log(
                             f"📡 Связь с парой: OK — {ip}:{PORTAL_PORT} "
@@ -617,19 +713,6 @@ class PortalApp(ctk.CTk):
                         )
                     else:
                         self.log(f"📡 Связь с парой: нет — {ip} ({code})")
-                        if code == "legacy_port_open":
-                            self.log(
-                                "💡 На :"
-                                + str(PORTAL_PORT)
-                                + " кто-то слушает, но не ответил на ping — почти всегда "
-                                "старая сборка Портала на втором ПК. Сделай там git pull / скачай заново."
-                            )
-                            self.log("💡 Файлы при этом могут передаваться — индикатор «pong» появится после обновления пары.")
-                        elif code == "timeout":
-                            self.log(
-                                "💡 Полный таймаут (нет TCP): сеть, ACL Tailscale, неверный IP или "
-                                f"файрвол. Проверь: `tailscale ping {ip}` и что на паре «Запустить портал»."
-                            )
 
             try:
                 self.after(0, apply)
@@ -639,11 +722,15 @@ class PortalApp(ctk.CTk):
         threading.Thread(target=worker, daemon=True).start()
     
     def log(self, message: str):
-        """Добавление сообщения в лог (поле остаётся копируемым — не disabled)."""
+        """Добавление сообщения в лог с автоскроллом вниз и ограничением строк"""
         self.log_text.configure(state="normal")
         timestamp = time.strftime("%H:%M:%S")
         self.log_text.insert("end", f"[{timestamp}] {message}\n")
+        lines = int(self.log_text.index("end-1c").split(".")[0])
+        if lines > self._log_max_lines:
+            self.log_text.delete("1.0", f"{lines - self._log_max_lines + 1}.0")
         self.log_text.see("end")
+        self.log_text.configure(state="disabled")
     
     def toggle_server(self):
         """Запуск/остановка сервера"""
@@ -707,7 +794,7 @@ class PortalApp(ctk.CTk):
         while self.is_server_running:
             try:
                 client_socket, addr = self.server_socket.accept()
-                self.log(f"🔗 Подключение от {addr[0]}")
+                self._log_from_thread(f"🔗 Подключение от {addr[0]}")
                 
                 # Обработка клиента в отдельном потоке
                 client_thread = threading.Thread(
@@ -721,57 +808,80 @@ class PortalApp(ctk.CTk):
                     self.log("❌ Ошибка приема подключения")
                 break
     
+    def _log_from_thread(self, message: str) -> None:
+        """Лог из потока accept/handle_client — только через главный поток Tk."""
+        try:
+            self.after(0, lambda m=message: self.log(m))
+        except Exception:
+            print(f"[Portal] {message}", flush=True)
+
     def handle_client(self, client_socket: socket.socket, addr):
         """Обработка клиентского подключения"""
         try:
-            data = client_socket.recv(1024).decode("utf-8")
-            message = json.loads(data)
-            
+            data = client_socket.recv(65536)
+            message, json_end = parse_first_json_object_bytes(data)
+            if not message:
+                self._log_from_thread("⚠️ Клиент прислал не-JSON (ожидался ping / метаданные файла)")
+                return
+
+            tail = data[json_end:] if json_end <= len(data) else b""
+
             if message.get("type") == "file":
-                self.receive_file(client_socket, message)
+                self.receive_file(client_socket, message, prefix=tail)
             elif message.get("type") == "clipboard":
                 self.receive_clipboard(message)
             elif message.get("type") == "get_clipboard":
                 self.send_clipboard_response(client_socket)
             elif message.get("type") == "ping":
-                self.log(f"📡 Ping от {addr[0]} → отправляю pong")
+                # Как в репо: отвечаем pong сразу (проверка «это Портал» с другого ПК)
                 pong = json.dumps(
                     {"type": "pong", "ok": True, "version": 1},
                     ensure_ascii=False,
                 )
                 client_socket.sendall(pong.encode("utf-8"))
-            
+                # Не спамим лог при авто-проверке каждые 20 с (тихий pong)
+
         except Exception as e:
-            self.log(f"❌ Ошибка обработки клиента: {str(e)}")
+            self._log_from_thread(f"❌ Ошибка обработки клиента: {str(e)}")
         finally:
             client_socket.close()
     
-    def receive_file(self, client_socket: socket.socket, message: dict):
-        """Прием файла"""
+    def receive_file(
+        self,
+        client_socket: socket.socket,
+        message: dict,
+        prefix: bytes = b"",
+    ):
+        """Прием файла; prefix — байты уже прочитанные после JSON в первом recv."""
         filename = message.get("filename", "received_file")
         filesize = message.get("filesize", 0)
-        
-        self.log(f"📥 Прием файла: {filename} ({filesize} байт)")
-        
+
+        self._log_from_thread(f"📥 Прием файла: {filename} ({filesize} байт)")
+
         # Создание папки для приема
         receive_dir = Path.home() / "Desktop" / "Portal_Received"
         receive_dir.mkdir(exist_ok=True)
-        
+
         filepath = receive_dir / filename
-        
-        # Прием файла
+
         with open(filepath, "wb") as f:
             remaining = filesize
+            chunk_buf = prefix
             while remaining > 0:
+                if chunk_buf:
+                    take = min(len(chunk_buf), remaining)
+                    f.write(chunk_buf[:take])
+                    chunk_buf = chunk_buf[take:]
+                    remaining -= take
+                    continue
                 chunk = client_socket.recv(min(8192, remaining))
                 if not chunk:
                     break
                 f.write(chunk)
                 remaining -= len(chunk)
-        
-        self.log(f"✅ Файл сохранен: {filepath}")
-        
-        # Подтверждение
+
+        self._log_from_thread(f"✅ Файл сохранен: {filepath}")
+
         client_socket.send(b"OK")
     
     def receive_clipboard(self, message: dict):
@@ -782,7 +892,9 @@ class PortalApp(ctk.CTk):
             pyperclip.copy(clipboard_text)
             self.last_clipboard = clipboard_text
             self.is_receiving_clipboard = False
-            self.log(f"📋 Буфер обмена обновлен ({len(clipboard_text)} символов)")
+            self._log_from_thread(
+                f"📋 Буфер обмена обновлен ({len(clipboard_text)} символов)"
+            )
     
     def send_clipboard_response(self, client_socket: socket.socket):
         """Отправка текущего локального буфера клиенту (запрос get_clipboard)"""
@@ -792,9 +904,11 @@ class PortalApp(ctk.CTk):
                 text = ""
             resp = json.dumps({"type": "clipboard", "text": text}, ensure_ascii=False)
             client_socket.sendall(resp.encode("utf-8"))
-            self.log(f"📋 Отправлен буфер по запросу ({len(text)} символов)")
+            self._log_from_thread(
+                f"📋 Отправлен буфер по запросу ({len(text)} символов)"
+            )
         except Exception as e:
-            self.log(f"❌ Ошибка ответа буфера: {str(e)}")
+            self._log_from_thread(f"❌ Ошибка ответа буфера: {str(e)}")
     
     def set_remote_peer_ip(self, ip: Optional[str]):
         """Сохранить IP второго компьютера (файл + поле в главном окне)."""
@@ -1092,32 +1206,29 @@ class PortalApp(ctk.CTk):
                 self.log(f"❌ Ошибка отправки буфера: {err_msg}")
     
     def start_clipboard_monitor(self):
-        """Запуск мониторинга буфера обмена"""
-        self.last_clipboard = pyperclip.paste()
-        self.clipboard_thread = threading.Thread(
-            target=self.clipboard_monitor_loop,
-            daemon=True
-        )
-        self.clipboard_thread.start()
-    
-    def clipboard_monitor_loop(self):
-        """Цикл мониторинга буфера обмена"""
-        while True:
-            try:
-                if not self.is_receiving_clipboard:
-                    current = pyperclip.paste()
-                    if current != self.last_clipboard:
-                        self.last_clipboard = current
-                        # Автоматическая синхронизация (если включена)
-                        if self.sync_clipboard_enabled and self.sync_target_ip:
-                            threading.Thread(
-                                target=self.send_clipboard,
-                                args=(self.sync_target_ip,),
-                                daemon=True
-                            ).start()
-            except:
-                pass
-            time.sleep(0.5)
+        """Мониторинг буфера на главном потоке (after) — без NSPasteboard warning"""
+        try:
+            self.last_clipboard = pyperclip.paste()
+        except Exception:
+            self.last_clipboard = ""
+        self._clipboard_tick()
+
+    def _clipboard_tick(self):
+        """Один тик проверки буфера — вызывается на главном потоке"""
+        try:
+            if not self.is_receiving_clipboard:
+                current = pyperclip.paste()
+                if current != self.last_clipboard:
+                    self.last_clipboard = current
+                    if self.sync_clipboard_enabled and self.sync_target_ip:
+                        threading.Thread(
+                            target=self.send_clipboard,
+                            args=(self.sync_target_ip,),
+                            daemon=True
+                        ).start()
+        except Exception:
+            pass
+        self.after(1000, self._clipboard_tick)
 
 
 if __name__ == "__main__":

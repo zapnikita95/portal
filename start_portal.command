@@ -48,6 +48,7 @@ fi
 
 echo "💡 Виджет: Cmd+Option+P | Буфер: Cmd+Shift+C отправить / Cmd+Shift+V забрать"
 echo "💡 Окно: Alt+тащить | Файл: Ctrl+клик по порталу | IP: двойной клик"
+echo "💡 Виджет: прозрачность через магенту #FF00FF (см. README). Свой цвет: PORTAL_WIDGET_CHROMA=#RRGGBB"
 echo ""
 
 # Очистка кеша (на случай старого .pyc)
