@@ -297,6 +297,15 @@ def main() -> None:
         return
     if main_nsevent():
         return
+    # Python 3.13: pynput на Darwin ловит TypeError: ThreadHandle is not callable — не используем.
+    if sys.version_info >= (3, 13) and sys.platform == "darwin":
+        print(
+            "e hotkey-helper: CGEventTap и NSEvent недоступны; на Python 3.13+ pynput на macOS отключён "
+            "(баг pynput). Проверь «Мониторинг ввода» для Portal.app и перезапусти приложение.",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise SystemExit(1)
     print("i fallback pynput", flush=True)
     main_pynput()
 

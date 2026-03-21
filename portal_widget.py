@@ -48,6 +48,32 @@ def _resolve_mac_hotkey_helper_script() -> Optional[Path]:
     p = here / "portal_mac_hotkey_helper.py"
     return p if p.is_file() else None
 
+
+def _mac_privacy_target_hint() -> str:
+    """
+    Кому выдавать «Мониторинг ввода» / «Универсальный доступ».
+    Собранный .app и `python3 portal.py` — разные записи в списках macOS.
+    """
+    if getattr(sys, "frozen", False):
+        try:
+            exe = Path(sys.executable).resolve()
+        except Exception:
+            exe = None
+        tail = (
+            f" ({exe})" if exe is not None else ""
+        )
+        return (
+            "Portal.app — тот бинарник, который реально запускаешь из dist/"
+            + tail
+            + ". После новой сборки PyInstaller иногда нужно **выключить и снова включить** "
+            "переключатель для Portal в списках (macOS привязывает права к идентичности приложения)."
+        )
+    return (
+        "тот интерпретатор, которым запускаешь Portal из исходников "
+        "(Python / Terminal.app / Cursor — как в списке «Мониторинг ввода»)"
+    )
+
+
 # Хромакей: Windows — почти чёрный; macOS — магента (#FF00FF), чтобы не съесть тёмные края портала
 # Свой цвет: PORTAL_WIDGET_CHROMA=#RRGGBB
 CHROMA_KEY_WIN = "#010101"
@@ -1895,14 +1921,21 @@ class GlobalHotkeyManager:
                         daemon=True,
                         name="portal-mac-hotkey-helper",
                     ).start()
+                    # В фокусе на окне Portal глобальный монитор чужого процесса клавиши не шлёт;
+                    # bind_all с CTk иногда не срабатывает — подключаем NSEvent local monitor (главный поток Tk).
+                    try:
+                        self.main_app.after(350, self._setup_nslocal_monitor)
+                    except Exception as e:
+                        self._log(f"after(local monitor 3.13+): {e}")
                     try:
                         self.main_app.after(2800, self._hotkey_helper_healthcheck)
                     except Exception:
                         pass
                     self._log(
-                        "⌛ macOS 3.13+: глобальные хоткеи — отдельный процесс "
-                        "(CGEventTap → NSEvent → pynput). Нужен «Мониторинг ввода» для Portal.app; "
-                        "после выдачи прав полностью перезапусти Portal."
+                        "⌛ macOS 3.13+: снаружи окна — helper (CGEventTap→NSEvent→pipe); "
+                        "внутри окна Portal — NSEvent local + Tk bind_all. "
+                        "Права «Мониторинг ввода»: "
+                        + _mac_privacy_target_hint()
                     )
         else:
             t = threading.Thread(target=self._run_win, daemon=True, name="portal-hotkeys-win")
@@ -1932,16 +1965,18 @@ class GlobalHotkeyManager:
             return "break"
 
         is_mac = platform.system() == "Darwin"
-        # CTk + Toplevel виджета — биндим на все корни, иначе часть событий теряется
+        # CTk + Toplevel виджета — биндим на все корни, иначе часть событий теряется.
+        # Сначала реальный Tk root (toplevel), затем main_app — так bind_all чаще ловит клавиши в CTk.
         roots: List[Any] = []
         try:
-            roots.append(self.main_app)
+            tl = self.main_app.winfo_toplevel()
+            if tl is not None:
+                roots.append(tl)
         except Exception:
             pass
         try:
-            tl = self.main_app.winfo_toplevel()
-            if tl not in roots:
-                roots.append(tl)
+            if self.main_app not in roots:
+                roots.append(self.main_app)
         except Exception:
             pass
         try:
@@ -2088,23 +2123,29 @@ class GlobalHotkeyManager:
                     "<Alt-Control-М>",
                 ]
 
-            # bind_all — один раз на весь процесс (иначе дубли)
-            primary = roots[0] if roots else self.main_app
-            for seq in toggle_seqs:
-                try:
-                    primary.bind_all(seq, _toggle)
-                except Exception:
-                    pass
-            for seq in push_seqs:
-                try:
-                    primary.bind_all(seq, _push)
-                except Exception:
-                    pass
-            for seq in pull_seqs:
-                try:
-                    primary.bind_all(seq, _pull)
-                except Exception:
-                    pass
+            # bind_all — на корневом Tk (и дублируем на main_app, если это другой объект — CTk/обёртки)
+            primaries = []
+            for w in (roots[0] if roots else None, self.main_app):
+                if w is not None and w not in primaries:
+                    primaries.append(w)
+            if not primaries:
+                primaries = [self.main_app]
+            for primary in primaries:
+                for seq in toggle_seqs:
+                    try:
+                        primary.bind_all(seq, _toggle)
+                    except Exception:
+                        pass
+                for seq in push_seqs:
+                    try:
+                        primary.bind_all(seq, _push)
+                    except Exception:
+                        pass
+                for seq in pull_seqs:
+                    try:
+                        primary.bind_all(seq, _pull)
+                    except Exception:
+                        pass
             # Дополнительно на Toplevel виджета (иногда CTk перехватывает фокус)
             for win in roots[1:]:
                 for seq in toggle_seqs:
@@ -2221,17 +2262,19 @@ class GlobalHotkeyManager:
         if proc is not None and proc.poll() is not None:
             rc = proc.returncode
             self._log(
-                f"⚠️ hotkey-helper завершился (код {rc}) — будет перезапущен автоматически. "
-                "Если ошибка повторяется: Системные настройки → Конфиденциальность → "
-                "«Мониторинг ввода» и «Универсальный доступ» → добавь Portal.app (или Python из терминала). "
-                "После добавления прав — ПЕРЕЗАПУСТИ Portal."
+                f"⚠️ hotkey-helper завершился (код {rc}) — супервизор перезапустит процесс. "
+                "Если цикл повторяется: Конфиденциальность → «Мониторинг ввода» + при необходимости "
+                "«Универсальный доступ» → "
+                + _mac_privacy_target_hint()
+                + " Полный выход из Portal (Cmd+Q) и запуск снова."
             )
             return
         # Процесс жив — монитор ещё не отрапортовал (нормально при медленной инициализации NSApp)
         self._log(
-            "⏳ Инициализация глобальных хоткеев... нажми Cmd+Ctrl+P вне окна Portal чтобы проверить. "
-            "Если не работает: Системные настройки → «Мониторинг ввода» + «Универсальный доступ» → "
-            "добавь Portal (или Python/Terminal) → ПЕРЕЗАПУСТИ Portal."
+            "⏳ Глобальный helper жив, но ещё не подтвердил монитор — подожди 1–2 с или нажми Cmd+Ctrl+P "
+            "**вне** окна Portal. Строка «✅ Глобальные хоткеи: NSEvent/CGEventTap» значит снаружи окна уже ок. "
+            "Внутри окна — NSEvent local + Tk; права TCC: "
+            + _mac_privacy_target_hint()
         )
 
     def _setup_nslocal_monitor(self) -> None:
@@ -2250,6 +2293,8 @@ class GlobalHotkeyManager:
                     mgr.main_app.after(0, lambda c=cmd: mgr._dispatch_local_hotkey(c))
                 except Exception:
                     pass
+                # Иначе то же нажатие дойдёт до Tk bind_all → двойной toggle/push/pull
+                return None
             return event
 
         try:
