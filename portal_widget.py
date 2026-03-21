@@ -2161,6 +2161,12 @@ class GlobalHotkeyManager:
                 self.main_app.after(25, self._poll_hotkey_queue)
             except Exception:
                 pass
+        # Дублирующий опрос pipe: на части сборок Tcl fileevent по pipe не срабатывает
+        if platform.system() == "Darwin" and self._hk_r is not None:
+            try:
+                self.main_app.after(30, self._poll_hotkey_queue)
+            except Exception:
+                pass
 
     def _mac_hotkey_pipe_readable(self, *_args) -> None:
         """Колбэк Tcl fileevent — всегда главный поток Tk."""
@@ -2406,6 +2412,8 @@ class GlobalHotkeyManager:
         env = os.environ.copy()
         env["PORTAL_HOTKEY_HELPER_SUBPROCESS"] = "1"
         env["PYTHONUNBUFFERED"] = "1"
+        # Прямая запись в pipe (обходит буферизацию stdout и гонки out_reader → надёжнее на Mac)
+        env["PORTAL_HOTKEY_PIPE_FD"] = str(int(hw))
         # Frozen: тот же бинарник + env → portal.py сразу уходит в helper (см. portal.py).
         if frozen:
             cmd: List[str] = [sys.executable]
@@ -2431,6 +2439,7 @@ class GlobalHotkeyManager:
                         text=True,
                         cwd=cwd,
                         close_fds=True,
+                        pass_fds=(int(hw),),
                         env=env,
                     )
                 except Exception as e:

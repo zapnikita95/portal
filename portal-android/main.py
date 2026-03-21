@@ -230,7 +230,7 @@ def _parse_json_header(data: bytes):
 # ── сервер приёма файлов ─────────────────────────────────────────────────────
 
 class ReceiveServer:
-    """TCP-сервер на порту 12345 — принимает файлы и текст от десктопного Portal."""
+    """TCP-сервер на порту 12345 - принимает файлы и текст от десктопного Portal."""
 
     def __init__(
         self,
@@ -242,7 +242,7 @@ class ReceiveServer:
         self.receive_dir = receive_dir or _default_receive_dir()
         self.saf_tree_uri = (saf_tree_uri or "").strip()
         self.secret = secret
-        self.on_event = on_event   # callback(kind, message) — вызывается через Clock
+        self.on_event = on_event   # callback(kind, message) - вызывается через Clock
         self._running  = False
         self._server: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
@@ -284,7 +284,7 @@ class ReceiveServer:
                 srv.listen(8)
                 srv.settimeout(1.0)
                 self._server = srv
-                self._emit("info", f"📡 Приём запущен на {PORTAL_PORT}")
+                self._emit("info", f"[*] Приём запущен на {PORTAL_PORT}")
                 while self._running:
                     try:
                         conn, addr = srv.accept()
@@ -296,7 +296,7 @@ class ReceiveServer:
                         target=self._handle, args=(conn, addr[0]), daemon=True
                     ).start()
             except Exception as e:
-                self._emit("error", f"Ошибка сервера: {e} — перезапуск через 5 с")
+                self._emit("error", f"Ошибка сервера: {e} - перезапуск через 5 с")
                 time.sleep(5.0)
             finally:
                 if srv:
@@ -329,7 +329,7 @@ class ReceiveServer:
             if secret:
                 msg_secret = (hdr.get("secret") or "").strip()
                 if msg_secret != secret:
-                    self._emit("warn", f"⚠️ {peer_ip}: неверный пароль — отклонено")
+                    self._emit("warn", f"[!] {peer_ip}: неверный пароль - отклонено")
                     try:
                         conn.sendall(b'{"type":"portal_auth_failed"}')
                     except Exception:
@@ -350,8 +350,8 @@ class ReceiveServer:
             if msg_type == "clipboard":
                 text = str(hdr.get("text") or "").strip()
                 if text:
-                    snippet = text[:80] + ("…" if len(text) > 80 else "")
-                    self._emit("receive_text", f"📋 Текст от {peer_ip}: «{snippet}»")
+                    snippet = text[:80] + ("..." if len(text) > 80 else "")
+                    self._emit("receive_text", f"Текст от {peer_ip}: {snippet!r}")
                 conn.close()
                 return
 
@@ -363,7 +363,7 @@ class ReceiveServer:
 
             conn.close()
         except Exception as e:
-            self._emit("error", f"⚠️ {peer_ip}: {e}")
+            self._emit("error", f"[!] {peer_ip}: {e}")
             try:
                 conn.close()
             except Exception:
@@ -404,7 +404,7 @@ class ReceiveServer:
                         f.write(chunk)
                         received += len(chunk)
                 if received < filesize:
-                    self._emit("error", f"⚠️ Файл {safe}: получено {received}/{filesize} байт")
+                    self._emit("error", f"[!] Файл {safe}: получено {received}/{filesize} байт")
                     return
                 out_java, _uri = create_document_output_stream(
                     self.saf_tree_uri, f"{ts}_{safe}"
@@ -412,12 +412,12 @@ class ReceiveServer:
                 if out_java is None:
                     self._emit(
                         "error",
-                        f"⚠️ Не удалось создать файл в выбранной папке (проводник): {safe}",
+                        f"[!] Не удалось создать файл в выбранной папке (проводник): {safe}",
                     )
                     return
                 try:
                     if not copy_path_to_java_stream(tmp_path, out_java):
-                        self._emit("error", f"⚠️ Ошибка записи в папку проводника: {safe}")
+                        self._emit("error", f"[!] Ошибка записи в папку проводника: {safe}")
                         return
                 finally:
                     close_java(out_java)
@@ -425,7 +425,7 @@ class ReceiveServer:
                 kb = max(1, filesize // 1024)
                 self._emit(
                     "receive_file",
-                    f"📥 Получен файл от {peer_ip}: {safe} ({kb} КБ) → папка (проводник)",
+                    f"[+] Получен файл от {peer_ip}: {safe} ({kb} КБ) -> папка (проводник)",
                 )
                 if is_android_runtime():
                     toast(f"Файл получен: {safe}", long=False)
@@ -453,14 +453,14 @@ class ReceiveServer:
                 kb = max(1, filesize // 1024)
                 self._emit(
                     "receive_file",
-                    f"📥 Получен файл от {peer_ip}: {safe} ({kb} КБ) → {save_dir}",
+                    f"[+] Получен файл от {peer_ip}: {safe} ({kb} КБ) -> {save_dir}",
                 )
                 if is_android_runtime():
                     toast(f"Файл получен: {safe}", long=False)
             else:
-                self._emit("error", f"⚠️ Файл {safe}: получено {received}/{filesize} байт")
+                self._emit("error", f"[!] Файл {safe}: получено {received}/{filesize} байт")
         except Exception as e:
-            self._emit("error", f"⚠️ Ошибка записи {safe}: {e}")
+            self._emit("error", f"[!] Ошибка записи {safe}: {e}")
         finally:
             if tmp_path and os.path.isfile(tmp_path):
                 try:
@@ -565,7 +565,7 @@ def _btn(text, bg=C_BLUE, height=dp(48), font_size=dp(14), **kwargs) -> Button:
 
 
 class PeerRow(BoxLayout):
-    """Строка: галочка · IP · подпись · удалить — компактная, без лишних полей."""
+    """Строка: галочка · IP · подпись · удалить - компактная, без лишних полей."""
 
     def __init__(self, ip="", name="", send=True, on_remove=None, **kwargs):
         super().__init__(**kwargs)
@@ -783,7 +783,7 @@ class PortalAndroidApp(App):
             )
         )
         self._conn_lbl = Label(
-            text="Проверка…",
+            text="Проверка...",
             font_size=dp(12),
             color=C_MUTED,
             size_hint_y=None,
@@ -845,8 +845,8 @@ class PortalAndroidApp(App):
         sec_card.add_widget(SectionTitle("Пароль сети"))
         sec_card.add_widget(
             Hint(
-                "Должен совпадать с паролем в настольном Portal: Настройки → Пароль. "
-                "Обновляется сразу после ввода — сохранять перед тестом не обязательно."
+                "Должен совпадать с паролем в настольном Portal: Настройки -> Пароль. "
+                "Обновляется сразу после ввода - сохранять перед тестом не обязательно."
             )
         )
         self._secret_field = _input("Пароль сети", password=False)
@@ -858,8 +858,8 @@ class PortalAndroidApp(App):
         recv_card.add_widget(SectionTitle("Папка для входящих файлов"))
         recv_card.add_widget(
             Hint(
-                "Файлы с ПК сохраняются сюда. По умолчанию — системная папка «Загрузки». "
-                "Кнопка «Выбрать папку» открывает проводник Android (можно создать папку там же)."
+                'Файлы с ПК сохраняются сюда. По умолчанию - системная папка "Загрузки". '
+                'Кнопка "Выбрать папку" открывает проводник Android (можно создать папку там же).'
             )
         )
         self._receive_dir_field = _input(
@@ -872,9 +872,9 @@ class PortalAndroidApp(App):
             height=dp(44),
             spacing=dp(8),
         )
-        pick_btn = _btn("📂 Выбрать папку", bg=C_BLUE, height=dp(44), font_size=dp(13))
+        pick_btn = _btn("Выбрать папку", bg=C_BLUE, height=dp(44), font_size=dp(13))
         pick_btn.bind(on_press=lambda *_: self._pick_receive_folder())
-        reset_btn = _btn("↺ Загрузки", bg=(0.18, 0.2, 0.28, 1), height=dp(44), font_size=dp(12))
+        reset_btn = _btn("Загрузки", bg=(0.18, 0.2, 0.28, 1), height=dp(44), font_size=dp(12))
         reset_btn.bind(on_press=lambda *_: self._reset_receive_folder_default())
         pick_row.add_widget(pick_btn)
         pick_row.add_widget(reset_btn)
@@ -884,9 +884,9 @@ class PortalAndroidApp(App):
         # ── Кнопки сохранить/проверить связь ──────────────────────────────
         act_card = Card()
         row1 = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(10))
-        save_btn = _btn("💾 Сохранить", bg=C_BLUE, height=dp(50))
+        save_btn = _btn("Сохранить", bg=C_BLUE, height=dp(50))
         save_btn.bind(on_press=lambda *_: self.save_settings())
-        ping_btn = _btn("🔗 Проверить связь", bg=(0.18, 0.38, 0.22, 1), height=dp(50))
+        ping_btn = _btn("Проверить связь", bg=(0.18, 0.38, 0.22, 1), height=dp(50))
         ping_btn.bind(on_press=lambda *_: self._ping_peers_bg())
         row1.add_widget(save_btn)
         row1.add_widget(ping_btn)
@@ -910,7 +910,7 @@ class PortalAndroidApp(App):
             padding=[dp(12), dp(10), dp(8), dp(8)],
         )
         test_card.add_widget(self._test_text)
-        send_txt_btn = _btn("Отправить текст →", bg=C_ACCENT, height=dp(48))
+        send_txt_btn = _btn("Отправить текст ->", bg=C_ACCENT, height=dp(48))
         send_txt_btn.bind(on_press=lambda *_: self.send_test_text())
         test_card.add_widget(send_txt_btn)
         body.add_widget(test_card)
@@ -948,7 +948,7 @@ class PortalAndroidApp(App):
 
         # ── Статусная строка ───────────────────────────────────────────────
         self._status_lbl = Label(
-            text="Сохраните настройки. Для отправки: «Поделиться» → Portal.",
+            text='Сохраните настройки. Для отправки: "Поделиться" -> Portal.',
             font_size=dp(12),
             color=C_MUTED,
             size_hint_y=None,
@@ -972,7 +972,7 @@ class PortalAndroidApp(App):
         if self._receive_dir_field:
             if self._receive_saf_uri:
                 self._receive_dir_field.text = (
-                    "📁 Папка выбрана в проводнике — нажми «💾 Сохранить»."
+                    'Папка выбрана в проводнике - нажми "Сохранить".'
                 )
             else:
                 rdir = cfg.get("receive_dir", "") or ""
@@ -987,7 +987,7 @@ class PortalAndroidApp(App):
     # ── on_start / on_stop ──────────────────────────────────────────────────
 
     def on_start(self):
-        # ВАЖНО: при старте из Share Sheet раньше не поднимали ReceiveServer — исправлено.
+        # ВАЖНО: при старте из Share Sheet раньше не поднимали ReceiveServer - исправлено.
         Clock.schedule_once(lambda _dt: self._start_receive_server(), 0.05)
         if kivy_platform == "android":
             try:
@@ -1119,8 +1119,8 @@ class PortalAndroidApp(App):
             if lbl:
                 lbl.color = C_OK
                 lbl.text = (
-                    f"✅ Связь: все {total} отвечают" if ok_n == total
-                    else f"⚡ Связь: {ok_n}/{total}"
+                    f"[OK] Связь: все {total} отвечают" if ok_n == total
+                    else f"[~] Связь: {ok_n}/{total}"
                 )
         else:
             if m:
@@ -1137,7 +1137,7 @@ class PortalAndroidApp(App):
                 elif reason == "noping":
                     lbl.text = "Проверка недоступна."
                 else:
-                    lbl.text = "⚠️ Нет ответа от ПК."
+                    lbl.text = "[!] Нет ответа от ПК."
 
     # ── Peers ───────────────────────────────────────────────────────────────
 
@@ -1177,10 +1177,7 @@ class PortalAndroidApp(App):
             if saf:
                 recv_dir = _default_receive_dir()
             else:
-                if recv_txt.startswith("📁"):
-                    recv_dir = _default_receive_dir()
-                else:
-                    recv_dir = recv_txt or _default_receive_dir()
+                recv_dir = recv_txt or _default_receive_dir()
 
             cfg = {
                 "peers": peers,
@@ -1200,9 +1197,9 @@ class PortalAndroidApp(App):
             n_send = sum(1 for p in peers if p.get("send"))
             dest_human = "папка из проводника" if saf else (recv_dir or _default_receive_dir())
             self._set_status(
-                f"Сохранено: {len(peers)} адрес(ов), отправка на {n_send}. Приём → {dest_human}"
+                f"Сохранено: {len(peers)} адрес(ов), отправка на {n_send}. Приём -> {dest_human}"
             )
-            self._log(f"💾 Настройки сохранены ({len(peers)} адрес(ов), пароль: {'да' if secret else 'нет'})")
+            self._log(f"Настройки сохранены ({len(peers)} адрес(ов), пароль: {'да' if secret else 'нет'})")
             if is_android_runtime():
                 toast("Настройки сохранены", long=False)
             Clock.schedule_once(lambda _dt: self._ping_peers_bg(), 0.4)
@@ -1227,9 +1224,9 @@ class PortalAndroidApp(App):
                 self._receive_saf_uri = uri.strip()
                 if self._receive_dir_field:
                     self._receive_dir_field.text = (
-                        "📁 Папка выбрана в проводнике — нажми «💾 Сохранить»."
+                        'Папка выбрана в проводнике - нажми "Сохранить".'
                     )
-                self._set_status("Папка выбрана. Нажми «💾 Сохранить».")
+                self._set_status('Папка выбрана. Нажми "Сохранить".')
             Clock.schedule_once(apply, 0)
 
         pick_receive_folder(on_uri)
@@ -1240,7 +1237,7 @@ class PortalAndroidApp(App):
         if self._receive_dir_field:
             self._receive_dir_field.text = d
         self._set_status(f"Сброс на Загрузки: {d}")
-        toast("Указана папка Загрузки — сохрани настройки", long=False)
+        toast("Указана папка Загрузки - сохрани настройки", long=False)
 
     def _set_status(self, msg: str) -> None:
         if self._status_lbl:
@@ -1276,11 +1273,11 @@ class PortalAndroidApp(App):
                     errs.append(f"{p.get('name') or p['ip']}: {err}")
             def done():
                 if oks == len(targets):
-                    msg = f"✅ Текст доставлен на {oks} ПК."
+                    msg = f"[OK] Текст доставлен на {oks} ПК."
                 elif oks:
-                    msg = f"⚡ Частично: {oks} ок, {'; '.join(errs[:2])}"
+                    msg = f"[~] Частично: {oks} ок, {'; '.join(errs[:2])}"
                 else:
-                    msg = f"❌ {'; '.join(errs[:2])}"
+                    msg = f"[X] {'; '.join(errs[:2])}"
                 self._set_status(msg)
                 self._log(msg)
             Clock.schedule_once(lambda _dt: done(), 0)
@@ -1304,7 +1301,7 @@ class PortalAndroidApp(App):
             finish_activity()
             return
         if not self._payload_ok(payload):
-            toast("Portal: пустой «Поделиться»", long=True)
+            toast('Portal: пустой "Поделиться"', long=True)
             finish_activity()
             return
         cfg = load_cfg()
@@ -1312,8 +1309,8 @@ class PortalAndroidApp(App):
         targets = peers_marked_for_send(peers)
         if not targets:
             toast(
-                "Нет адресов ПК. Открой Portal из иконки, добавь IP и «💾 Сохранить», "
-                "затем снова «Поделиться» → Portal.",
+                'Нет адресов ПК. Открой Portal из иконки, добавь IP и "Сохранить", '
+                'затем снова "Поделиться" -> Portal.',
                 long=True,
             )
             finish_activity()
@@ -1337,7 +1334,7 @@ class PortalAndroidApp(App):
         *,
         popup: Optional[Popup],
     ):
-        """Галочки по ПК + «Подтвердить» / «Отмена». popup=None — холодный Share (полный экран)."""
+        """Галочки по ПК + "Подтвердить" / "Отмена". popup=None - холодный Share (полный экран)."""
         cold_cancel = popup is None and self._share_boot
         checks: list = []
 
@@ -1346,11 +1343,11 @@ class PortalAndroidApp(App):
         nfiles = len(payload.file_paths)
         if nfiles:
             names = [os.path.basename(p) for p in payload.file_paths[:5]]
-            preview = "📎 " + ", ".join(names) + ("…" if nfiles > 5 else "")
+            preview = "[+] " + ", ".join(names) + ("..." if nfiles > 5 else "")
         else:
             tx = (payload.text or "").strip()
             preview = (
-                (f"📋 {tx[:220]}…" if len(tx) > 220 else f"📋 {tx}") if tx else "—"
+                (f"{tx[:220]}..." if len(tx) > 220 else f"{tx}") if tx else "-"
             )
 
         prev_lbl = Label(
@@ -1479,7 +1476,7 @@ class PortalAndroidApp(App):
 
         if not targets:
             toast(
-                "Добавь IP компьютера в Portal и «💾 Сохранить», затем повтори «Поделиться».",
+                'Добавь IP компьютера в Portal и "Сохранить", затем повтори "Поделиться".',
                 long=True,
             )
             finish_activity()
@@ -1506,7 +1503,7 @@ class PortalAndroidApp(App):
         if payload.text and not names:
             preview = (payload.text or "")[:40]
         else:
-            preview = ", ".join(names[:3]) + ("…" if len(names) > 3 else "")
+            preview = ", ".join(names[:3]) + ("..." if len(names) > 3 else "")
 
         layout = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(14))
         prog_lbl = Label(
@@ -1522,7 +1519,7 @@ class PortalAndroidApp(App):
             size=lambda inst, sz: setattr(inst, "text_size", (max(sz[0] - dp(8), dp(80)), None))
         )
         dest_lbl = Label(
-            text=f"→ {', '.join(p.get('name') or p['ip'] for p in targets[:2])}",
+            text=f"-> {', '.join(p.get('name') or p['ip'] for p in targets[:2])}",
             font_size=dp(12),
             color=C_MUTED,
             size_hint_y=None,
@@ -1533,7 +1530,7 @@ class PortalAndroidApp(App):
         layout.add_widget(dest_lbl)
 
         pop = Popup(
-            title="Отправка…",
+            title="Отправка...",
             content=layout,
             size_hint=(0.85, 0.38),
             auto_dismiss=False,
@@ -1550,37 +1547,37 @@ class PortalAndroidApp(App):
                 for fp in payload.file_paths:
                     fn = os.path.basename(fp)
                     Clock.schedule_once(
-                        lambda _dt, f=fn, n=name: setattr(prog_lbl, "text", f"📤 {f}\n→ {n}"),
+                        lambda _dt, f=fn, n=name: setattr(prog_lbl, "text", f"[^] {f}\n-> {n}"),
                         0,
                     )
                     ok, err = send_file_to_peer(ip, fp, secret=secret, portal_source=src)
                     if not ok:
-                        errs.append(f"{name}: {fn} — {err}")
+                        errs.append(f"{name}: {fn} - {err}")
                 if (payload.text or "").strip():
                     Clock.schedule_once(
-                        lambda _dt, n=name: setattr(prog_lbl, "text", f"📋 Текст → {n}"),
+                        lambda _dt, n=name: setattr(prog_lbl, "text", f"Текст -> {n}"),
                         0,
                     )
                     ok, err = send_text_clipboard(
                         ip, payload.text, secret=secret, portal_source=src
                     )
                     if not ok:
-                        errs.append(f"{name}: текст — {err}")
+                        errs.append(f"{name}: текст - {err}")
 
             def done():
                 pop.dismiss()
                 if errs:
                     msg = "; ".join(errs[:3])
                     if len(errs) > 3:
-                        msg += "…"
+                        msg += "..."
                     toast(f"Portal: {msg}", long=True)
-                    self._log(f"❌ Отправка: {msg}")
+                    self._log(f"[X] Отправка: {msg}")
                 else:
                     what = (
                         f"{n_files} файл(ов)" if n_files else ""
                     )
                     to   = ", ".join(p.get("name") or p["ip"] for p in targets[:2])
-                    msg  = f"✅ {what or 'Текст'} отправлен → {to}"
+                    msg  = f"[OK] {what or 'Текст'} отправлен -> {to}"
                     toast("Portal: отправлено", long=False)
                     self._log(msg)
                 finish_activity()
@@ -1593,22 +1590,22 @@ class PortalAndroidApp(App):
 
     def _help(self) -> None:
         text = (
-            "Portal — передача файлов и текста между Android и компьютером в одной сети "
+            "Portal - передача файлов и текста между Android и компьютером в одной сети "
             "(локальная сеть или Tailscale VPN).\n\n"
-            "Отправить с телефона на ПК\n"
-            "• «Поделиться» → Portal → отметь галочками ПК → «Подтвердить отправку».\n"
-            "• Или «Тест: отправить текст» в приложении.\n\n"
+            'Отправить с телефона на ПК\n'
+            '• "Поделиться" -> Portal -> отметь галочками ПК -> "Подтвердить отправку".\n'
+            '• Или "Тест: отправить текст" в приложении.\n\n'
             "Получить файл с ПК на телефон\n"
             "• Portal должен быть запущен (приём работает в фоне).\n"
-            "• Папка: по умолчанию «Загрузки»; кнопка «Выбрать папку» открывает проводник.\n"
-            "• После выбора папки нажми «💾 Сохранить».\n\n"
+            '• Папка: по умолчанию "Загрузки"; кнопка "Выбрать папку" открывает проводник.\n'
+            '• После выбора папки нажми "Сохранить".\n\n'
             "Адреса\n"
-            "• IP-адрес ПК отображается в шапке настольного Portal (часто 100.… в Tailscale).\n"
+            "• IP-адрес ПК отображается в шапке настольного Portal (часто 100.... в Tailscale).\n"
             "• Галочка рядом с адресом = разрешена отправка на этот ПК.\n\n"
             "Пароль\n"
-            "• Должен совпадать с настольным Portal: Настройки → Пароль.\n\n"
+            "• Должен совпадать с настольным Portal: Настройки -> Пароль.\n\n"
             "Связь\n"
-            "• Зелёный значок → ПК отвечает. Серый → ПК недоступен или не запущен приём.\n\n"
+            "• Зелёный значок -> ПК отвечает. Серый -> ПК недоступен или не запущен приём.\n\n"
             "Журнал активности\n"
             "• Все события (приём, отправка, ошибки) отображаются в журнале."
         )

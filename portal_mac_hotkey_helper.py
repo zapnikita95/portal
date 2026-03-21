@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from typing import Optional
 
 _KEY_P = 35
 _KEY_C = 8
@@ -37,7 +38,25 @@ def _is_legacy() -> bool:
     )
 
 
+def _pipe_write_fd() -> Optional[int]:
+    """Родитель передаёт fd записи в pipe (pass_fds) — без stdout/буферов и отдельного потока."""
+    raw = os.environ.get("PORTAL_HOTKEY_PIPE_FD", "").strip()
+    if raw.isdigit():
+        return int(raw)
+    return None
+
+
+_PIPE_HOTKEY_W: Optional[int] = _pipe_write_fd()
+
+
 def _emit(c: str) -> None:
+    fd = _PIPE_HOTKEY_W
+    if fd is not None:
+        try:
+            os.write(fd, c.encode("ascii"))
+            return
+        except Exception:
+            pass
     try:
         sys.stdout.write(c + "\n")
         sys.stdout.flush()
