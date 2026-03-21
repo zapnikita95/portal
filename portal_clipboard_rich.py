@@ -22,26 +22,97 @@ _MAX_IMAGE_SEND_BYTES = 48 * 1024 * 1024  # 48 МБ сырого PNG
 def _darwin_clipboard_file_paths() -> List[str]:
     """
     Файлы, скопированные в Finder / Cmd+C (NSPasteboard).
-    Pillow ImageGrab и pyperclip на macOS их не видят — без этого push хоткей шлёт текст/пусто.
+    Pillow ImageGrab на macOS часто отдаёт **превью-картинку**, а не путь — тогда уходит
+    «чужой» PNG вместо реального JPEG/файла; поэтому сначала именно типы файлов.
     """
     if platform.system() != "Darwin":
         return []
+    out: List[str] = []
+    seen: set[str] = set()
+
+    def _add(p: str) -> None:
+        p = (p or "").strip()
+        if not p:
+            return
+        try:
+            rp = str(Path(p).resolve())
+        except OSError:
+            rp = p
+        if os.path.isfile(rp) and rp not in seen:
+            seen.add(rp)
+            out.append(rp)
+
     try:
         from AppKit import NSPasteboard
         from Foundation import NSURL
+        from urllib.parse import unquote, urlparse
 
         pb = NSPasteboard.generalPasteboard()
         if pb is None:
             return []
+
+        # 1) Finder / Desktop: список путей (главный тип при «копировать файл»)
+        for ptype in ("NSFilenamesPboardType",):
+            try:
+                plist = pb.propertyListForType_(ptype)
+            except Exception:
+                plist = None
+            if plist is None:
+                continue
+            try:
+                seq = list(plist)
+            except TypeError:
+                seq = [plist]
+            for item in seq:
+                try:
+                    s = str(item)
+                    if os.path.isfile(s):
+                        _add(s)
+                except Exception:
+                    continue
+            if out:
+                return out
+
+        # 2) Элементы pasteboard: public.file-url (и варианты)
+        try:
+            items = pb.pasteboardItems()
+        except Exception:
+            items = None
+        if items:
+            for it in items:
+                for uti in (
+                    "public.file-url",
+                    "NSFilenamesPboardType",
+                    "public.url",
+                ):
+                    try:
+                        s = it.stringForType_(uti)
+                    except Exception:
+                        s = None
+                    if not s:
+                        continue
+                    s = str(s).strip()
+                    if s.startswith("file:"):
+                        try:
+                            path = unquote(urlparse(s).path)
+                        except Exception:
+                            continue
+                        if path and os.path.isfile(path):
+                            _add(path)
+                    elif os.path.isfile(s):
+                        _add(s)
+            if out:
+                return out
+
+        # 3) NSURL-объекты
         urls = pb.readObjectsForClasses_options_([NSURL], None)
         if urls:
-            out: List[str] = []
             for u in urls:
                 try:
                     if u.isFileURL():
                         p = str(u.path())
                         if p and os.path.isfile(p):
-                            out.append(p)
+                            _add(p)
                 except Exception:
                     continue
             if out:
@@ -94,6 +165,13 @@ def clipboard_snapshot() -> Tuple[ClipKind, Dict[str, Any]]:
     """
     Снимок буфера для отправки (Ctrl+Alt+C).
     """
+    # macOS: сначала файлы из NSPasteboard, потом Pillow — иначе grabclipboard()
+    # даёт растровое превью выделенного файла, а не сам файл (JPEG оказывается «не тот»).
+    if platform.system() == "Darwin":
+        dpaths = _darwin_clipboard_file_paths()
+        if dpaths:
+            return "files", {"paths": dpaths}
+
     try:
         from PIL import ImageGrab
 
@@ -105,11 +183,6 @@ def clipboard_snapshot() -> Tuple[ClipKind, Dict[str, Any]]:
         paths = [p for p in data if isinstance(p, str) and os.path.isfile(p)]
         if paths:
             return "files", {"paths": paths}
-
-    if platform.system() == "Darwin":
-        dpaths = _darwin_clipboard_file_paths()
-        if dpaths:
-            return "files", {"paths": dpaths}
 
     if data is not None and hasattr(data, "save"):
         try:
