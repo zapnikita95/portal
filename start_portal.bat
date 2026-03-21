@@ -71,6 +71,22 @@ if exist "__pycache__" (
     rmdir /s /q __pycache__ 2>nul
 )
 
+REM Проверка синтаксиса до запуска (сразу видно битый файл / конфликт OneDrive)
+echo 🔎 Проверка синтаксиса portal_widget.py...
+python -m py_compile portal_widget.py 2>nul
+if errorlevel 1 (
+    echo.
+    echo ❌ Ошибка в portal_widget.py ^(часто лишний отступ у if^)
+    echo    Скачай свежую версию: git pull
+    echo    Или открой portal_widget.py около строки 31 — блок debug_log_path должен быть с отступом 4 пробела.
+    echo.
+    python -m py_compile portal_widget.py
+    pause
+    exit /b 1
+)
+echo ✅ Синтаксис OK
+echo.
+
 REM Запуск БЕЗ --widget, т.к. теперь виджет запускается по умолчанию
 python portal.py
 
