@@ -33,6 +33,66 @@ def _load_all() -> Dict[str, Any]:
         return {}
 
 
+def default_receive_dir() -> Path:
+    """
+    Папка «Рабочий стол» по умолчанию.
+    На Windows часто Desktop в OneDrive — C:\\Users\\...\\Desktop может не существовать.
+    """
+    home = Path.home()
+    if sys.platform == "win32":
+        prof = Path(os.environ.get("USERPROFILE", str(home)))
+        candidates = [
+            prof / "OneDrive" / "Desktop",
+            prof / "OneDriveDesktop",  # редкий вариант
+            prof / "Desktop",
+            home / "Desktop",
+        ]
+        for p in candidates:
+            try:
+                if p.exists() and p.is_dir():
+                    return p
+            except OSError:
+                continue
+        # Создаём наиболее вероятный путь
+        target = prof / "Desktop"
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+    d = home / "Desktop"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    return d
+
+
+def load_receive_dir() -> Path:
+    data = _load_all()
+    raw = data.get("receive_dir")
+    if raw and str(raw).strip():
+        p = Path(str(raw).strip()).expanduser()
+        return p
+    return default_receive_dir()
+
+
+def save_receive_dir(path: Path) -> bool:
+    try:
+        p = Path(path).expanduser()
+        p.mkdir(parents=True, exist_ok=True)
+        try:
+            p = p.resolve()
+        except OSError:
+            pass
+        data = _load_all()
+        data["receive_dir"] = str(p)
+        cp = config_path()
+        cp.parent.mkdir(parents=True, exist_ok=True)
+        cp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        return True
+    except Exception as e:
+        print(f"[Portal] Ошибка сохранения receive_dir: {e}")
+        return False
+
+
 def load_remote_ip() -> Optional[str]:
     ip = _load_all().get("remote_ip")
     if not ip or not str(ip).strip():

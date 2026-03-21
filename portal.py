@@ -367,6 +367,36 @@ class PortalApp(ctk.CTk):
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(side="left", padx=(12, 0))
+
+        recv_block = ctk.CTkFrame(peer_frame, fg_color="transparent")
+        recv_block.pack(fill="x", padx=12, pady=(0, 10))
+        ctk.CTkLabel(
+            recv_block,
+            text="📁 Куда сохранять входящие файлы на ЭТОМ ПК:",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(anchor="w", pady=(0, 4))
+        recv_row = ctk.CTkFrame(recv_block, fg_color="transparent")
+        recv_row.pack(fill="x")
+        self.receive_dir_entry = ctk.CTkEntry(recv_row, width=420, font=ctk.CTkFont(size=11))
+        self.receive_dir_entry.pack(side="left", padx=(0, 8), fill="x", expand=True)
+        try:
+            self.receive_dir_entry.insert(0, str(portal_config.load_receive_dir()))
+        except Exception:
+            self.receive_dir_entry.insert(0, str(Path.home() / "Desktop"))
+        ctk.CTkButton(
+            recv_row,
+            text="Обзор…",
+            width=72,
+            command=self.choose_receive_dir,
+            font=ctk.CTkFont(size=11),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            recv_row,
+            text="Сохранить папку",
+            width=120,
+            command=self.save_receive_dir_from_ui,
+            font=ctk.CTkFont(size=11),
+        ).pack(side="left")
         
         # Кнопки управления
         button_frame = ctk.CTkFrame(main_frame)
@@ -527,6 +557,34 @@ class PortalApp(ctk.CTk):
                 self.peer_ip_entry.insert(0, text)
         finally:
             self.peer_ip_entry.bind("<KeyRelease>", self._on_peer_ip_edited)
+
+    def choose_receive_dir(self) -> None:
+        from tkinter import filedialog
+
+        cur = self.receive_dir_entry.get().strip() if hasattr(self, "receive_dir_entry") else ""
+        initial = cur if cur and os.path.isdir(cur) else str(portal_config.default_receive_dir())
+        d = filedialog.askdirectory(title="Папка для входящих файлов", initialdir=initial)
+        if d:
+            self.receive_dir_entry.delete(0, "end")
+            self.receive_dir_entry.insert(0, d)
+
+    def save_receive_dir_from_ui(self) -> None:
+        if not hasattr(self, "receive_dir_entry"):
+            return
+        raw = self.receive_dir_entry.get().strip()
+        if not raw:
+            self.log("⚠️ Укажи путь к папке")
+            return
+        p = Path(raw).expanduser()
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            self.log(f"❌ Не удалось создать папку: {e}")
+            return
+        if portal_config.save_receive_dir(p):
+            self.log(f"✅ Папка приёма сохранена: {p.resolve()}")
+        else:
+            self.log("❌ Не удалось записать настройку в config.json")
 
     def save_peer_ip_from_ui(self):
         """Сохранить IP второго ПК из поля ввода (в файл + в память)."""
@@ -853,14 +911,18 @@ class PortalApp(ctk.CTk):
         prefix: bytes = b"",
     ):
         """Прием файла; prefix — байты уже прочитанные после JSON в первом recv."""
-        filename = message.get("filename", "received_file")
+        raw_name = message.get("filename", "received_file")
+        filename = Path(str(raw_name)).name or "received_file"
         filesize = message.get("filesize", 0)
 
         self._log_from_thread(f"📥 Прием файла: {filename} ({filesize} байт)")
 
-        # Создание папки для приема
-        receive_dir = Path.home() / "Desktop" / "Portal_Received"
-        receive_dir.mkdir(exist_ok=True)
+        receive_dir = portal_config.load_receive_dir()
+        try:
+            receive_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            self._log_from_thread(f"❌ Не удалось создать папку приёма {receive_dir}: {e}")
+            raise
 
         filepath = receive_dir / filename
 

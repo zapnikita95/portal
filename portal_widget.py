@@ -10,8 +10,9 @@ import time
 import sys
 import platform
 from pathlib import Path
-from PIL import Image, ImageTk, ImageSequence, ImageDraw, ImageFilter
+from PIL import Image, ImageTk, ImageSequence
 import os
+import tempfile
 from typing import Optional, Any, List
 
 import portal_config
@@ -140,6 +141,7 @@ class PortalWidget:
         # GIF-кадры (открытие/статика)
         self.gif_frames: List[ImageTk.PhotoImage] = []
         self.gif_frames_raw: List[Image.Image] = []  # PIL-объекты для обратного воспроизведения
+        self._gif_frame_durations: List[int] = []
         self._last_photo: Optional[ImageTk.PhotoImage] = None  # держим ссылку, чтобы GC не удалил
 
         # Fallback-рисованный портал
@@ -274,38 +276,30 @@ class PortalWidget:
         try:
             gif = Image.open(gif_path)
             raw_frames: List[Image.Image] = []
+            durations: List[int] = []
 
             for frame in ImageSequence.Iterator(gif):
                 img = frame.convert("RGBA")
+                ms = int(frame.info.get("duration", 80) or 80)
+                if ms <= 0:
+                    ms = 80
+                durations.append(ms)
 
-                # Кроп до центрального квадрата
                 w, h = img.size
                 sq = min(w, h)
                 left = (w - sq) // 2
-                top  = (h - sq) // 2
+                top = (h - sq) // 2
                 img = img.crop((left, top, left + sq, top + sq))
-
-                # Ресайз до размера виджета
                 img = img.resize((self.size, self.size), Image.Resampling.LANCZOS)
 
-                # Антиалиасный круглый вырез — за пределами круга прозрачно
-                mask = Image.new("L", (self.size, self.size), 0)
-                draw = ImageDraw.Draw(mask)
-                margin = 4
-                draw.ellipse(
-                    [margin, margin, self.size - margin - 1, self.size - margin - 1],
-                    fill=255,
-                )
-                mask = mask.filter(ImageFilter.GaussianBlur(3))
-                img.putalpha(mask)
-
-                # Композиция на хромакей — тот же цвет, что -transparentcolor
+                # Без круговой маски+blur (зернистость); хромакей как фон для -transparentcolor
                 r, g, b = self._chroma_rgb
                 bg = Image.new("RGBA", (self.size, self.size), (r, g, b, 255))
                 composed = Image.alpha_composite(bg, img)
                 raw_frames.append(composed)
 
             self.gif_frames_raw = raw_frames
+            self._gif_frame_durations = durations
             master = self.root
             self.gif_frames = [
                 ImageTk.PhotoImage(f.convert("RGB"), master=master) for f in raw_frames
@@ -319,11 +313,30 @@ class PortalWidget:
 
     def _cancel_anim(self):
         if self._anim_after_id is not None:
-            try:
-                self.root.after_cancel(self._anim_after_id)
-            except Exception:
-                pass
+            for target in (getattr(self, "main_app", None), self.root):
+                if target is not None and hasattr(target, "after_cancel"):
+                    try:
+                        target.after_cancel(self._anim_after_id)
+                        break
+                    except Exception:
+                        continue
             self._anim_after_id = None
+
+    def _schedule_anim_ms(self, delay_ms: int, callback) -> None:
+        """Таймер анимации через главное окно — у скрытого Toplevel root.after часто не срабатывает."""
+        delay_ms = max(1, int(delay_ms))
+        try:
+            if self.main_app is not None and hasattr(self.main_app, "after"):
+                self._anim_after_id = self.main_app.after(delay_ms, callback)
+                return
+        except Exception:
+            pass
+        self._anim_after_id = self.root.after(delay_ms, callback)
+
+    def _gif_delay_for_idx(self, idx: int) -> int:
+        if self._gif_frame_durations and 0 <= idx < len(self._gif_frame_durations):
+            return max(16, self._gif_frame_durations[idx])
+        return max(16, self._anim_speed_ms)
 
     def _show_frame(self, idx: int):
         """Отрисовать один кадр на canvas."""
@@ -344,30 +357,53 @@ class PortalWidget:
                 self._draw_portal(cx, cy, r)
 
     def _animate_step(self):
-        """Один шаг анимации — вызывается через after()."""
+        """Один шаг анимации — планируется через main_app.after (надёжно при withdraw Toplevel)."""
         if self.anim_state == self.ANIM_HIDDEN:
             return
 
         total = len(self.gif_frames) if self.gif_frames else 20
 
+        # Пока открыт — цикл GIF
+        if self.anim_state == self.ANIM_OPEN and self.gif_frames:
+            self.anim_frame_idx = (self.anim_frame_idx + 1) % len(self.gif_frames)
+            self._show_frame(self.anim_frame_idx)
+            self._schedule_anim_ms(self._gif_delay_for_idx(self.anim_frame_idx), self._animate_step)
+            return
+
         self._show_frame(self.anim_frame_idx)
 
         if self.anim_state == self.ANIM_OPENING:
-            if self.anim_frame_idx < total - 1:
-                self.anim_frame_idx += 1
-                self._anim_after_id = self.root.after(self._anim_speed_ms, self._animate_step)
+            if self.gif_frames:
+                if self.anim_frame_idx < total - 1:
+                    d = self._gif_delay_for_idx(self.anim_frame_idx)
+                    self.anim_frame_idx += 1
+                    self._schedule_anim_ms(d, self._animate_step)
+                else:
+                    self.anim_state = self.ANIM_OPEN
+                    self._schedule_anim_ms(self._gif_delay_for_idx(self.anim_frame_idx), self._animate_step)
             else:
-                # Анимация открытия завершена — стоим на последнем кадре
-                self.anim_state = self.ANIM_OPEN
+                if self.anim_frame_idx < total - 1:
+                    self.anim_frame_idx += 1
+                    self._schedule_anim_ms(self._anim_speed_ms, self._animate_step)
+                else:
+                    self.anim_state = self.ANIM_OPEN
 
         elif self.anim_state == self.ANIM_CLOSING:
-            if self.anim_frame_idx > 0:
-                self.anim_frame_idx -= 1
-                self._anim_after_id = self.root.after(self._anim_speed_ms, self._animate_step)
+            if self.gif_frames:
+                if self.anim_frame_idx > 0:
+                    d = self._gif_delay_for_idx(self.anim_frame_idx)
+                    self.anim_frame_idx -= 1
+                    self._schedule_anim_ms(d, self._animate_step)
+                else:
+                    self.anim_state = self.ANIM_HIDDEN
+                    self.root.withdraw()
             else:
-                # Анимация закрытия завершена — скрыть окно
-                self.anim_state = self.ANIM_HIDDEN
-                self.root.withdraw()
+                if self.anim_frame_idx > 0:
+                    self.anim_frame_idx -= 1
+                    self._schedule_anim_ms(self._anim_speed_ms, self._animate_step)
+                else:
+                    self.anim_state = self.ANIM_HIDDEN
+                    self.root.withdraw()
 
     def start_opening_animation(self):
         """Запустить анимацию разворачивания (вызывается при init)."""
@@ -439,7 +475,7 @@ class PortalWidget:
         bind_drag(self.root)
         bind_drag(self.canvas)
 
-        self.canvas.bind("<Double-Button-1>", lambda e: self.show_settings())
+        self.canvas.bind("<Double-Button-1>", self.on_double_click_portal)
         self.canvas.bind("<Control-Button-1>", lambda e: self.on_portal_click())
         self.root.bind("<Button-3>", self.show_context_menu)
         self.canvas.bind("<Button-3>", self.show_context_menu)
@@ -524,6 +560,7 @@ class PortalWidget:
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label="IP удалённого ПК", command=self.show_ip_dialog)
         menu.add_command(label="Выбрать файл (Ctrl+клик)", command=self.on_portal_click)
+        menu.add_command(label="Картинка из буфера (двойной клик)", command=self.on_double_click_portal)
         menu.add_command(label="Скрыть", command=self.hide)
         menu.add_separator()
         menu.add_command(label="Выход", command=self.destroy)
@@ -591,6 +628,86 @@ class PortalWidget:
         files = filedialog.askopenfilenames(title="Выберите файлы для отправки")
         if files:
             self.send_files(list(files))
+
+    def on_double_click_portal(self, event=None):
+        """Двойной клик: если в буфере картинка — отправить; иначе выбор файла."""
+        try:
+            from PIL import ImageGrab
+        except ImportError:
+            self.on_portal_click()
+            return
+        try:
+            data = ImageGrab.grabclipboard()
+        except Exception as e:
+            if self.main_app and hasattr(self.main_app, "log"):
+                try:
+                    self.main_app.after(0, lambda m=str(e): self.main_app.log(f"⚠️ Буфер: {m}"))
+                except Exception:
+                    pass
+            self.on_portal_click()
+            return
+        if data is None:
+            self.on_portal_click()
+            return
+        if isinstance(data, Image.Image):
+            try:
+                fd, path = tempfile.mkstemp(prefix="portal_clip_", suffix=".png")
+                os.close(fd)
+                data.save(path, "PNG")
+            except Exception as e:
+                if self.main_app and hasattr(self.main_app, "log"):
+                    try:
+                        self.main_app.after(0, lambda m=str(e): self.main_app.log(f"⚠️ Картинка: {m}"))
+                    except Exception:
+                        pass
+                self.on_portal_click()
+                return
+            self._send_clipboard_image_path(path)
+            return
+        if isinstance(data, list):
+            paths = [p for p in data if isinstance(p, str) and os.path.isfile(p)]
+            if paths:
+                self.send_files(paths)
+                return
+        self.on_portal_click()
+
+    def _send_clipboard_image_path(self, path: str) -> None:
+        ip = self._resolve_peer_ip()
+        if not ip:
+            result: List[str] = []
+
+            def cb(addr: str):
+                result.append(addr)
+
+            self.show_ip_dialog_sync(cb)
+            if not result:
+                try:
+                    os.unlink(path)
+                except Exception:
+                    pass
+                return
+            ip = result[0].strip()
+            self.target_ip = ip
+            if self.main_app and hasattr(self.main_app, "set_remote_peer_ip"):
+                self.main_app.set_remote_peer_ip(ip)
+            else:
+                portal_config.save_remote_ip(ip)
+        if self.main_app and hasattr(self.main_app, "log"):
+            try:
+                self.main_app.after(0, lambda: self.main_app.log("📤 Картинка из буфера → отправка"))
+            except Exception:
+                pass
+        threading.Thread(target=self._send_file_then_unlink, args=(path, ip), daemon=True).start()
+
+    def _send_file_then_unlink(self, path: str, ip: str) -> None:
+        try:
+            if self.main_app and hasattr(self.main_app, "send_file"):
+                self.main_app.send_file(path, ip)
+        finally:
+            try:
+                os.unlink(path)
+            except Exception:
+                pass
 
     def _resolve_peer_ip(self) -> Optional[str]:
         ip = self.target_ip
@@ -709,17 +826,26 @@ class GlobalHotkeyManager:
         Биндим несколько вариантов написания.
         """
         def _toggle(e=None):
-            self._log("🔑 Tk bind: Cmd+Option+P → переключить виджет", "🔑")
+            if platform.system() == "Darwin":
+                self._log("🔑 Tk bind: Cmd+Option+P → переключить виджет", "🔑")
+            else:
+                self._log("🔑 Tk bind: Ctrl+Alt+P → переключить виджет", "🔑")
             self._toggle_ui()
             return "break"
 
         def _push(e=None):
-            self._log("🔑 Tk bind: Cmd+Shift+C → отправить буфер", "🔑")
+            if platform.system() == "Darwin":
+                self._log("🔑 Tk bind: Cmd+Shift+C → отправить буфер", "🔑")
+            else:
+                self._log("🔑 Tk bind: Ctrl+Alt+C → отправить буфер", "🔑")
             self._on_push()
             return "break"
 
         def _pull(e=None):
-            self._log("🔑 Tk bind: Cmd+Shift+V → получить буфер", "🔑")
+            if platform.system() == "Darwin":
+                self._log("🔑 Tk bind: Cmd+Shift+V → получить буфер", "🔑")
+            else:
+                self._log("🔑 Tk bind: Ctrl+Alt+V → получить буфер", "🔑")
             self._on_pull()
             return "break"
 
