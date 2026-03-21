@@ -26,9 +26,49 @@ import platform
 
 import portal_config
 
+# Порт протокола Портала (должен совпадать на всех машинах)
+PORTAL_PORT = 12345
+# Как часто обновлять статус «пара онлайн?» (мс)
+PEER_STATUS_POLL_MS = 20000
+
 # Настройка темы
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
+
+
+def probe_portal_peer(host: str, port: int = PORTAL_PORT, timeout: float = 3.0) -> tuple[bool, str]:
+    """
+    Проверка, что на host действительно отвечает Портал (ping → pong).
+    Возвращает (успех, код): код — ok | refused | timeout | bad_reply | dns | error
+    """
+    host = (host or "").strip()
+    if not host:
+        return False, "no_host"
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect((host, port))
+        s.sendall(json.dumps({"type": "ping"}, ensure_ascii=False).encode("utf-8"))
+        data = s.recv(4096)
+        s.close()
+        if not data:
+            return False, "bad_reply"
+        msg = json.loads(data.decode("utf-8", errors="replace"))
+        if msg.get("type") == "pong":
+            return True, "ok"
+        return False, "bad_reply"
+    except ConnectionRefusedError:
+        return False, "refused"
+    except socket.timeout:
+        return False, "timeout"
+    except socket.gaierror:
+        return False, "dns"
+    except OSError:
+        return False, "error"
+    except json.JSONDecodeError:
+        return False, "bad_reply"
+    except Exception:
+        return False, "error"
 
 
 class PortalApp(ctk.CTk):
@@ -190,7 +230,7 @@ class PortalApp(ctk.CTk):
         ).pack(anchor="w", padx=12, pady=(0, 4))
         ctk.CTkLabel(
             peer_frame,
-            text="💡 Указывай только IP (например 100.65.63.84), порт :12345 добавляется автоматически.",
+            text=f"💡 Указывай только IP (например 100.65.63.84), порт :{PORTAL_PORT} добавляется автоматически.",
             font=ctk.CTkFont(size=11),
             text_color="gray70",
         ).pack(anchor="w", padx=12, pady=(0, 8))
@@ -241,6 +281,49 @@ class PortalApp(ctk.CTk):
             justify="left",
             anchor="w",
         ).pack(anchor="w")
+
+        # Статус связи с парой (ping/pong к Порталу на другом ПК)
+        self._peer_poll_job = None
+        conn_frame = ctk.CTkFrame(peer_frame, fg_color="transparent")
+        conn_frame.pack(fill="x", padx=12, pady=(4, 10))
+        ctk.CTkLabel(
+            conn_frame,
+            text="📡 Статус связи",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", pady=(0, 4))
+        self.local_link_status_label = ctk.CTkLabel(
+            conn_frame,
+            text="⏸ Локальный приём: неизвестно",
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+            justify="left",
+            anchor="w",
+        )
+        self.local_link_status_label.pack(anchor="w")
+        self.peer_link_status_label = ctk.CTkLabel(
+            conn_frame,
+            text="⚪ Пара: укажи IP и нажми «Сохранить IP»",
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+            justify="left",
+            anchor="w",
+        )
+        self.peer_link_status_label.pack(anchor="w", pady=(2, 6))
+        probe_row = ctk.CTkFrame(conn_frame, fg_color="transparent")
+        probe_row.pack(anchor="w", fill="x")
+        ctk.CTkButton(
+            probe_row,
+            text="🔄 Проверить связь",
+            width=160,
+            command=lambda: self.check_peer_connection_async(silent=False),
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left")
+        ctk.CTkLabel(
+            probe_row,
+            text=f"авто каждые {PEER_STATUS_POLL_MS // 1000} с, если указан IP",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+        ).pack(side="left", padx=(12, 0))
         
         # Кнопки управления
         button_frame = ctk.CTkFrame(main_frame)
@@ -299,6 +382,10 @@ class PortalApp(ctk.CTk):
         self.log_text.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self.log_text.insert("1.0", "Готов к работе...\n")
         self.log_text.configure(state="disabled")
+
+        self._refresh_local_link_status_label()
+        self.after(800, lambda: self.check_peer_connection_async(silent=True))
+        self._arm_peer_poll()
 
     def setup_main_window_drag_drop(self):
         """Drag & Drop файлов в главное окно (не только в виджет)."""
@@ -438,6 +525,8 @@ class PortalApp(ctk.CTk):
                     self._peer_ip_entry_set_silent(ip)
                 except Exception as e:
                     self.log(f"⚠️ Не удалось обновить поле ввода: {e}")
+                self.check_peer_connection_async(silent=False)
+                self._arm_peer_poll()
             else:
                 self.log(f"❌ ОШИБКА: IP не сохранился!")
                 self.log(f"   Введено: {ip}")
@@ -471,6 +560,122 @@ class PortalApp(ctk.CTk):
                     text="❌ Ошибка записи",
                     text_color="#e74c3c",
                 )
+
+    def _peer_ip_for_probe(self) -> Optional[str]:
+        """IP для ручной проверки: сначала поле ввода, иначе сохранённый."""
+        if hasattr(self, "peer_ip_entry"):
+            t = self.peer_ip_entry.get().strip()
+            if t:
+                return t
+        return self.remote_peer_ip
+
+    def _format_peer_probe_result(self, ip: str, ok: bool, code: str) -> tuple[str, str]:
+        """Текст и цвет для строки статуса пары."""
+        if not ip:
+            return "⚪ Пара: укажи IP и «Сохранить IP»", "gray"
+        if ok:
+            return (
+                f"🟢 Пара ({ip}): Портал на :{PORTAL_PORT} отвечает",
+                "#3dd68c",
+            )
+        if code == "refused":
+            return (
+                f"🔌 Пара ({ip}): порт {PORTAL_PORT} закрыт — на том ПК «Запустить портал»",
+                "#e74c3c",
+            )
+        if code == "timeout":
+            return (
+                f"⏱ Пара ({ip}): таймаут — Tailscale, IP или файрвол",
+                "#e67e22",
+            )
+        if code == "dns":
+            return f"❓ Пара ({ip}): адрес не найден (DNS)", "#e74c3c"
+        if code == "bad_reply":
+            return (
+                f"⚠ Пара ({ip}): порт открыт, но ответ не Портал",
+                "#f39c12",
+            )
+        if code == "no_host":
+            return "⚪ Пара: укажи IP", "gray"
+        return f"❌ Пара ({ip}): ошибка ({code})", "#e74c3c"
+
+    def _refresh_local_link_status_label(self) -> None:
+        if not hasattr(self, "local_link_status_label"):
+            return
+        if self.is_server_running:
+            ip = self.tailscale_ip or "?"
+            self.local_link_status_label.configure(
+                text=(
+                    f"🟢 Этот ПК принимает: {ip}:{PORTAL_PORT} "
+                    "(второй комп шлёт сюда файлы/буфер)"
+                ),
+                text_color="#3dd68c",
+            )
+        else:
+            self.local_link_status_label.configure(
+                text=(
+                    f"⏸ Этот ПК не принимает — нажми «Запустить портал» "
+                    f"(слушать :{PORTAL_PORT})"
+                ),
+                text_color="#95a5a6",
+            )
+
+    def _cancel_peer_poll(self) -> None:
+        if getattr(self, "_peer_poll_job", None) is not None:
+            try:
+                self.after_cancel(self._peer_poll_job)
+            except Exception:
+                pass
+            self._peer_poll_job = None
+
+    def _arm_peer_poll(self) -> None:
+        self._cancel_peer_poll()
+        if not self.remote_peer_ip:
+            return
+        self._peer_poll_job = self.after(PEER_STATUS_POLL_MS, self._peer_poll_tick)
+
+    def _peer_poll_tick(self) -> None:
+        self._peer_poll_job = None
+        if self.remote_peer_ip:
+            self.check_peer_connection_async(silent=True)
+        if self.remote_peer_ip:
+            self._arm_peer_poll()
+
+    def check_peer_connection_async(self, silent: bool = False) -> None:
+        """Фоновый ping → pong к Порталу на другой машине; обновляет подпись под IP."""
+        ip = self._peer_ip_for_probe()
+        if not ip:
+            self.after(
+                0,
+                lambda: self.peer_link_status_label.configure(
+                    text="⚪ Пара: укажи IP и «Сохранить IP»",
+                    text_color="gray",
+                ),
+            )
+            return
+
+        def worker():
+            ok, code = probe_portal_peer(ip)
+            msg_t, msg_c = self._format_peer_probe_result(ip, ok, code)
+
+            def apply():
+                if hasattr(self, "peer_link_status_label"):
+                    self.peer_link_status_label.configure(text=msg_t, text_color=msg_c)
+                if not silent:
+                    if ok:
+                        self.log(
+                            f"📡 Связь с парой: OK — {ip}:{PORTAL_PORT} "
+                            f"(это Портал, ответ pong)"
+                        )
+                    else:
+                        self.log(f"📡 Связь с парой: нет — {ip} ({code})")
+
+            try:
+                self.after(0, apply)
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
     
     def log(self, message: str):
         """Добавление сообщения в лог"""
@@ -496,7 +701,7 @@ class PortalApp(ctk.CTk):
         try:
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.server_socket.bind(("0.0.0.0", 12345))
+            self.server_socket.bind(("0.0.0.0", PORTAL_PORT))
             self.server_socket.listen(5)
             self.is_server_running = True
             
@@ -507,10 +712,12 @@ class PortalApp(ctk.CTk):
             self.send_button.configure(state="normal")
             self.clipboard_button.configure(state="normal")
             self.status_label.configure(
-                text=f"✅ Портал активен на {self.tailscale_ip}:12345",
+                text=f"✅ Портал активен на {self.tailscale_ip}:{PORTAL_PORT}",
                 text_color="green"
             )
-            self.log(f"✅ Портал запущен на {self.tailscale_ip}:12345")
+            self.log(f"✅ Портал запущен на {self.tailscale_ip}:{PORTAL_PORT}")
+            self._refresh_local_link_status_label()
+            self._arm_peer_poll()
         except Exception as e:
             self.log(f"❌ Ошибка запуска: {str(e)}")
             self.is_server_running = False
@@ -532,6 +739,8 @@ class PortalApp(ctk.CTk):
             text_color="gray"
         )
         self.log("⏸ Портал остановлен")
+        self._cancel_peer_poll()
+        self._refresh_local_link_status_label()
     
     def server_loop(self):
         """Основной цикл сервера"""
@@ -565,6 +774,13 @@ class PortalApp(ctk.CTk):
                 self.receive_clipboard(message)
             elif message.get("type") == "get_clipboard":
                 self.send_clipboard_response(client_socket)
+            elif message.get("type") == "ping":
+                # Лёгкая проверка «это наш Портал» для индикатора связи
+                pong = json.dumps(
+                    {"type": "pong", "ok": True, "version": 1},
+                    ensure_ascii=False,
+                )
+                client_socket.sendall(pong.encode("utf-8"))
             
         except Exception as e:
             self.log(f"❌ Ошибка обработки клиента: {str(e)}")
@@ -665,8 +881,8 @@ class PortalApp(ctk.CTk):
             _log(f"📥 Запрос буфера с {target_ip}...")
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client_socket.settimeout(30)
-            client_socket.connect((target_ip, 12345))
-            _log(f"✅ Подключение установлено: {target_ip}:12345")
+            client_socket.connect((target_ip, PORTAL_PORT))
+            _log(f"✅ Подключение установлено: {target_ip}:{PORTAL_PORT}")
             client_socket.send(json.dumps({"type": "get_clipboard"}).encode("utf-8"))
             buf = b""
             message = None
@@ -805,8 +1021,8 @@ class PortalApp(ctk.CTk):
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client_socket.settimeout(10)  # Таймаут 10 секунд
             try:
-                client_socket.connect((target_ip, 12345))
-                self.log(f"✅ Подключение установлено: {target_ip}:12345")
+                client_socket.connect((target_ip, PORTAL_PORT))
+                self.log(f"✅ Подключение установлено: {target_ip}:{PORTAL_PORT}")
             except socket.timeout:
                 self.log(f"❌ Таймаут подключения к {target_ip}")
                 self.log("💡 Проверь:")
@@ -815,7 +1031,7 @@ class PortalApp(ctk.CTk):
                 self.log("   3. Оба ПК в одной сети (Tailscale или LAN)")
                 return
             except ConnectionRefusedError:
-                self.log(f"❌ Подключение отклонено: {target_ip}:12345")
+                self.log(f"❌ Подключение отклонено: {target_ip}:{PORTAL_PORT}")
                 self.log("💡 На втором ПК должен быть нажат «Запустить портал»")
                 return
             except OSError as e:
@@ -882,8 +1098,8 @@ class PortalApp(ctk.CTk):
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client_socket.settimeout(10)
             try:
-                client_socket.connect((target_ip, 12345))
-                self.log(f"✅ Подключение установлено: {target_ip}:12345")
+                client_socket.connect((target_ip, PORTAL_PORT))
+                self.log(f"✅ Подключение установлено: {target_ip}:{PORTAL_PORT}")
             except (socket.timeout, ConnectionRefusedError, OSError) as e:
                 if isinstance(e, socket.timeout):
                     self.log(f"❌ Таймаут подключения к {target_ip}")
@@ -967,6 +1183,10 @@ if __name__ == "__main__":
             app.log("✅ Виджет скрыт по умолчанию — Ctrl+Alt+P (Win) / Cmd+Option+P (Mac) чтобы показать")
             app.log("💡 IP второго ПК вводится один раз в поле выше → «Сохранить IP»")
             app.log("⌨️ Смотри строки «⌨️ …» ниже: если жмёшь хоткей — должны появляться сообщения.")
+            app.log(
+                "📡 Под IP — блок «Статус связи»: зелёный = второй ПК отвечает как Портал; "
+                "серый/красный = там не запущен приём или неверный адрес."
+            )
         except Exception as e:
             app.log(f"⚠️ Не удалось создать виджет: {str(e)}")
             import traceback
