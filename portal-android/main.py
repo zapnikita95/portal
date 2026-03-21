@@ -489,51 +489,81 @@ def _btn(text, bg=C_BLUE, height=dp(48), font_size=dp(14), **kwargs) -> Button:
 
 
 class PeerRow(BoxLayout):
+    """Строка: галочка · IP · подпись · удалить — компактная, без лишних полей."""
+
     def __init__(self, ip="", name="", send=True, on_remove=None, **kwargs):
         super().__init__(**kwargs)
-        self.orientation  = "horizontal"
-        self.spacing      = dp(6)
-        self.size_hint_y  = None
-        self.height       = dp(52)
-        self._on_remove   = on_remove
+        self.orientation = "vertical"
+        self.spacing     = dp(4)
+        self.size_hint_y = None
+        self.padding     = [dp(8), dp(8), dp(8), dp(8)]
+        self.bind(minimum_height=self.setter("height"))
+        self._on_remove = on_remove
 
+        # Нарисуем тёмный фон строки
+        with self.canvas.before:
+            Color(*C_CARD)
+            self._bg = RoundedRectangle(radius=[dp(10)])
+        self.bind(pos=lambda *_: setattr(self._bg, "pos", self.pos),
+                  size=lambda *_: setattr(self._bg, "size", self.size))
+
+        # Строка 1: галочка + IP
+        row1 = BoxLayout(orientation="horizontal", spacing=dp(8),
+                         size_hint_y=None, height=dp(44))
+
+        chk_wrap = AnchorLayout(size_hint=(None, 1), width=dp(40))
         self.chk_send = CheckBox(
-            size_hint=(None, None), size=(dp(34), dp(34)), active=send
+            size_hint=(None, None), size=(dp(32), dp(32)), active=send
         )
         self.chk_send.color = C_ACCENT
-        wrap = AnchorLayout(size_hint=(None, 1), width=dp(42))
-        wrap.add_widget(self.chk_send)
-        self.add_widget(wrap)
+        chk_wrap.add_widget(self.chk_send)
+        row1.add_widget(chk_wrap)
 
         self.ip_input = TextInput(
-            hint_text="IP (100.…)",
+            hint_text="IP адрес (напр. 100.65.63.84)",
             text=ip,
             multiline=False,
             write_tab=False,
-            size_hint_x=0.46,
+            size_hint_x=1,
             background_color=C_INPUT,
             foreground_color=C_TEXT,
             hint_text_color=C_MUTED,
-            padding=[dp(10), dp(12), dp(8), dp(8)],
+            font_size=dp(13),
+            padding=[dp(10), dp(11), dp(8), dp(8)],
         )
+        row1.add_widget(self.ip_input)
+        self.add_widget(row1)
+
+        # Строка 2: подпись + кнопка удалить
+        row2 = BoxLayout(orientation="horizontal", spacing=dp(8),
+                         size_hint_y=None, height=dp(38))
+        row2.add_widget(BoxLayout(size_hint=(None, 1), width=dp(40)))  # отступ под галочку
+
         self.name_input = TextInput(
-            hint_text="Подпись",
+            hint_text="Подпись (необязательно)",
             text=name,
             multiline=False,
             write_tab=False,
-            size_hint_x=0.35,
+            size_hint_x=1,
             background_color=C_INPUT,
             foreground_color=C_TEXT,
             hint_text_color=C_MUTED,
-            padding=[dp(10), dp(12), dp(8), dp(8)],
+            font_size=dp(12),
+            padding=[dp(10), dp(9), dp(8), dp(8)],
         )
-        rm = _btn("✕", bg=(0.38, 0.16, 0.16, 1), height=dp(40), font_size=dp(14))
-        rm.size_hint_x = None
-        rm.width = dp(40)
+        row2.add_widget(self.name_input)
+
+        rm = Button(
+            text="✕ Удалить",
+            size_hint=(None, 1),
+            width=dp(90),
+            background_color=(0.42, 0.12, 0.12, 1),
+            color=C_TEXT,
+            font_size=dp(12),
+        )
         rm.bind(on_press=lambda *_: self._do_remove())
-        self.add_widget(self.ip_input)
-        self.add_widget(self.name_input)
-        self.add_widget(rm)
+        row2.add_widget(rm)
+        self.add_widget(row2)
 
     def _do_remove(self):
         if self._on_remove:

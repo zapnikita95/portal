@@ -1756,6 +1756,7 @@ class GlobalHotkeyManager:
         self._last_pull_debounce = 0.0
         self._hotkey_helper_proc: Optional[Any] = None
         self._hotkey_pipe_got_byte = False
+        self._helper_nsevent_active = False
         # macOS: чтение pipe через Tk fileevent — иначе after(25) замирает при свёрнутом окне
         self._mac_pipe_fileevent_installed = False
 
@@ -1861,8 +1862,8 @@ class GlobalHotkeyManager:
                     except Exception:
                         pass
                     self._log(
-                        "✅ macOS 3.13+: глобальные хоткеи — отдельный процесс pynput (без краша Tk). "
-                        "Нужны Input Monitoring + Accessibility для Python/Терминала"
+                        "⌛ macOS 3.13+: запуск глобальных хоткеев (NSEvent → pynput fallback). "
+                        "Нужны права «Мониторинг ввода» + «Универсальный доступ» для Portal.app"
                     )
         else:
             t = threading.Thread(target=self._run_win, daemon=True, name="portal-hotkeys-win")
@@ -2163,32 +2164,29 @@ class GlobalHotkeyManager:
             pass
 
     def _hotkey_helper_healthcheck(self) -> None:
-        """Через ~3 с: не путаем «ещё не жали хоткей» с ошибкой прав."""
+        """Через ~3 с: диагностика без ложных срабатываний."""
         if platform.system() != "Darwin" or sys.version_info < (3, 13):
             return
-        if os.environ.get("PORTAL_MAC_NO_HOTKEY_HELPER", "").strip() in (
-            "1",
-            "true",
-            "yes",
-        ):
+        if os.environ.get("PORTAL_MAC_NO_HOTKEY_HELPER", "").strip() in ("1", "true", "yes"):
             return
-        if self._hotkey_pipe_got_byte:
+        # Всё хорошо: монитор активен или уже пришёл хоткей
+        if self._hotkey_pipe_got_byte or self._helper_nsevent_active:
             return
         proc = self._hotkey_helper_proc
         if proc is not None and proc.poll() is not None:
             rc = proc.returncode
             self._log(
-                f"⚠️ hotkey-helper не запущен или сразу вышел (код {rc}). "
-                "Права «Мониторинг ввода» и «Универсальный доступ» должны быть у **того же приложения**, "
-                "что запускает Портал: для **Portal.app** — именно Portal в списке; из Терминала — Python/Terminal. "
-                "Смотри stderr в журнале выше (строки hotkey-helper)."
+                f"⚠️ hotkey-helper завершился (код {rc}) — будет перезапущен автоматически. "
+                "Если ошибка повторяется: Системные настройки → Конфиденциальность → "
+                "«Мониторинг ввода» и «Универсальный доступ» → добавь Portal.app (или Python из терминала). "
+                "После добавления прав — ПЕРЕЗАПУСТИ Portal."
             )
             return
-        # Процесс жив, но байт в pipe ещё не было — это нормально, если хоткей не нажимали
+        # Процесс жив — монитор ещё не отрапортовал (нормально при медленной инициализации NSApp)
         self._log(
-            "💡 Глобальный хоткей после старта ещё не ловили — нажми Cmd+Ctrl+P **вне** окна Portal "
-            "(или LEGACY: Cmd+Option+P). Если не срабатывает: Системные настройки → Конфиденциальность → "
-            "«Мониторинг ввода» и «Универсальный доступ» → включи **Portal** (для .app) или Python (из IDE/терминала)."
+            "⏳ Инициализация глобальных хоткеев... нажми Cmd+Ctrl+P вне окна Portal чтобы проверить. "
+            "Если не работает: Системные настройки → «Мониторинг ввода» + «Универсальный доступ» → "
+            "добавь Portal (или Python/Terminal) → ПЕРЕЗАПУСТИ Portal."
         )
 
     def _setup_nslocal_monitor(self) -> None:
@@ -2434,17 +2432,29 @@ class GlobalHotkeyManager:
                         if not p.stdout:
                             return
                         for line in p.stdout:
-                            c = (line or "").strip().lower()
-                            if len(c) == 1 and c in "tcv":
+                            c = (line or "").strip()
+                            cl = c.lower()
+                            if len(c) == 1 and cl in "tcv":
                                 try:
-                                    os.write(hw, c.encode("ascii"))
-                                except (
-                                    OSError,
-                                    BlockingIOError,
-                                    TypeError,
-                                    ValueError,
-                                ):
+                                    os.write(hw, cl.encode("ascii"))
+                                except (OSError, BlockingIOError, TypeError, ValueError):
                                     pass
+                            elif cl.startswith("i "):
+                                # Инфо от helper: nsevent_monitor_ok, pynput_ok, restart
+                                _log_to_file(f"[hotkey-helper] {c}")
+                                if "nsevent_monitor_ok" in cl:
+                                    mgr._helper_nsevent_active = True
+                                    portal_thread_log(
+                                        mgr.main_app,
+                                        "✅ NSEvent глобальный монитор активен (Cmd+Ctrl+P/C/V из любого приложения)",
+                                        "⌨️",
+                                    )
+                                elif "pynput_ok" in cl:
+                                    portal_thread_log(
+                                        mgr.main_app,
+                                        "✅ pynput глобальные хоткеи активны (Cmd+Ctrl+P/C/V)",
+                                        "⌨️",
+                                    )
                     except Exception:
                         pass
 

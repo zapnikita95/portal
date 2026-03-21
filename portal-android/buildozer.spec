@@ -4,7 +4,7 @@ package.name = portalshare
 package.domain = org.portal
 source.dir = .
 source.include_exts = py,png,jpg,jpeg,kv,atlas,json,gif,xml
-version = 0.4.4
+version = 0.4.5
 requirements = python3,kivy==2.3.0,android
 orientation = portrait
 fullscreen = 0

@@ -659,7 +659,7 @@ class PortalApp(ctk.CTk):
             portal_config.ensure_widget_media_path_persisted()
         except Exception:
             pass
-
+        
         # Создание UI
         self.create_ui()
         
@@ -707,7 +707,7 @@ class PortalApp(ctk.CTk):
             self.after(25, self._drain_ui_signal_queue)
         except Exception:
             pass
-
+        
     def get_tailscale_ip(self) -> Optional[str]:
         """Получает Tailscale IP адрес устройства"""
         # Метод 1: через tailscale status --json
@@ -1783,9 +1783,10 @@ class PortalApp(ctk.CTk):
         self.log_hint_label.pack(fill="x", padx=8, pady=(0, 4))
         self.log_text = ctk.CTkTextbox(log_frame, height=280, wrap="word")
         self.log_text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-        self.log_text.insert("1.0", "Готов к работе..." + chr(10))
+        # Восстанавливаем историю из файла — лог не обнуляется при закрытии окна
+        self._log_max_lines = 800
+        self._restore_log_from_file()
         self._setup_log_text_selectable()
-        self._log_max_lines = 400
         self.log_text.bind("<Command-c>", self._log_copy_selection_hotkey)
         self.log_text.bind("<Control-c>", self._log_copy_selection_hotkey)
         self._log_win.withdraw()
@@ -2991,6 +2992,27 @@ class PortalApp(ctk.CTk):
 
         threading.Thread(target=worker, daemon=True).start()
     
+    def _restore_log_from_file(self) -> None:
+        """При открытии/повторном открытии журнала — загрузить последние строки из файла."""
+        try:
+            log_file = portal_config.activity_log_path()
+            if log_file.is_file():
+                raw = log_file.read_text(encoding="utf-8", errors="replace")
+                lines = raw.splitlines()
+                tail = lines[-self._log_max_lines:] if len(lines) > self._log_max_lines else lines
+                content = "\n".join(tail) + "\n"
+                self.log_text.configure(state="normal")
+                self.log_text.delete("1.0", "end")
+                self.log_text.insert("1.0", content)
+                self.log_text.see("end")
+                self.log_text.configure(state="disabled")
+                return
+        except Exception:
+            pass
+        self.log_text.configure(state="normal")
+        self.log_text.insert("1.0", "Готов к работе...\n")
+        self.log_text.configure(state="disabled")
+
     def _setup_log_text_selectable(self) -> None:
         """Журнал не disabled — иначе нельзя выделить и Ctrl+C. Ручной ввод блокируем."""
         tb = self.log_text
@@ -3471,16 +3493,16 @@ class PortalApp(ctk.CTk):
 
             receive_dir = portal_config.resolve_receive_dir_for_peer(peer_ip)
             receive_dir.mkdir(parents=True, exist_ok=True)
-
-            filepath = receive_dir / filename
+        
+        filepath = receive_dir / filename
             if filepath.exists():
                 stem, suf = filepath.stem, filepath.suffix
                 filepath = receive_dir / f"{stem}_{int(time.time())}{suf}"
-
+        
             remaining = filesize
             chunk_buf = prefix
             with open(filepath, "wb") as f:
-                while remaining > 0:
+            while remaining > 0:
                     if chunk_buf:
                         take = min(len(chunk_buf), remaining)
                         f.write(chunk_buf[:take])
@@ -3488,11 +3510,11 @@ class PortalApp(ctk.CTk):
                         remaining -= take
                         continue
                     chunk = client_socket.recv(min(65536, remaining))
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    remaining -= len(chunk)
-
+                if not chunk:
+                    break
+                f.write(chunk)
+                remaining -= len(chunk)
+        
             self._log_from_thread(
                 f"✅ Файл сохранен: {filepath}"
                 + (f" (папка для {peer_ip})" if peer_ip else "")
@@ -3869,12 +3891,12 @@ class PortalApp(ctk.CTk):
         clipboard_text = message.get("text", "")
         if clipboard_text:
             def _paste():
-                self.is_receiving_clipboard = True
+            self.is_receiving_clipboard = True
                 try:
-                    pyperclip.copy(clipboard_text)
-                    self.last_clipboard = clipboard_text
+            pyperclip.copy(clipboard_text)
+            self.last_clipboard = clipboard_text
                 finally:
-                    self.is_receiving_clipboard = False
+            self.is_receiving_clipboard = False
 
             def _paste_and_pulse() -> None:
                 _paste()
@@ -4196,7 +4218,7 @@ class PortalApp(ctk.CTk):
                         if set_system_clipboard_file_paths(resolved):
                             _log(f"📋 С буфера удалённого ПК: {len(resolved)} файл(ов) (пути есть локально)")
                         else:
-                            pyperclip.copy(text)
+                pyperclip.copy(text)
                             _log(f"📋 Текст с удалённого ПК ({len(text)} символов)")
                     else:
                         pyperclip.copy(text)
@@ -4286,7 +4308,7 @@ class PortalApp(ctk.CTk):
                             _log("⚠️ Картинка получена, но не удалось записать в буфер ОС")
                         self._pulse_portal_widget(pulse_event="receive", peer_ip=ip)
                     finally:
-                        self.is_receiving_clipboard = False
+                self.is_receiving_clipboard = False
 
                 try:
                     self.after(0, _apply_png_pull)
@@ -4325,11 +4347,11 @@ class PortalApp(ctk.CTk):
         if targets:
             self.log(f"📤 Отправка на {len(targets)} ПК: {', '.join(targets)}")
             for ip in targets:
-                threading.Thread(
-                    target=self.send_file,
+            threading.Thread(
+                target=self.send_file,
                     args=(filepath, ip),
-                    daemon=True,
-                ).start()
+                daemon=True,
+            ).start()
         else:
             self.log("⚠️ Сначала сохрани список IP и отметь получателей")
             self.send_file_to_dialog(filepath)
@@ -4351,7 +4373,7 @@ class PortalApp(ctk.CTk):
         ip_entry.pack(pady=10)
         ip_entry.insert(0, self.remote_peer_ip or "100.")
         wire_ctk_entry_paste(ip_entry)
-
+        
         def send():
             ip = ip_entry.get().strip()
             if ip:
@@ -4487,7 +4509,7 @@ class PortalApp(ctk.CTk):
             client_socket.settimeout(180)
             response = _recv_ok_prefix(client_socket)
             try:
-                client_socket.close()
+            client_socket.close()
             except OSError:
                 pass
             
@@ -4684,7 +4706,7 @@ class PortalApp(ctk.CTk):
                 json.dumps(message, ensure_ascii=False).encode("utf-8"),
             )
             client_socket.close()
-
+            
             self.log(f"✅ Текст отправлен ({len(clipboard_text)} символов)")
             try:
                 self.after(
@@ -4695,7 +4717,7 @@ class PortalApp(ctk.CTk):
                 )
             except Exception:
                 pass
-
+                
         except Exception as e:
             err_msg = str(e)
             if "timed out" in err_msg.lower():
@@ -4708,25 +4730,25 @@ class PortalApp(ctk.CTk):
     def start_clipboard_monitor(self):
         """Мониторинг буфера на главном потоке (after) — без NSPasteboard warning"""
         try:
-            self.last_clipboard = pyperclip.paste()
+        self.last_clipboard = pyperclip.paste()
         except Exception:
             self.last_clipboard = ""
         self._clipboard_tick()
 
     def _clipboard_tick(self):
         """Один тик проверки буфера — вызывается на главном потоке"""
-        try:
-            if not self.is_receiving_clipboard:
+            try:
+                if not self.is_receiving_clipboard:
                 if time.monotonic() < getattr(
                     self, "_clipboard_ignore_until", 0.0
                 ):
                     self.after(1000, self._clipboard_tick)
                     return
-                current = pyperclip.paste()
+                    current = pyperclip.paste()
                 if current is None:
                     current = ""
-                if current != self.last_clipboard:
-                    self.last_clipboard = current
+                    if current != self.last_clipboard:
+                        self.last_clipboard = current
                     if self.sync_clipboard_enabled and str(current).strip():
                         ips = self.get_target_ips()
                         if ips:
@@ -4743,11 +4765,11 @@ class PortalApp(ctk.CTk):
                                     finally:
                                         self._end_clipboard_wave()
 
-                                threading.Thread(
+                            threading.Thread(
                                     target=_auto_wave, daemon=True
-                                ).start()
+                            ).start()
         except Exception:
-            pass
+                pass
         self.after(1000, self._clipboard_tick)
 
 
