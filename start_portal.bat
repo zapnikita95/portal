@@ -61,8 +61,15 @@ if not exist "assets\portal_animated.gif" (
 echo 🚀 Запуск Портала...
 echo.
 echo 💡 Используйте Ctrl+Alt+P для показа/скрытия виджета
+echo    (запасной: Win+Shift+P если Ctrl+Alt+P не работает)
 echo 📝 Отладка хоткеев: %TEMP%\portal_hotkey_debug.log
 echo.
+
+REM Очистка кеша Python (на случай если старый код закеширован)
+if exist "__pycache__" (
+    echo 🧹 Очистка кеша Python...
+    rmdir /s /q __pycache__ 2>nul
+)
 
 REM Запуск БЕЗ --widget, т.к. теперь виджет запускается по умолчанию
 python portal.py
