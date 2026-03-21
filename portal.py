@@ -187,6 +187,12 @@ class PortalApp(ctk.CTk):
             text="Сохраняется на диск. Отправка файлов/буфера и виджет используют его без повторных вопросов.",
             font=ctk.CTkFont(size=11),
             text_color="gray",
+        ).pack(anchor="w", padx=12, pady=(0, 4))
+        ctk.CTkLabel(
+            peer_frame,
+            text="💡 Указывай только IP (например 100.65.63.84), порт :12345 добавляется автоматически.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray70",
         ).pack(anchor="w", padx=12, pady=(0, 8))
         row = ctk.CTkFrame(peer_frame, fg_color="transparent")
         row.pack(fill="x", padx=12, pady=(0, 12))
@@ -660,6 +666,7 @@ class PortalApp(ctk.CTk):
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client_socket.settimeout(30)
             client_socket.connect((target_ip, 12345))
+            _log(f"✅ Подключение установлено: {target_ip}:12345")
             client_socket.send(json.dumps({"type": "get_clipboard"}).encode("utf-8"))
             buf = b""
             message = None
@@ -799,6 +806,7 @@ class PortalApp(ctk.CTk):
             client_socket.settimeout(10)  # Таймаут 10 секунд
             try:
                 client_socket.connect((target_ip, 12345))
+                self.log(f"✅ Подключение установлено: {target_ip}:12345")
             except socket.timeout:
                 self.log(f"❌ Таймаут подключения к {target_ip}")
                 self.log("💡 Проверь:")
@@ -875,6 +883,7 @@ class PortalApp(ctk.CTk):
             client_socket.settimeout(10)
             try:
                 client_socket.connect((target_ip, 12345))
+                self.log(f"✅ Подключение установлено: {target_ip}:12345")
             except (socket.timeout, ConnectionRefusedError, OSError) as e:
                 if isinstance(e, socket.timeout):
                     self.log(f"❌ Таймаут подключения к {target_ip}")

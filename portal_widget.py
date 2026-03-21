@@ -305,6 +305,12 @@ class PortalWidget:
         dialog.grab_set()
 
         tk.Label(dialog, text="IP второго компьютера (Tailscale / LAN):").pack(pady=10)
+        tk.Label(
+            dialog,
+            text="💡 Только IP (например 100.65.63.84), порт :12345 автоматически",
+            font=("TkDefaultFont", 8),
+            fg="gray",
+        ).pack(pady=(0, 5))
         ip_entry = tk.Entry(dialog, width=28)
         ip_entry.pack(pady=5)
         pref = self.target_ip or portal_config.load_remote_ip() or "100."
@@ -327,6 +333,12 @@ class PortalWidget:
         dialog.attributes("-topmost", True)
 
         tk.Label(dialog, text="IP второго компьютера:").pack(pady=10)
+        tk.Label(
+            dialog,
+            text="💡 Только IP, порт :12345 автоматически",
+            font=("TkDefaultFont", 8),
+            fg="gray",
+        ).pack(pady=(0, 5))
         ip_entry = tk.Entry(dialog, width=28)
         ip_entry.pack(pady=5)
         pref = self.target_ip or portal_config.load_remote_ip() or "100."
