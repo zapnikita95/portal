@@ -157,9 +157,11 @@ INCOMING_CLIPBOARD_FILES_MODE_LABELS_RU: Dict[str, str] = {
 def load_peer_ips() -> List[str]:
     """Все сохранённые IP (порядок сохраняется, дубликаты убираем)."""
     data = _load_all()
-    raw = data.get("peer_ips")
     out: List[str] = []
     seen = set()
+    raw = data.get("peer_ips")
+    if not isinstance(raw, list) or not raw:
+        raw = data.get("remote_ips")  # старый ключ до merge
     if isinstance(raw, list):
         for x in raw:
             s = str(x).strip()
@@ -246,3 +248,37 @@ def save_remote_ip(ip: Optional[str]) -> bool:
     else:
         ips = [ip_clean] + [x for x in ips if x != ip_clean]
     return save_peer_ips(ips)
+
+
+# ── Совместимость со старыми именами API (единый portal.py) ─────────────
+
+
+def load_auto_clipboard_enabled() -> bool:
+    """Авто-отправка буфера при каждом копировании (чекбокс в UI)."""
+    return bool(_load_all().get("auto_clipboard_enabled", False))
+
+
+def save_auto_clipboard_enabled(enabled: bool) -> bool:
+    data = _load_all()
+    data["auto_clipboard_enabled"] = bool(enabled)
+    return _write_all(data)
+
+
+def load_remote_ips() -> List[str]:
+    """Алиас для load_peer_ips() (старый код)."""
+    return load_peer_ips()
+
+
+def save_remote_ips(ips: List[str]) -> bool:
+    """Алиас для save_peer_ips() (старый код)."""
+    return save_peer_ips(ips)
+
+
+def load_receive_dir() -> Path:
+    """Алиас для receive_dir_path() (старый код)."""
+    return receive_dir_path()
+
+
+def default_receive_dir() -> Path:
+    """Папка приёма по умолчанию (рабочий стол)."""
+    return receive_dir_path()
