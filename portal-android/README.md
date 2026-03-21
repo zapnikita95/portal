@@ -15,7 +15,7 @@
 1. Установи APK, открой **Portal** один раз.
 2. На ПК запусти Portal и посмотри **IP** в главном окне (часто `100.x.x.x` в Tailscale).
 3. В приложении: **«+ Добавить IP компьютера»** → тот же IP, что на ПК сверху в Portal; **галочка** = «кому слать» (как на главном экране ПК); пароль — как **«Пароль сети (одинаковый на всех…)»** в ⚙ → **«Сохранить список IP и выбор»**.
-4. Иконка лаунчера: положи `assets/icon.png` (скрипт из десктопа: `python3 scripts/generate_branding_icons.py`) и пересобери APK.
+4. Иконка лаунчера: `python3 scripts/generate_branding_icons.py` (берёт кадр из `assets/portal_main.gif` → `portal-android/assets/icon.png`) и пересобери APK.
 5. Можно **закрыть приложение**. Дальше: **Поделиться** → **Portal**.
 
 ## Huawei Pura 70 Pro и прочие без Google Play
@@ -57,7 +57,8 @@ buildozer android debug
 
 ## Ассеты
 
-- **`assets/icon.png`** — иконка приложения (`buildozer.spec` → `icon.filename`). Генерируется вместе с десктопными иконками: из корня репо `python3 scripts/generate_branding_icons.py`.
+- **`assets/icon.png`** — иконка лаунчера (`buildozer.spec` → `icon.filename`). Генерируется из **`../assets/portal_main.gif`**: `python3 scripts/generate_branding_icons.py` из корня репо.
+- **`assets/portal_main.gif`** — анимация в шапке экрана настроек (серый оттенок без связи, оранжевый тон и нормальная скорость GIF при ответе узлов по ping). Копия лежит рядом с настольным `assets/portal_main.gif` для сборки APK.
 - Дополнительно можно положить GIF/картинку в `assets/` для фона (по желанию).
 
 ## Quick Settings tile

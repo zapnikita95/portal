@@ -12,7 +12,7 @@ description: Сборка Portal (.app / .exe) через PyInstaller и GitHub 
 ```bash
 pip install -r requirements.txt pyinstaller pillow
 python3 scripts/generate_branding_icons.py
-pyinstaller pyinstaller_portal.spec
+pyinstaller -y pyinstaller_portal.spec
 ```
 
 - **macOS:** `dist/Portal.app` (перед запуском при необходимости: `xattr -dr com.apple.quarantine dist/Portal.app`)
@@ -34,5 +34,5 @@ pyinstaller pyinstaller_portal.spec
 
 ## Что не забыть
 
-- Иконки: `scripts/generate_branding_icons.py` (исходник `assets/branding/portal_icon.png`).
+- Иконки: `scripts/generate_branding_icons.py` (исходник **`assets/portal_main.gif`** → `portal_icon.png`, `.ico`, `.icns`, Android `icon.png`).
 - Агент в Cursor **не заменяет** CI: при запросе «собери exe/app» по возможности опирайся на этот workflow или локальную команду выше, затем пуш тега для релиза.

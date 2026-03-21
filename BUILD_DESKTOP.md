@@ -10,11 +10,13 @@
 cd ~/Desktop/portal
 python3 -m pip install -r requirements.txt pyinstaller pillow
 python3 scripts/generate_branding_icons.py
-pyinstaller pyinstaller_portal.spec
+pyinstaller -y pyinstaller_portal.spec
 open dist/Portal.app
 ```
 
 Готовое приложение: **`dist/Portal.app`**. Его можно перетащить в папку «Программы».
+
+Флаг **`-y`** у PyInstaller автоматически подтверждает очистку старой **`dist/Portal`** — при пересборке это ожидаемо (иначе спрашивает `Continue? (y/N)` в терминале).
 
 Если macOS пишет, что файл из интернета и не открывается:
 
@@ -92,7 +94,7 @@ pip install pyinstaller
 
 ## 2. Иконки (логотип приложения)
 
-Из картинки `assets/branding/portal_icon.png` генерируются `portal.ico`, `portal.icns` и копия для Android:
+Из **`assets/portal_main.gif`** (первый кадр, без фона — хромакей как у виджета) пишется `assets/branding/portal_icon.png`, затем **`portal.ico`**, **`portal.icns`** и копия для Android:
 
 ```bash
 python3 scripts/generate_branding_icons.py
@@ -105,7 +107,7 @@ python3 scripts/generate_branding_icons.py
 **На той ОС, под которую собираешь** (exe — на Windows, app — на Mac):
 
 ```bash
-pyinstaller pyinstaller_portal.spec
+pyinstaller -y pyinstaller_portal.spec
 ```
 
 Результат:

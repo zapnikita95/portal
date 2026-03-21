@@ -1027,7 +1027,8 @@ class PortalApp(ctk.CTk):
         ).pack(anchor="w", padx=8, pady=(8, 4))
         ctk.CTkLabel(
             t_recv,
-            text="К этой папке относятся файлы из буфера с другого ПК, кроме режима «только в буфер».",
+            text="Общая папка; ниже можно задать свою для конкретного IP отправителя. "
+            "Режим «только в буфер» — файлы во временную папку (не по списку IP).",
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(anchor="w", padx=8, pady=(0, 6))
@@ -1059,6 +1060,41 @@ class PortalApp(ctk.CTk):
             recv_row, text="", font=ctk.CTkFont(size=12), text_color="gray"
         )
         self.receive_dir_feedback.pack(side="left", padx=(8, 0))
+
+        ctk.CTkLabel(
+            t_recv,
+            text="Отдельная папка приёма по IP отправителя (необязательно):",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=8, pady=(12, 4))
+        ctk.CTkLabel(
+            t_recv,
+            text="Строка: IP<TAB>путь или «IP пробел путь». IP как в логе при приёме (например 100.x.x.x).",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+        ).pack(anchor="w", padx=8, pady=(0, 4))
+        peer_recv_row = ctk.CTkFrame(t_recv, fg_color="transparent")
+        peer_recv_row.pack(fill="both", expand=False, padx=8, pady=(0, 8))
+        self.peer_receive_dirs_text = ctk.CTkTextbox(
+            peer_recv_row, width=440, height=100, font=ctk.CTkFont(size=12)
+        )
+        self.peer_receive_dirs_text.pack(side="left", padx=(0, 10), anchor="nw", fill="x", expand=True)
+        try:
+            self.peer_receive_dirs_text.insert("1.0", portal_config.format_peer_receive_dirs_for_editor())
+        except Exception:
+            pass
+        pr_btn_col = ctk.CTkFrame(peer_recv_row, fg_color="transparent")
+        pr_btn_col.pack(side="left", fill="y")
+        ctk.CTkButton(
+            pr_btn_col,
+            text="Сохранить\nсписок IP",
+            width=130,
+            command=self.save_peer_receive_dirs_from_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(pady=(0, 6))
+        self.peer_receive_dirs_feedback = ctk.CTkLabel(
+            pr_btn_col, text="", font=ctk.CTkFont(size=11), text_color="gray"
+        )
+        self.peer_receive_dirs_feedback.pack()
 
         ctk.CTkLabel(
             t_recv,
@@ -1896,6 +1932,33 @@ class PortalApp(ctk.CTk):
         if d:
             self.receive_dir_entry.delete(0, "end")
             self.receive_dir_entry.insert(0, d)
+
+    def save_peer_receive_dirs_from_ui(self) -> None:
+        """Сохранить маппинг IP → папка приёма из текстового поля настроек."""
+        if not hasattr(self, "peer_receive_dirs_text"):
+            return
+        try:
+            raw = self.peer_receive_dirs_text.get("1.0", "end")
+        except Exception:
+            return
+        mapping = portal_config.parse_peer_receive_dirs_editor(raw)
+        ok = portal_config.save_peer_receive_dirs(mapping)
+        if ok:
+            self.log(
+                f"✅ Папки по IP: {len(mapping)} записей"
+                if mapping
+                else "✅ Список папок по IP очищен (общая папка для всех)"
+            )
+            if hasattr(self, "peer_receive_dirs_feedback"):
+                self.peer_receive_dirs_feedback.configure(
+                    text="✅ OK", text_color="#3dd68c"
+                )
+        else:
+            self.log("❌ Не удалось сохранить папки по IP")
+            if hasattr(self, "peer_receive_dirs_feedback"):
+                self.peer_receive_dirs_feedback.configure(
+                    text="❌ Ошибка", text_color="#e74c3c"
+                )
 
     def save_receive_dir_from_ui(self):
         """Сохранить папку для входящих файлов (пусто = только рабочий стол по умолчанию)."""
@@ -3193,7 +3256,7 @@ class PortalApp(ctk.CTk):
                 self._log_from_thread(f"⚠️ clipboard_file: некорректный размер {need}")
                 _portal_sendall(client_socket, b"ERR")
                 return
-            receive_dir = portal_config.incoming_clipboard_files_save_dir()
+            receive_dir = portal_config.incoming_clipboard_files_save_dir(peer_ip)
             receive_dir.mkdir(parents=True, exist_ok=True)
             filepath = receive_dir / f"{int(time.time() * 1000)}_{fname}"
             data = bytearray(prefix.lstrip(b"\n\r"))
@@ -3253,7 +3316,7 @@ class PortalApp(ctk.CTk):
 
             self._log_from_thread(f"📥 Прием файла: {filename} ({filesize} байт)")
 
-            receive_dir = portal_config.receive_dir_path()
+            receive_dir = portal_config.resolve_receive_dir_for_peer(peer_ip)
             receive_dir.mkdir(parents=True, exist_ok=True)
 
             filepath = receive_dir / filename
@@ -3277,7 +3340,10 @@ class PortalApp(ctk.CTk):
                     f.write(chunk)
                     remaining -= len(chunk)
 
-            self._log_from_thread(f"✅ Файл сохранен: {filepath}")
+            self._log_from_thread(
+                f"✅ Файл сохранен: {filepath}"
+                + (f" (папка для {peer_ip})" if peer_ip else "")
+            )
 
             _portal_sendall(client_socket, b"OK")
 
@@ -3379,7 +3445,7 @@ class PortalApp(ctk.CTk):
                 pass
             return
 
-        save_dir = portal_config.incoming_clipboard_files_save_dir()
+        save_dir = portal_config.incoming_clipboard_files_save_dir(peer_ip)
         try:
             save_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
@@ -3455,7 +3521,7 @@ class PortalApp(ctk.CTk):
                 pass
             return
 
-        receive_dir = portal_config.receive_dir_path()
+        receive_dir = portal_config.resolve_receive_dir_for_peer(peer_ip)
         try:
             receive_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
@@ -4011,7 +4077,7 @@ class PortalApp(ctk.CTk):
                     need = 0
                 if need <= 0 or need > CLIPBOARD_PULL_FILE_MAX_BYTES:
                     raise ValueError(f"Некорректный размер файла в ответе: {need}")
-                receive_dir = portal_config.incoming_clipboard_files_save_dir()
+                receive_dir = portal_config.incoming_clipboard_files_save_dir(target_ip)
                 receive_dir.mkdir(parents=True, exist_ok=True)
                 filepath = receive_dir / f"{int(time.time() * 1000)}_{fname}"
                 data = bytearray(rest.lstrip(b"\n\r"))

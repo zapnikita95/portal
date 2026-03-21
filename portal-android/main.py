@@ -1,5 +1,5 @@
 """
-Portal для Android (Kivy): список IP компьютеров и «кому слать» — как на ПК; Share Sheet (ACTION_SEND).
+Portal для Android (Kivy): адреса в вашей сети, пароль, отправка через Share Sheet (ACTION_SEND).
 """
 
 from __future__ import annotations
@@ -18,15 +18,17 @@ from kivy.uix.button import Button
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.image import Image
 from kivy.uix.label import Label
-from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.textinput import TextInput
 from kivy.uix.checkbox import CheckBox
 from kivy.uix.anchorlayout import AnchorLayout
+from kivy.uix.popup import Popup
+from kivy.utils import platform as kivy_platform
 
 try:
-    from portal_protocol import send_file_to_peer, send_text_clipboard
+    from portal_protocol import ping_peer, send_file_to_peer, send_text_clipboard
 except ImportError:
+    ping_peer = None  # type: ignore
     send_file_to_peer = None  # type: ignore
     send_text_clipboard = None  # type: ignore
 
@@ -128,6 +130,41 @@ def _asset_icon_path() -> Path:
     return Path(__file__).resolve().parent / "assets" / "icon.png"
 
 
+_GIF_FRAME_DELAY = 0.06
+_GIF_FROZEN_DELAY = 86400.0
+
+HELP_TEXT = (
+    "Portal для Android пересылает файлы и текст на компьютеры в вашей сети (локальная сеть или VPN), "
+    "где запущен настольный Portal и активна кнопка «Запустить портал».\n\n"
+    "Адреса\n"
+    "Введите те же IP, что указаны в настольном приложении: ⚙ Настройки → «Пиры» "
+    "(один адрес на строку, при необходимости с подписью).\n\n"
+    "Откуда взять адрес\n"
+    "В верхней части окна настольного Portal показан текущий адрес "
+    "(часто это Tailscale 100.… или локальный адрес в LAN).\n\n"
+    "Галочка\n"
+    "Отметка слева означает разрешение отправки на этот адрес — по смыслу совпадает с выбором получателей "
+    "в настольном Portal.\n\n"
+    "Пароль сети\n"
+    "Должен совпадать с полем «Пароль» в настройках настольного Portal на всех участвующих компьютерах.\n\n"
+    "Поделиться\n"
+    "После сохранения настроек в любом приложении можно выбрать «Поделиться» → Portal — "
+    "данные отправятся на отмеченные адреса."
+)
+
+
+def _portal_gif_path() -> str | None:
+    """GIF в APK (portal-android/assets) или при запуске из корня репозитория."""
+    here = Path(__file__).resolve().parent
+    for candidate in (
+        here / "assets" / "portal_main.gif",
+        here.parent / "assets" / "portal_main.gif",
+    ):
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
 class Panel(BoxLayout):
     """Карточка с скруглённым фоном."""
 
@@ -136,6 +173,10 @@ class Panel(BoxLayout):
         self.orientation = "vertical"
         self.padding = dp(14)
         self.spacing = dp(10)
+        # Внутри ScrollView дочерние BoxLayout с size_hint_y=1 «растягиваются» и ломают minimum_height —
+        # кнопки и подписи наезжают друг на друга. Фиксируем высоту по содержимому.
+        self.size_hint_y = None
+        self.bind(minimum_height=self.setter("height"))
         with self.canvas.before:
             Color(*C_PANEL)
             self._rect = RoundedRectangle(radius=[dp(16)])
@@ -174,7 +215,7 @@ class PeerRow(BoxLayout):
         self.add_widget(wrap_chk)
 
         self.ip_input = TextInput(
-            hint_text="IP компьютера (100.x…)",
+            hint_text="IP узла в сети (например 100.…)",
             text=ip,
             multiline=False,
             size_hint_x=0.44,
@@ -223,6 +264,9 @@ class PortalAndroidApp(App):
         self._status_label: Label | None = None
         self._secret_field: TextInput | None = None
         self._test_text: TextInput | None = None
+        self._portal_mascot: Image | None = None
+        self._conn_status_lbl: Label | None = None
+        self._ping_event = None
 
     def build(self):
         Window.clearcolor = C_BG
@@ -238,55 +282,117 @@ class PortalAndroidApp(App):
         return self._build_settings_ui()
 
     def _build_settings_ui(self):
-        root = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(12))
+        top_pad = dp(12) + (dp(8) if kivy_platform == "android" else 0)
+        root = BoxLayout(
+            orientation="vertical",
+            padding=[dp(16), top_pad, dp(16), dp(16)],
+            spacing=dp(12),
+        )
         self._settings_root = root
 
-        # Шапка: логотип + название
+        # Шапка: меню · GIF Portal (серый = нет связи, цветной = ответ узла) · заголовок и статус
         header = BoxLayout(
             orientation="horizontal",
             size_hint_y=None,
-            height=dp(76),
-            spacing=dp(14),
+            spacing=dp(10),
+            padding=[0, 0, 0, dp(2)],
         )
-        ipath = _asset_icon_path()
-        if ipath.is_file():
-            header.add_widget(
-                Image(
-                    source=str(ipath),
-                    size_hint=(None, 1),
-                    width=dp(64),
-                    allow_stretch=True,
-                    keep_ratio=True,
-                )
-            )
-        ht = BoxLayout(orientation="vertical", spacing=dp(4))
-        ht.add_widget(
-            Label(
-                text="Portal",
-                font_size=dp(22),
-                bold=True,
-                color=C_TEXT,
-                size_hint_y=None,
-                height=dp(30),
-                halign="left",
-                valign="middle",
-            )
+        menu_btn = Button(
+            text="☰",
+            size_hint=(None, None),
+            size=(dp(44), dp(44)),
+            font_size=dp(22),
+            bold=True,
+            background_color=(0.14, 0.16, 0.23, 1),
+            color=C_TEXT,
         )
-        ht.add_widget(
-            Label(
-                text="Отправка на твои компьютеры — те же IP и пароль, что в Portal на ПК",
-                font_size=dp(13),
-                color=C_MUTED,
-                size_hint_y=None,
-                height=dp(40),
-                text_size=(max(Window.width - dp(120), dp(180)), None),
-                halign="left",
+        menu_btn.bind(on_press=lambda *_a: self._open_help_menu())
+        header.add_widget(menu_btn)
+
+        gif_src = _portal_gif_path()
+        if gif_src:
+            self._portal_mascot = Image(
+                source=gif_src,
+                size_hint=(None, None),
+                size=(dp(58), dp(58)),
+                allow_stretch=True,
+                keep_ratio=True,
+                anim_delay=_GIF_FRAME_DELAY,
             )
+            self._portal_mascot.color = (0.4, 0.41, 0.44, 1)
+            header.add_widget(self._portal_mascot)
+        elif _asset_icon_path().is_file():
+            self._portal_mascot = Image(
+                source=str(_asset_icon_path()),
+                size_hint=(None, None),
+                size=(dp(58), dp(58)),
+                allow_stretch=True,
+                keep_ratio=True,
+            )
+            self._portal_mascot.color = (0.4, 0.41, 0.44, 1)
+            header.add_widget(self._portal_mascot)
+        else:
+            self._portal_mascot = None
+
+        ht = BoxLayout(
+            orientation="vertical",
+            spacing=dp(4),
+            size_hint_x=1,
+            size_hint_y=None,
         )
+        ht.bind(minimum_height=ht.setter("height"))
+        tw = max(Window.width - dp(130), dp(160))
+        title_lbl = Label(
+            text="Portal",
+            font_size=dp(22),
+            bold=True,
+            color=C_TEXT,
+            size_hint_y=None,
+            height=dp(28),
+            halign="left",
+            valign="middle",
+            text_size=(tw, None),
+        )
+        self._conn_status_lbl = Label(
+            text="Проверка подключения…",
+            font_size=dp(12),
+            color=C_MUTED,
+            size_hint_y=None,
+            text_size=(tw, None),
+            halign="left",
+            valign="top",
+        )
+
+        def _status_h(inst, ts):
+            inst.height = max(ts[1] + dp(4), dp(22))
+
+        self._conn_status_lbl.bind(texture_size=_status_h)
+        ht.add_widget(title_lbl)
+        ht.add_widget(self._conn_status_lbl)
         header.add_widget(ht)
+
+        def _sync_header_height(*_a):
+            try:
+                row_min = dp(58) if self._portal_mascot else dp(44)
+                header.height = max(row_min + dp(6), ht.height + dp(8))
+            except Exception:
+                header.height = dp(76)
+
+        ht.fbind("height", _sync_header_height)
+        _sync_header_height()
         root.add_widget(header)
 
-        scroll = ScrollView(do_scroll_x=False, bar_width=dp(6))
+        def _defer_header_layout(_dt):
+            _sync_header_height()
+
+        Clock.schedule_once(_defer_header_layout, 0)
+
+        scroll = ScrollView(
+            do_scroll_x=False,
+            bar_width=dp(6),
+            size_hint_y=1,
+            scroll_type=["bars", "content"],
+        )
         body = BoxLayout(
             orientation="vertical",
             size_hint_y=None,
@@ -295,52 +401,14 @@ class PortalAndroidApp(App):
         )
         body.bind(minimum_height=body.setter("height"))
 
-        # Онбординг (логика как на ПК)
-        onb = Panel()
-        onb.add_widget(
-            Label(
-                text="Что сюда вписывать",
-                font_size=dp(17),
-                bold=True,
-                color=C_TEXT,
-                size_hint_y=None,
-                height=dp(28),
-                halign="left",
-                text_size=(Window.width - dp(56), None),
-            )
-        )
-        onb_hint = Label(
-            text=(
-                "Сюда вносятся те же IP компьютеров, что на ПК в ⚙ Настройки → вкладка со списком адресов "
-                "(на компьютере она называется «Пиры» — это просто список: один IP на строку, можно «100.x.x.x Имя»). "
-                "Здесь удобнее таблицей.\n\n"
-                "• IP — смотри на том ПК в главном окне Portal сверху: строка «📍 Tailscale IP» "
-                "(часто 100.…) или локальный IP, если без Tailscale.\n"
-                "• Галочка слева — «на этот компьютер слать»; на ПК это те же отметки, "
-                "что блок «Кому отправлять» и кнопка «Сохранить выбор получателей».\n"
-                "• Пароль сети — как на ПК: «Пароль сети (одинаковый на всех своих ПК)» в настройках.\n\n"
-                "На ПК должен быть нажат «Запустить портал». Сохрани здесь настройки — потом в любом приложении: "
-                "«Поделиться» → Portal."
-            ),
-            font_size=dp(13),
-            color=C_MUTED,
-            size_hint_y=None,
-            text_size=(max(Window.width - dp(56), dp(200)), None),
-            halign="left",
-        )
-
         def _h_from_tex(inst, sz):
-            inst.height = max(sz[1], dp(24))
-
-        onb_hint.bind(texture_size=_h_from_tex)
-        onb.add_widget(onb_hint)
-        body.add_widget(onb)
+            inst.height = max(sz[1] + dp(4), dp(24))
 
         # Список IP — как «Пиры» + галочки «Кому отправлять» на ПК
         peers_panel = Panel()
         peers_panel.add_widget(
             Label(
-                text="Список IP и кому слать",
+                text="Адреса в вашей сети",
                 font_size=dp(17),
                 bold=True,
                 color=C_TEXT,
@@ -351,8 +419,8 @@ class PortalAndroidApp(App):
         )
         peers_sub = Label(
             text=(
-                "☑ = этот адрес в списке получателей (как галочки «Кому отправлять» на главном экране Portal). "
-                "IP = адрес другого компьютера. Подпись — только для себя."
+                "Галочка — разрешить отправку на этот адрес. Поле IP — узел с настольным Portal. "
+                "Подпись видна только здесь."
             ),
             font_size=dp(12),
             color=C_MUTED,
@@ -371,7 +439,7 @@ class PortalAndroidApp(App):
         peers_panel.add_widget(self._peers_box)
 
         add_btn = Button(
-            text="+ Добавить IP компьютера",
+            text="+ Добавить адрес",
             size_hint_y=None,
             height=dp(48),
             background_color=C_ACCENT_2,
@@ -386,7 +454,7 @@ class PortalAndroidApp(App):
         sec_panel = Panel()
         sec_panel.add_widget(
             Label(
-                text="Пароль сети (одинаковый на всех своих ПК)",
+                text="Пароль сети",
                 font_size=dp(16),
                 bold=True,
                 color=C_TEXT,
@@ -396,7 +464,8 @@ class PortalAndroidApp(App):
             )
         )
         sec_hint = Label(
-            text="Как в Portal на компьютере: ⚙ Настройки → вкладка «Пароль». Должен совпадать на телефоне и на всех ПК.",
+            text="Тот же пароль, что в настольном Portal: ⚙ Настройки → «Пароль». "
+            "Должен совпадать на телефоне и на компьютерах в вашей сети.",
             font_size=dp(12),
             color=C_MUTED,
             size_hint_y=None,
@@ -406,7 +475,7 @@ class PortalAndroidApp(App):
         sec_hint.bind(texture_size=_h_from_tex)
         sec_panel.add_widget(sec_hint)
         self._secret_field = TextInput(
-            hint_text="Введи пароль с ПК и сохрани",
+            hint_text="Пароль из настроек настольного Portal",
             multiline=False,
             size_hint_y=None,
             height=dp(48),
@@ -423,7 +492,7 @@ class PortalAndroidApp(App):
         test_panel = Panel()
         test_panel.add_widget(
             Label(
-                text="Проверка (как «Отправить буфер» на ПК)",
+                text="Проверка отправки текста",
                 font_size=dp(16),
                 bold=True,
                 color=C_TEXT,
@@ -434,8 +503,8 @@ class PortalAndroidApp(App):
         )
         test_hint = Label(
             text=(
-                "Отправит текст в буфер обмена на все отмеченные галочкой компьютеры "
-                "(на ПК должен быть «Запустить портал»)."
+                "Отправляет текст в буфер обмена на все отмеченные адреса "
+                "(на компьютере должен быть запущен приём в настольном Portal)."
             ),
             font_size=dp(12),
             color=C_MUTED,
@@ -446,7 +515,7 @@ class PortalAndroidApp(App):
         test_hint.bind(texture_size=_h_from_tex)
         test_panel.add_widget(test_hint)
         self._test_text = TextInput(
-            hint_text="Например: Привет с телефона",
+            hint_text="Произвольный текст для проверки",
             multiline=True,
             size_hint_y=None,
             height=dp(88),
@@ -459,28 +528,40 @@ class PortalAndroidApp(App):
 
         row = BoxLayout(
             size_hint_y=None,
-            height=dp(50),
+            height=dp(56),
             spacing=dp(10),
         )
+
+        def _btn_text_fit(btn, *_a):
+            btn.text_size = (max(btn.width - dp(8), dp(40)), max(btn.height - dp(10), dp(28)))
+            btn.halign = "center"
+            btn.valign = "middle"
+
         save_btn = Button(
-            text="Сохранить список IP и выбор",
+            text="Сохранить настройки",
+            size_hint_x=0.5,
             background_color=C_ACCENT_2,
             color=C_TEXT,
+            font_size=dp(13),
         )
         save_btn.bind(on_press=lambda *_a: self.save_settings())
+        save_btn.bind(size=_btn_text_fit)
         test_btn = Button(
-            text="Отправить тест на отмеченные",
+            text="Отправить тест",
+            size_hint_x=0.5,
             background_color=C_ACCENT,
             color=C_TEXT,
+            font_size=dp(13),
         )
         test_btn.bind(on_press=lambda *_a: self.send_test_text())
+        test_btn.bind(size=_btn_text_fit)
         row.add_widget(save_btn)
         row.add_widget(test_btn)
         test_panel.add_widget(row)
         body.add_widget(test_panel)
 
         self._status_label = Label(
-            text="Сохрани список и галочки — потом «Поделиться» → Portal шлёт на отмеченные IP.",
+            text="Сохраните адреса и пароль. Далее: «Поделиться» в любом приложении → Portal.",
             font_size=dp(12),
             color=C_MUTED,
             size_hint_y=None,
@@ -492,6 +573,8 @@ class PortalAndroidApp(App):
 
         scroll.add_widget(body)
         root.add_widget(scroll)
+
+        Clock.schedule_once(_defer_header_layout, 0.05)
 
         # Загрузить конфиг
         cfg = load_cfg()
@@ -507,6 +590,147 @@ class PortalAndroidApp(App):
             self._add_peer_row()
 
         return root
+
+    def _open_help_menu(self) -> None:
+        outer = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(10))
+        scroll = ScrollView(do_scroll_x=False, bar_width=dp(5))
+        tw = max(Window.width * 0.82 - dp(24), dp(200))
+        lbl = Label(
+            text=HELP_TEXT,
+            font_size=dp(14),
+            color=C_TEXT,
+            size_hint_y=None,
+            text_size=(tw, None),
+            halign="left",
+            valign="top",
+        )
+        lbl.bind(
+            texture_size=lambda inst, ts: setattr(
+                inst, "height", max(ts[1] + dp(8), dp(48))
+            )
+        )
+        scroll.add_widget(lbl)
+        outer.add_widget(scroll)
+        close_row = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(8))
+        close_btn = Button(
+            text="Закрыть",
+            size_hint_x=1,
+            background_color=C_ACCENT_2,
+            color=C_TEXT,
+            font_size=dp(15),
+        )
+        close_row.add_widget(close_btn)
+        outer.add_widget(close_row)
+        pop = Popup(
+            title="Справка и настройка",
+            content=outer,
+            size_hint=(0.9, 0.86),
+        )
+        close_btn.bind(on_press=pop.dismiss)
+        pop.open()
+
+    def _apply_ping_ui(
+        self,
+        any_ok: bool,
+        ok_n: int,
+        total: int,
+        *,
+        reason: str = "",
+    ) -> None:
+        if self._conn_status_lbl is None:
+            return
+        masc = self._portal_mascot
+        if any_ok:
+            if masc:
+                masc.color = (1.0, 0.78, 0.42, 1)
+                try:
+                    masc.anim_delay = _GIF_FRAME_DELAY
+                except Exception:
+                    pass
+            self._conn_status_lbl.color = C_ACCENT
+            if ok_n == total:
+                self._conn_status_lbl.text = (
+                    f"Связь есть: отвечают все отмеченные узлы ({total})."
+                )
+            else:
+                self._conn_status_lbl.text = (
+                    f"Связь частично: отвечают {ok_n} из {total} отмеченных узлов."
+                )
+        else:
+            if masc:
+                masc.color = (0.38, 0.39, 0.42, 1)
+                try:
+                    masc.anim_delay = _GIF_FROZEN_DELAY
+                except Exception:
+                    pass
+            self._conn_status_lbl.color = C_MUTED
+            if reason == "nopeers":
+                self._conn_status_lbl.text = (
+                    "Укажите адрес и отметьте получателя, затем сохраните настройки."
+                )
+            elif reason == "noping":
+                self._conn_status_lbl.text = "Проверка сети недоступна в этой сборке."
+            else:
+                self._conn_status_lbl.text = (
+                    "Нет ответа от отмеченных узлов. Запущен ли приём в настольном Portal?"
+                )
+
+    def _ping_peers_bg(self) -> None:
+        if ping_peer is None:
+            Clock.schedule_once(
+                lambda *_a: self._apply_ping_ui(False, 0, 0, reason="noping"),
+                0,
+            )
+            return
+        peers: list[str] = []
+        secret = ""
+        try:
+            for row in self._peer_rows or []:
+                ip = row.ip_input.text.strip()
+                if not ip:
+                    continue
+                if not row.chk_send.active:
+                    continue
+                peers.append(ip)
+            if self._secret_field:
+                secret = self._secret_field.text.strip()
+        except Exception:
+            pass
+        if not peers:
+            Clock.schedule_once(
+                lambda *_a: self._apply_ping_ui(False, 0, 0, reason="nopeers"),
+                0,
+            )
+            return
+
+        def work():
+            ok = 0
+            for ip in peers:
+                try:
+                    if ping_peer(ip, secret=secret, timeout=4.0):
+                        ok += 1
+                except Exception:
+                    pass
+            tot = len(peers)
+            any_ok = ok > 0
+            Clock.schedule_once(
+                lambda _dt, o=ok, t=tot, a=any_ok: self._apply_ping_ui(a, o, t),
+                0,
+            )
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _start_connectivity_watch(self) -> None:
+        self._ping_peers_bg()
+        if self._ping_event is not None:
+            try:
+                self._ping_event.cancel()
+            except Exception:
+                pass
+        self._ping_event = Clock.schedule_interval(
+            lambda _dt: self._ping_peers_bg(),
+            22.0,
+        )
 
     def _add_peer_row(self, ip: str = "", name: str = "", send: bool = True):
         if not self._peers_box:
@@ -524,6 +748,16 @@ class PortalAndroidApp(App):
     def on_start(self):
         if self._share_boot:
             Clock.schedule_once(lambda _dt: self._begin_share_from_cold_start(), 0.05)
+            return
+        Clock.schedule_once(lambda _dt: self._start_connectivity_watch(), 0.35)
+
+    def on_stop(self):
+        if self._ping_event is not None:
+            try:
+                self._ping_event.cancel()
+            except Exception:
+                pass
+            self._ping_event = None
 
     def _android_on_new_intent(self, intent):
         try:
@@ -567,7 +801,7 @@ class PortalAndroidApp(App):
         secret = (cfg.get("secret") or "").strip()
         if not peers:
             toast(
-                "Открой Portal на телефоне: добавь IP компьютера и нажми «Сохранить список IP и выбор».",
+                "Откройте Portal: добавьте адрес компьютера и сохраните настройки.",
                 long=True,
             )
             finish_activity()
@@ -576,7 +810,7 @@ class PortalAndroidApp(App):
         targets = peers_marked_for_send(peers)
         if not targets:
             toast(
-                "Ни у одного адреса не стоит галочка «слать сюда». Открой Portal и отметь получателей.",
+                "Ни у одного адреса не отмечена отправка. Откройте приложение и отметьте получателей.",
                 long=True,
             )
             finish_activity()
@@ -594,7 +828,7 @@ class PortalAndroidApp(App):
         layout = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(10))
         layout.add_widget(
             Label(
-                text="Куда отправить? (только отмеченные в настройках)",
+                text="Выберите получателя (из отмеченных в настройках)",
                 size_hint_y=None,
                 height=dp(36),
                 color=C_TEXT,
@@ -632,7 +866,7 @@ class PortalAndroidApp(App):
             btn_col.add_widget(b)
 
         b_all = Button(
-            text="На все отмеченные компьютеры",
+            text="На все отмеченные адреса",
             size_hint_y=None,
             height=dp(48),
             background_color=C_ACCENT,
@@ -731,13 +965,14 @@ class PortalAndroidApp(App):
             peers = self._collect_peers()
             if not peers:
                 if self._status_label:
-                    self._status_label.text = "Добавь хотя бы один IP другого компьютера (как в списке IP в ⚙ на ПК)."
+                    self._status_label.text = (
+                        "Добавьте хотя бы один адрес узла с настольным Portal."
+                    )
                 return
             if not any(p.get("send") for p in peers):
                 if self._status_label:
                     self._status_label.text = (
-                        "Отметь галочку хотя бы у одного адреса — иначе некуда слать "
-                        "(как «Сохранить выбор получателей» на ПК)."
+                        "Отметьте галочкой хотя бы одного получателя — иначе отправка некуда направлена."
                     )
                 return
             cfg = {
@@ -749,8 +984,9 @@ class PortalAndroidApp(App):
                 n = sum(1 for p in peers if p.get("send"))
                 self._status_label.text = (
                     f"Сохранено: {len(peers)} адрес(ов), отправка на {n} отмеченных. "
-                    "«Поделиться» → Portal — без открытия приложения."
+                    "Далее: «Поделиться» → Portal."
                 )
+            Clock.schedule_once(lambda _dt: self._ping_peers_bg(), 0.5)
         except Exception as e:
             if self._status_label:
                 self._status_label.text = f"Ошибка: {e}"
@@ -763,12 +999,16 @@ class PortalAndroidApp(App):
         peers = self._collect_peers()
         if not peers:
             if self._status_label:
-                self._status_label.text = "Сначала введи IP и нажми «Сохранить список IP и выбор»."
+                self._status_label.text = (
+                    "Сначала укажите адреса и нажмите «Сохранить настройки»."
+                )
             return
         targets = peers_marked_for_send(peers)
         if not targets:
             if self._status_label:
-                self._status_label.text = "Отметь галочку у хотя бы одного компьютера."
+                self._status_label.text = (
+                    "Отметьте галочкой хотя бы одного получателя."
+                )
             return
         cfg = load_cfg()
         secret = (cfg.get("secret") or "").strip()
@@ -791,16 +1031,17 @@ class PortalAndroidApp(App):
         if self._status_label:
             if oks == len(targets):
                 self._status_label.text = (
-                    f"Текст отправлен на {oks} ПК — вставь Ctrl+V / Cmd+V на каждом."
+                    f"Текст доставлен на {oks} узел(ов) — вставьте его на компьютере (Ctrl+V / Cmd+V)."
                 )
             elif oks:
                 self._status_label.text = (
-                    f"Частично: ок {oks}, ошибки: {'; '.join(errs[:2])}"
+                    f"Частично: успешно {oks}, ошибки: {'; '.join(errs[:2])}"
                 )
             else:
                 self._status_label.text = (
-                    f"Не вышло: {'; '.join(errs[:2])}. Проверь IP, пароль и «Запустить портал» на ПК."
+                    f"Не удалось: {'; '.join(errs[:2])}. Проверьте адрес, пароль и приём в настольном Portal."
                 )
+        Clock.schedule_once(lambda _dt: self._ping_peers_bg(), 0.3)
 
 
 if __name__ == "__main__":

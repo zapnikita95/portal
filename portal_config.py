@@ -87,6 +87,86 @@ def save_receive_dir(path_str: Optional[str]) -> bool:
         return False
 
 
+def load_peer_receive_dirs() -> Dict[str, str]:
+    """IP отправителя → свой путь приёма; если IP нет в словаре — общая папка receive_dir."""
+    data = _load_all()
+    raw = data.get("peer_receive_dirs")
+    out: Dict[str, str] = {}
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            ip = str(k).strip()
+            p = str(v).strip() if v is not None else ""
+            if ip and p:
+                out[ip] = p
+    return out
+
+
+def save_peer_receive_dirs(mapping: Dict[str, str]) -> bool:
+    data = _load_all()
+    clean: Dict[str, str] = {}
+    for k, v in (mapping or {}).items():
+        ip = str(k).strip()
+        p = str(v).strip() if v is not None else ""
+        if ip and p:
+            clean[ip] = p
+    if not clean:
+        data.pop("peer_receive_dirs", None)
+    else:
+        data["peer_receive_dirs"] = clean
+    return _write_all(data)
+
+
+def resolve_receive_dir_for_peer(peer_ip: Optional[str]) -> Path:
+    """
+    Куда сохранять входящие файлы от peer_ip.
+    Если для IP задана строка в peer_receive_dirs и путь доступен — она; иначе receive_dir_path().
+    """
+    base = receive_dir_path()
+    ip = (peer_ip or "").strip()
+    if not ip:
+        return base
+    custom = load_peer_receive_dirs().get(ip)
+    if not custom or not str(custom).strip():
+        return base
+    p = Path(str(custom).strip()).expanduser()
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return base
+    if p.is_dir():
+        return p.resolve()
+    return base
+
+
+def format_peer_receive_dirs_for_editor() -> str:
+    lines = [
+        "# IP отправителя<TAB>путь (или IP пробел путь). Нет строки для IP — общая папка выше.",
+        "",
+    ]
+    for ip, pth in sorted(load_peer_receive_dirs().items()):
+        lines.append(f"{ip}\t{pth}")
+    return "\n".join(lines) + "\n"
+
+
+def parse_peer_receive_dirs_editor(text: str) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for line in (text or "").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        if "\t" in s:
+            ip, _, rest = s.partition("\t")
+            path = rest.strip()
+        else:
+            parts = s.split(None, 1)
+            if len(parts) < 2:
+                continue
+            ip, path = parts[0].strip(), parts[1].strip()
+        if ip and path:
+            out[ip] = path
+    return out
+
+
 def receive_files_mode() -> str:
     """
     Как обрабатывать входящие файлы (обычная отправка и файл, забранный Cmd+Ctrl+V):
@@ -124,15 +204,15 @@ def save_receive_copy_to_clipboard(enabled: bool) -> bool:
 # ── Совместимость с portal_clipboard_rich / Windows-веткой ──────────
 
 
-def incoming_clipboard_files_save_dir() -> Path:
-    """Куда писать поток clipboard_files; при «только буфер» — temp (как на Win)."""
+def incoming_clipboard_files_save_dir(peer_ip: Optional[str] = None) -> Path:
+    """Куда писать поток clipboard_files; при «только буфер» — temp (как на Win). Иначе папка по IP или общая."""
     import tempfile
 
     if receive_files_mode() == "clipboard_only":
         d = Path(tempfile.gettempdir()) / "PortalIncoming"
         d.mkdir(parents=True, exist_ok=True)
         return d
-    return receive_dir_path()
+    return resolve_receive_dir_for_peer(peer_ip)
 
 
 def load_incoming_clipboard_files_mode() -> str:

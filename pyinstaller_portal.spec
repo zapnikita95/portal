@@ -2,7 +2,7 @@
 #
 #   pip install -r requirements.txt pyinstaller
 #   python3 scripts/generate_branding_icons.py
-#   pyinstaller pyinstaller_portal.spec
+#   pyinstaller -y pyinstaller_portal.spec
 #
 # Windows → dist/Portal/Portal.exe
 # macOS   → dist/Portal.app

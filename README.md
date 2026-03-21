@@ -22,7 +22,7 @@
 - ✨ **Приём файла:** если виджет был скрыт, он **кратко показывается (~3 с)** и снова скрывается (отключить: `PORTAL_WIDGET_PULSE_ON_RECEIVE=0`, длительность: `PORTAL_WIDGET_PULSE_SECONDS=3`)
 - 🔒 **Пароль сети (shared secret)** в настройках — одинаковый на всех своих ПК; шифрование трафика даёт VPN (Tailscale и т.д.), пароль режет доступ к порту **12345** в LAN
 - 🚀 **Работа без браузера** - нативное приложение
-- 💿 **Сборка «как обычная программа»** (без `.command` / `.bat`): **[BUILD_DESKTOP.md](BUILD_DESKTOP.md)** — `pyinstaller pyinstaller_portal.spec` → **Windows:** `dist/Portal/Portal.exe`, **macOS:** `dist/Portal.app` (иконка из `assets/branding/`). **В облаке:** GitHub Actions **Portal Desktop Build** (артефакты или релиз по тегу `v*`, см. BUILD_DESKTOP.md).
+- 💿 **Сборка «как обычная программа»** (без `.command` / `.bat`): **[BUILD_DESKTOP.md](BUILD_DESKTOP.md)** — `pyinstaller -y pyinstaller_portal.spec` → **Windows:** `dist/Portal/Portal.exe`, **macOS:** `dist/Portal.app` (иконка из `portal_main.gif` (скрипт `generate_branding_icons.py`)). **В облаке:** GitHub Actions **Portal Desktop Build** (артефакты или релиз по тегу `v*`, см. BUILD_DESKTOP.md).
 
 ## 📋 Требования
 
@@ -116,7 +116,7 @@ export PORTAL_GITHUB_TOKEN="ghp_xxxxxxxx"
 ```bash
 cd /path/to/portal
 pip install pyinstaller -r requirements.txt
-pyinstaller pyinstaller_portal.spec
+pyinstaller -y pyinstaller_portal.spec
 ```
 
 Артефакты в `dist/`. На macOS при «повреждении» приложения: `xattr -dr com.apple.quarantine dist/Portal.app`.  
@@ -167,7 +167,7 @@ python3 portal.py
 
 **Виджет «окошком» с рамкой (macOS, по умолчанию):** GIF рисуется на тёмной подложке `#2a2d35`, без магенты на весь стол — `PORTAL_WIDGET_FRAMED=1` или не задавать. Вернуть прежний полноэкранный хромакей: `PORTAL_WIDGET_FRAMED=0`.
 
-**Приём файлов:** в настройках список **режима** — на диск и в буфер / только папка / только буфер (+ файл в папке). Отправка «как из буфера» (`portal_clipboard`) по-прежнему всегда кладёт в буфер на принимающей стороне.
+**Приём файлов:** в настройках список **режима** — на диск и в буфер / только папка / только буфер (+ файл в папке). Отправка «как из буфера» (`portal_clipboard`) по-прежнему всегда кладёт в буфер на принимающей стороне. **Отдельная папка по IP:** вкладка «Папка и приём» — текстовое поле «IP → путь» (совпадение **строго** с IP в логе, например `100.x.x.x`); если строки для IP нет — используется общая папка. В режиме **«только в буфер»** файлы пишутся во временную папку, маппинг по IP не применяется.
 
 **Drag & Drop файла на виджет (macOS):** включён через `tkinterdnd2`. Если на Python 3.13+ падает при старте — запуск с `PORTAL_NO_MAC_DND=1` (DnD только из главного окна).
 

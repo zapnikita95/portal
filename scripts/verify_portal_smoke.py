@@ -28,6 +28,11 @@ def main() -> int:
             "load_remote_ips",
             "load_receive_dir",
             "receive_dir_path",
+            "load_peer_receive_dirs",
+            "save_peer_receive_dirs",
+            "resolve_receive_dir_for_peer",
+            "format_peer_receive_dirs_for_editor",
+            "parse_peer_receive_dirs_editor",
             "load_peer_ips",
             "load_shared_secret",
             "save_shared_secret",
@@ -83,6 +88,19 @@ def main() -> int:
     except Exception as e:
         errors.append(f"parse_first_json_object_bytes: {e}")
 
+    # 2b) папки приёма по IP
+    try:
+        import portal_config as _pc
+
+        m = _pc.parse_peer_receive_dirs_editor("100.1.2.3\t/tmp/x\n# c\n")
+        if m.get("100.1.2.3") != "/tmp/x":
+            errors.append("parse_peer_receive_dirs_editor: строка с TAB")
+        m2 = _pc.parse_peer_receive_dirs_editor("10.0.0.1 /var/tmp/y")
+        if m2.get("10.0.0.1") != "/var/tmp/y":
+            errors.append("parse_peer_receive_dirs_editor: строка с пробелом")
+    except Exception as e:
+        errors.append(f"peer_receive_dirs parse: {e}")
+
     # 3) PortalApp: методы UI, очередь
     try:
         from portal import PortalApp
@@ -92,6 +110,7 @@ def main() -> int:
             "handle_client",
             "_receive_clipboard_file_payload",
             "save_widget_preset_rules_from_ui",
+            "save_peer_receive_dirs_from_ui",
         )
         for m in required_methods:
             if not hasattr(PortalApp, m):
