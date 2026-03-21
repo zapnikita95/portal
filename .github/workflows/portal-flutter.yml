@@ -1,0 +1,113 @@
+# Сборка Flutter-клиента (один код → Android APK; iOS — отдельный job без подписи).
+# Артефакт: portal-flutter-apk. Релиз: тег portal-flutter-latest (обновляемый).
+name: Portal Flutter Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - "portal_flutter/**"
+      - ".github/workflows/portal-flutter.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.24.5"
+
+      - name: Добавить android/ если только lib/ (каркас из репо)
+        working-directory: portal_flutter
+        run: |
+          if [ ! -d android ]; then
+            flutter create . --project-name portal_flutter --org org.portal --platforms=android
+          fi
+
+      - name: Разрешить cleartext TCP (LAN / Tailscale без TLS на 12345)
+        working-directory: portal_flutter
+        run: |
+          python3 << 'PY'
+          from pathlib import Path
+          p = Path("android/app/src/main/AndroidManifest.xml")
+          t = p.read_text(encoding="utf-8")
+          if "usesCleartextTraffic" not in t:
+              t = t.replace("<application", '<application android:usesCleartextTraffic="true"', 1)
+              p.write_text(t, encoding="utf-8")
+          PY
+
+      - name: flutter pub get + build apk
+        working-directory: portal_flutter
+        run: |
+          flutter pub get
+          flutter build apk --release
+
+      - name: Стабильное имя для релиза
+        working-directory: portal_flutter
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk Portal-Flutter.apk
+          ls -la Portal-Flutter.apk
+
+      - name: Publish APK to GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: portal-flutter-latest
+          name: Portal Flutter (CI)
+          body: |
+            Release APK из ветки main (Flutter). Отдельно от Kivy **Portal-Android.apk**.
+            Установка: скачать `Portal-Flutter.apk` → разрешить установку из неизвестных источников.
+          artifacts: portal_flutter/Portal-Flutter.apk
+          allowUpdates: true
+          replacesArtifacts: true
+          omitBodyDuringUpdate: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portal-flutter-apk
+          path: portal_flutter/Portal-Flutter.apk
+          if-no-files-found: error
+
+  ios-nosign:
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.24.5"
+
+      - name: Добавить ios/ при необходимости
+        working-directory: portal_flutter
+        run: |
+          if [ ! -d ios ]; then
+            flutter create . --project-name portal_flutter --org org.portal --platforms=ios
+          fi
+
+      - name: Build iOS (без подписи — для локальной подписи / TestFlight)
+        working-directory: portal_flutter
+        run: |
+          flutter pub get
+          flutter build ios --release --no-codesign
+
+      - name: Архив Runner.app
+        working-directory: portal_flutter
+        run: |
+          cd build/ios/iphoneos
+          zip -r "$GITHUB_WORKSPACE/portal_flutter/Portal-Flutter-iOS-nosign.zip" Runner.app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portal-flutter-ios-nosign
+          path: portal_flutter/Portal-Flutter-iOS-nosign.zip
+          if-no-files-found: warn

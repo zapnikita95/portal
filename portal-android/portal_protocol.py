@@ -50,7 +50,7 @@ def send_file_to_peer(
         if ps:
             payload["portal_source"] = ps
         msg = _merge_secret(payload, secret)
-        raw = json.dumps(msg, ensure_ascii=False).encode("utf-8")
+        raw = json.dumps(msg, ensure_ascii=False).encode("utf-8") + b"\n"
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(timeout)
         sock.connect((host, port))
@@ -91,7 +91,7 @@ def send_text_clipboard(
         if ps:
             clip["portal_source"] = ps
         msg = _merge_secret(clip, secret)
-        raw = json.dumps(msg, ensure_ascii=False).encode("utf-8")
+        raw = json.dumps(msg, ensure_ascii=False).encode("utf-8") + b"\n"
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(timeout)
         sock.connect((host, port))
@@ -130,7 +130,7 @@ def ping_peer(
 ) -> bool:
     try:
         msg = _merge_secret({"type": "ping"}, secret)
-        raw = json.dumps(msg, ensure_ascii=False).encode("utf-8")
+        raw = json.dumps(msg, ensure_ascii=False).encode("utf-8") + b"\n"
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(timeout)
         s.connect((host, port))

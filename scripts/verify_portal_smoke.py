@@ -73,9 +73,9 @@ def main() -> int:
         _print_errors(errors)
         return 1
 
-    # 2) parse_first_json_object_bytes (не должен ссылаться на несуществующие имена)
+    # 2) parse_first_json_object_bytes (portal_json_framing + re-export из portal)
     try:
-        from portal import parse_first_json_object_bytes
+        from portal_json_framing import parse_first_json_object_bytes as _parse_framing
 
         buf = (
             json.dumps(
@@ -85,11 +85,34 @@ def main() -> int:
             + b"ab"
         )
         tail = b"ab"
-        obj, n = parse_first_json_object_bytes(buf)
+        obj, n = _parse_framing(buf)
         if not obj or obj.get("filename") != "x}.txt" or buf[n:] != tail:
             errors.append("parse_first_json_object_bytes: неверный результат")
+        buf_nl = (
+            json.dumps({"type": "file", "filename": "a.apk", "filesize": 3}, ensure_ascii=False).encode(
+                "utf-8"
+            )
+            + b"\n"
+            + b"\xff\xd8\xff"
+        )
+        obj2, n2 = _parse_framing(buf_nl)
+        if not obj2 or obj2.get("filesize") != 3 or buf_nl[n2 : n2 + 2] != b"\xff\xd8":
+            errors.append("parse_first_json_object_bytes: newline+binary")
+        import portal as _portal_mod
+
+        _parse_portal = getattr(_portal_mod, "parse_first_json_object_bytes", None)
+        if _parse_portal is not _parse_framing:
+            errors.append("portal.parse_first_json_object_bytes не из portal_json_framing")
     except Exception as e:
         errors.append(f"parse_first_json_object_bytes: {e}")
+
+    try:
+        import portal_history as _ph
+
+        _ph.init_db()
+        _ph.list_events(limit=3)
+    except Exception as e:
+        errors.append(f"portal_history: {e}")
 
     # 2b) папки приёма по IP
     try:

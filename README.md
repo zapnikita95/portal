@@ -23,6 +23,10 @@
 - 🔒 **Пароль сети (shared secret)** в настройках — одинаковый на всех своих ПК; шифрование трафика даёт VPN (Tailscale и т.д.), пароль режет доступ к порту **12345** в LAN
 - 🚀 **Работа без браузера** - нативное приложение
 - 💿 **Сборка «как обычная программа»** (без `.command` / `.bat`): **[BUILD_DESKTOP.md](BUILD_DESKTOP.md)** — `pyinstaller -y pyinstaller_portal.spec` → **Windows:** `dist/Portal/Portal.exe`, **macOS:** `dist/Portal.app` (иконка из `portal_main.gif` (скрипт `generate_branding_icons.py`)). **В облаке:** GitHub Actions **Portal Desktop Build** (артефакты или релиз по тегу `v*`, см. BUILD_DESKTOP.md). **Как отдавать пользователям (ZIP / установщики):** [DISTRIBUTION.md](DISTRIBUTION.md).
+- 📜 **История передач** (SQLite `portal_history.sqlite3` рядом с `config.json`): кнопка «История» в шапке — фильтр, **переотправить** файл на те же IP, **копировать** путь или текст.
+- 🔎 **Найти локально** (фаза A): скан `/24` вокруг текущего IP — узлы с ответом Portal на `:12345`, добавление в список пиров.
+- 📱 **Flutter-клиент** (тот же репозиторий, отдельный APK/IPA): [portal_flutter/README.md](portal_flutter/README.md). Сборки: workflow **Portal Flutter Build** → релиз `portal-flutter-latest`. Kivy-APK по-прежнему **Portal Android** → `portal-android-latest`. Это **два приложения** до завершения миграции на Flutter.
+- 🤖 **Android foreground service** (приём в фоне): [docs/ANDROID_FGS.md](docs/ANDROID_FGS.md).
 
 ## 📋 Требования
 

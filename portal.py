@@ -34,15 +34,18 @@ import io
 import struct
 import ctypes
 from pathlib import Path
-from typing import Optional, List, Dict, Tuple, Any, Callable
+from typing import Optional, List, Dict, Tuple, Any, Callable, Set
 import subprocess
 import platform
 import queue
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 
 import portal_config
+import portal_history
 import portal_i18n as i18n
 import portal_clipboard_rich as portal_clip_rich
+from portal_json_framing import parse_first_json_object_bytes
 from portal_tk_compat import ensure_tkdnd_tk_misc_patch
 
 
@@ -366,6 +369,39 @@ def probe_portal_peer(host: str, port: int = PORTAL_PORT, timeout: float = 3.0) 
         return False, "error"
 
 
+def scan_lan_subnet_for_portal_hosts(
+    my_ip: str,
+    *,
+    port: int = PORTAL_PORT,
+    timeout: float = 0.2,
+    max_workers: int = 56,
+) -> List[str]:
+    """
+    Фаза A LAN: скан подсети /24 вокруг my_ip, TCP + ping Portal (как probe_portal_peer).
+    """
+    my_ip = (my_ip or "").strip()
+    if not my_ip:
+        return []
+    parts = my_ip.rsplit(".", 1)
+    if len(parts) != 2:
+        return []
+    prefix = parts[0]
+    hosts = [f"{prefix}.{i}" for i in range(1, 255) if f"{prefix}.{i}" != my_ip]
+    found: List[str] = []
+    lock = threading.Lock()
+
+    def check(host: str) -> None:
+        ok, _code = probe_portal_peer(host, port=port, timeout=timeout)
+        if ok:
+            with lock:
+                found.append(host)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        list(ex.map(check, hosts))
+    found.sort(key=lambda ip: tuple(int(x) for x in ip.split(".")))
+    return found
+
+
 def parse_portal_json_message(data: bytes) -> Optional[dict]:
     """
     Разбор первого JSON-объекта из буфера (ping/pong и др.).
@@ -373,49 +409,6 @@ def parse_portal_json_message(data: bytes) -> Optional[dict]:
     """
     msg, _ = parse_first_json_object_bytes(data)
     return msg
-
-
-def parse_first_json_object_bytes(buf: bytes) -> tuple[Optional[dict], int]:
-    """
-    Первый полный JSON-объект в буфере + сколько байт он занял.
-    Нужно для ping и для file (после JSON сразу идут бинарные чанки в том же recv).
-
-    Важно: нельзя считать «{»/«}» вручную — в имени файла может быть «}» (например doc}.txt),
-    тогда ломался разбор, файл не принимался, отправитель получал пустой ответ.
-
-    Смещение по байтам считаем от исходного buf: после utf-8-sig в «строке» BOM не виден,
-    а len(s[:end].encode()) без учёта lead давал бы неверный хвост и битый бинарный файл.
-    """
-    if not buf:
-        return None, 0
-    lead = 3 if buf.startswith(b"\xef\xbb\xbf") else 0
-    try:
-        s = buf[lead:].decode("utf-8")
-    except UnicodeDecodeError:
-        try:
-            s = buf[lead:].decode("utf-8", errors="replace")
-        except Exception:
-            return None, 0
-    decoder = json.JSONDecoder()
-    i = 0
-    n = len(s)
-    while i < n and s[i].isspace():
-        i += 1
-    if i >= n:
-        return None, 0
-    if s[i] != "{":
-        j = s.find("{", i)
-        if j < 0:
-            return None, 0
-        i = j
-    try:
-        obj, end_char = decoder.raw_decode(s, i)
-    except json.JSONDecodeError:
-        return None, 0
-    if not isinstance(obj, dict):
-        return None, 0
-    json_end_bytes = lead + len(s[:end_char].encode("utf-8"))
-    return obj, json_end_bytes
 
 
 def _portal_sendall(sock: socket.socket, data: bytes) -> None:
@@ -767,6 +760,10 @@ class PortalApp(ctk.CTk):
         self._log_win: Optional[ctk.CTkToplevel] = None
         self._apk_win: Optional[ctk.CTkToplevel] = None
         self._help_win: Optional[ctk.CTkToplevel] = None
+        self._history_win: Optional[ctk.CTkToplevel] = None
+        self._history_scroll: Optional[Any] = None
+        self._history_filter_entry: Optional[Any] = None
+        self._lan_win: Optional[ctk.CTkToplevel] = None
 
         # Стандартное медиа из assets → сразу в config, чтобы поле «Медиа» не было пустым
         try:
@@ -919,6 +916,13 @@ class PortalApp(ctk.CTk):
         ).pack(side="left", padx=3)
         ctk.CTkButton(
             toolbar,
+            text=i18n.tr("toolbar.history"),
+            width=100,
+            command=self._open_history_window,
+            font=ctk.CTkFont(size=13),
+        ).pack(side="left", padx=3)
+        ctk.CTkButton(
+            toolbar,
             text=i18n.tr("toolbar.help"),
             width=40,
             command=self._open_help_window,
@@ -1064,6 +1068,13 @@ class PortalApp(ctk.CTk):
             command=lambda: self.check_peer_connection_async(silent=False),
             font=ctk.CTkFont(size=12),
         ).pack(side="left")
+        ctk.CTkButton(
+            probe_row,
+            text=i18n.tr("main.lan_find_btn"),
+            width=150,
+            command=self._open_lan_scan_window,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(10, 0))
         ctk.CTkLabel(
             probe_row,
             text=i18n.tr("main.probe_auto", sec=PEER_STATUS_POLL_MS // 1000),
@@ -1859,6 +1870,230 @@ class PortalApp(ctk.CTk):
             "yes",
         )
         return i18n.hotkey_help_text(is_mac, mac_legacy, sys.version_info >= (3, 13))
+
+    def _open_history_window(self) -> None:
+        if self._history_win is not None:
+            try:
+                if self._history_win.winfo_exists():
+                    self._history_win.deiconify()
+                    self._history_win.lift()
+                    self._history_refresh_list()
+                    return
+            except Exception:
+                self._history_win = None
+        w = ctk.CTkToplevel(self)
+        w.title(i18n.tr("history.title"))
+        w.geometry("660x540")
+        try:
+            w.transient(self)
+        except Exception:
+            pass
+        self._history_win = w
+        top = ctk.CTkFrame(w, fg_color="transparent")
+        top.pack(fill="x", padx=10, pady=8)
+        ctk.CTkLabel(top, text=i18n.tr("history.filter")).pack(side="left")
+        self._history_filter_entry = ctk.CTkEntry(top, width=240)
+        self._history_filter_entry.pack(side="left", padx=8)
+        self._history_filter_entry.bind("<KeyRelease>", lambda _e: self._history_refresh_list())
+        ctk.CTkButton(
+            top,
+            text=i18n.tr("history.refresh"),
+            width=100,
+            command=self._history_refresh_list,
+        ).pack(side="left")
+        self._history_scroll = ctk.CTkScrollableFrame(w)
+        self._history_scroll.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        self._history_refresh_list()
+
+    def _history_refresh_list(self) -> None:
+        sc = self._history_scroll
+        if sc is None:
+            return
+        for ch in sc.winfo_children():
+            ch.destroy()
+        q = ""
+        try:
+            if self._history_filter_entry is not None:
+                q = self._history_filter_entry.get()
+        except Exception:
+            pass
+        try:
+            portal_history.init_db()
+            rows = portal_history.list_events(limit=150, search=q)
+        except Exception as ex:
+            ctk.CTkLabel(sc, text=str(ex)).pack(anchor="w", pady=6)
+            return
+        if not rows:
+            ctk.CTkLabel(sc, text=i18n.tr("history.empty")).pack(anchor="w", pady=6)
+            return
+        for ev in rows:
+            self._history_add_row(ev)
+
+    def _history_add_row(self, ev: Dict[str, Any]) -> None:
+        sc = self._history_scroll
+        if sc is None:
+            return
+        fr = ctk.CTkFrame(sc)
+        fr.pack(fill="x", pady=4)
+        ts = float(ev.get("ts") or 0)
+        tss = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
+        d = ev.get("direction") or "?"
+        k = ev.get("kind") or "?"
+        who = ev.get("peer_label") or ev.get("peer_ip") or ""
+        nm = ev.get("name") or ""
+        line = f"{tss}  {d}/{k}  {who}"
+        if nm:
+            line += f"  {nm}"
+        ctk.CTkLabel(
+            fr,
+            text=line[:220],
+            anchor="w",
+            justify="left",
+            wraplength=560,
+        ).pack(fill="x", padx=6, pady=2)
+        btn_row = ctk.CTkFrame(fr, fg_color="transparent")
+        btn_row.pack(fill="x", padx=4, pady=2)
+        eid = int(ev["id"])
+        ctk.CTkButton(
+            btn_row,
+            text=i18n.tr("history.resend"),
+            width=110,
+            command=lambda i=eid: self._history_resend(i),
+        ).pack(side="left", padx=4)
+        ctk.CTkButton(
+            btn_row,
+            text=i18n.tr("history.copy"),
+            width=110,
+            command=lambda i=eid: self._history_copy(i),
+        ).pack(side="left", padx=4)
+
+    def _history_resend(self, event_id: int) -> None:
+        ev = portal_history.get_event(event_id)
+        if not ev:
+            return
+        if ev.get("kind") != "file":
+            self.log(i18n.tr("history.resend_file_only"))
+            return
+        path = (ev.get("stored_path") or "").strip()
+        if not path or not os.path.isfile(path):
+            self.log(i18n.tr("history.missing_file"))
+            return
+        ips = portal_history.parse_route_ips(ev.get("route_json") or "")
+        if not ips:
+            p = (ev.get("peer_ip") or "").strip()
+            ips = [p] if p else []
+        if not ips:
+            self.log(i18n.tr("history.no_targets"))
+            return
+
+        def work():
+            for ip in ips:
+                try:
+                    self.send_file(path, ip)
+                except Exception as ex:
+                    msg = str(ex)
+                    self.after(
+                        0,
+                        lambda m=msg: self.log(f"{i18n.tr('history.resend')}: {m}"),
+                    )
+
+        threading.Thread(target=work, daemon=True).start()
+        self.log(i18n.tr("history.resend_started"))
+
+    def _history_copy(self, event_id: int) -> None:
+        ev = portal_history.get_event(event_id)
+        if not ev:
+            return
+        path = (ev.get("stored_path") or "").strip()
+        snip = (ev.get("snippet") or "").strip()
+        if path:
+            try:
+                pyperclip.copy(path)
+                self.log(i18n.tr("history.copied_path"))
+            except Exception as e:
+                self.log(str(e))
+        elif snip:
+            try:
+                pyperclip.copy(snip)
+                self.log(i18n.tr("history.copied_text"))
+            except Exception as e:
+                self.log(str(e))
+        else:
+            self.log(i18n.tr("history.nothing_to_copy"))
+
+    def _open_lan_scan_window(self) -> None:
+        base = (self.tailscale_ip or "").strip()
+        if not base:
+            self.log(i18n.tr("lan.no_local_ip"))
+            return
+        if self._lan_win is not None:
+            try:
+                if self._lan_win.winfo_exists():
+                    self._lan_win.deiconify()
+                    self._lan_win.lift()
+                    return
+            except Exception:
+                self._lan_win = None
+        w = ctk.CTkToplevel(self)
+        w.title(i18n.tr("lan.title"))
+        w.geometry("500x460")
+        try:
+            w.transient(self)
+        except Exception:
+            pass
+        self._lan_win = w
+        st = ctk.CTkLabel(w, text=i18n.tr("lan.scanning"))
+        st.pack(pady=8)
+        scroll = ctk.CTkScrollableFrame(w)
+        scroll.pack(fill="both", expand=True, padx=10, pady=4)
+        check_vars: Dict[str, tk.BooleanVar] = {}
+
+        def finish(found: List[str]) -> None:
+            st.configure(text=i18n.tr("lan.done", n=len(found)))
+            for ch in scroll.winfo_children():
+                ch.destroy()
+            if not found:
+                ctk.CTkLabel(scroll, text=i18n.tr("lan.none")).pack(anchor="w", pady=6)
+                return
+            for ip in found:
+                row = ctk.CTkFrame(scroll, fg_color="transparent")
+                row.pack(fill="x", pady=2)
+                v = tk.BooleanVar(value=True)
+                check_vars[ip] = v
+                ctk.CTkCheckBox(row, text=ip, variable=v).pack(side="left")
+
+        def work() -> None:
+            found = scan_lan_subnet_for_portal_hosts(base)
+            self.after(0, lambda: finish(found))
+
+        threading.Thread(target=work, daemon=True).start()
+
+        def add_selected() -> None:
+            sel = [ip for ip, v in check_vars.items() if v.get()]
+            if not sel:
+                self.log(i18n.tr("lan.nothing_selected"))
+                return
+            have = list(portal_config.load_peer_ips())
+            seen = set(have)
+            added = [ip for ip in sel if ip not in seen]
+            if not added:
+                self.log(i18n.tr("lan.already_in_list"))
+                return
+            merged = have + added
+            portal_config.save_peer_ips(merged)
+            self.rebuild_peer_checkboxes()
+            self.log(i18n.tr("lan.added", ips=", ".join(added)))
+
+        btn_row = ctk.CTkFrame(w, fg_color="transparent")
+        btn_row.pack(fill="x", pady=8)
+        ctk.CTkButton(
+            btn_row,
+            text=i18n.tr("lan.add_btn"),
+            command=add_selected,
+        ).pack(side="left", padx=8)
+        ctk.CTkButton(btn_row, text=i18n.tr("lan.close_btn"), command=w.destroy).pack(
+            side="left", padx=8
+        )
 
     def _setup_floating_log_window(self) -> None:
         if self._log_win is not None:
@@ -3098,6 +3333,18 @@ class PortalApp(ctk.CTk):
         draft = self._parse_peer_ips_draft()
         return draft if draft else list(portal_config.load_peer_ips())
 
+    def _peer_targets_for_probe(self) -> List[str]:
+        """IP только с отмеченными получателями (как при отправке файла)."""
+        seen: Set[str] = set()
+        out: List[str] = []
+        for ip in portal_config.load_peer_send_targets():
+            ip = (ip or "").strip()
+            if not ip or ip in seen:
+                continue
+            seen.add(ip)
+            out.append(ip)
+        return out
+
     def _format_peer_probe_result(self, ip: str, ok: bool, code: str) -> tuple[str, str]:
         """Текст и цвет для строки статуса пары."""
         if not ip:
@@ -3154,28 +3401,31 @@ class PortalApp(ctk.CTk):
 
     def _arm_peer_poll(self) -> None:
         self._cancel_peer_poll()
-        if not portal_config.load_peer_ips():
+        if not self._peer_targets_for_probe():
             return
         self._peer_poll_job = self.after(PEER_STATUS_POLL_MS, self._peer_poll_tick)
 
     def _peer_poll_tick(self) -> None:
         self._peer_poll_job = None
-        if portal_config.load_peer_ips():
+        if self._peer_targets_for_probe():
             self.check_peer_connection_async(silent=True)
-        if portal_config.load_peer_ips():
+        if self._peer_targets_for_probe():
             self._arm_peer_poll()
 
     def check_peer_connection_async(self, silent: bool = False) -> None:
-        """Фоновый ping → pong ко всем IP из списка (черновик в текстбоксе или сохранённый)."""
-        ips = self._peer_ips_for_probe()
+        """Фоновый ping → pong только к отмеченным получателям."""
+        ips = self._peer_targets_for_probe()
         if not ips:
-            self.after(
-                0,
-                lambda: self.peer_link_status_label.configure(
-                    text=i18n.tr("peer.probe_empty"),
-                    text_color="gray",
-                ),
-            )
+            def _idle_status():
+                if not hasattr(self, "peer_link_status_label"):
+                    return
+                if not portal_config.load_peer_ips():
+                    msg = i18n.tr("peer.probe_empty")
+                else:
+                    msg = i18n.tr("peer.probe_no_selection")
+                self.peer_link_status_label.configure(text=msg, text_color="gray")
+
+            self.after(0, _idle_status)
             return
 
         def worker():
@@ -3751,12 +4001,66 @@ class PortalApp(ctk.CTk):
                     f.write(chunk)
                     remaining -= len(chunk)
 
+            if remaining > 0:
+                self._log_from_thread(
+                    f"❌ Файл {filename}: получено {filesize - remaining}/{filesize} байт (обрыв или сбой заголовка JSON/размера)"
+                )
+                try:
+                    _portal_sendall(client_socket, b"ERR")
+                except Exception:
+                    pass
+                try:
+                    filepath.unlink(missing_ok=True)  # type: ignore[arg-type]
+                except Exception:
+                    pass
+                return
+
+            try:
+                if filepath.is_file() and filepath.stat().st_size != filesize:
+                    self._log_from_thread(
+                        f"❌ Файл {filename}: размер на диске не совпадает с заголовком"
+                    )
+                    try:
+                        _portal_sendall(client_socket, b"ERR")
+                    except Exception:
+                        pass
+                    try:
+                        filepath.unlink(missing_ok=True)  # type: ignore[arg-type]
+                    except Exception:
+                        pass
+                    return
+            except OSError:
+                self._log_from_thread(f"❌ Файл {filename}: не удалось проверить размер на диске")
+                try:
+                    _portal_sendall(client_socket, b"ERR")
+                except Exception:
+                    pass
+                try:
+                    filepath.unlink(missing_ok=True)  # type: ignore[arg-type]
+                except Exception:
+                    pass
+                return
+
             self._log_from_thread(
                 f"✅ Файл сохранен: {filepath}"
                 + (f" (папка для {peer_ip})" if peer_ip else "")
             )
 
             _portal_sendall(client_socket, b"OK")
+
+            try:
+                portal_history.append_event(
+                    direction="receive",
+                    kind="file",
+                    peer_ip=peer_ip or "",
+                    peer_label=portal_config.peer_display_label(peer_ip or ""),
+                    name=filename,
+                    stored_path=str(filepath.resolve()),
+                    route_json=json.dumps([]),
+                    filesize=filesize,
+                )
+            except Exception:
+                pass
 
             # Finder / NSPasteboard только из главного потока Tk — иначе на macOS возможен обрыв сокета (10054).
             fp_saved = filepath
@@ -4158,6 +4462,19 @@ class PortalApp(ctk.CTk):
             if _portal_message_from_mobile(message):
                 self._log_from_thread("📱 Получено с телефона — текст в буфере")
                 _portal_desktop_notify("Portal", "Текст с телефона — в буфере обмена")
+            try:
+                portal_history.append_event(
+                    direction="receive",
+                    kind="text",
+                    peer_ip=peer_ip or "",
+                    peer_label=portal_config.peer_display_label(peer_ip or ""),
+                    name="clipboard",
+                    snippet=str(clipboard_text)[:500],
+                    stored_path="",
+                    route_json=json.dumps([]),
+                )
+            except Exception:
+                pass
 
     def _clipboard_snapshot_resolved_for_send(self) -> Tuple[str, dict]:
         """Снимок буфера для отправки (push и ответ get_clipboard): snapshot + фолбэки."""
@@ -4264,7 +4581,7 @@ class PortalApp(ctk.CTk):
             header = _sec({"type": "clipboard_files", "files": specs})
             _portal_sendall(
                 client_socket,
-                json.dumps(header, ensure_ascii=False).encode("utf-8"),
+                json.dumps(header, ensure_ascii=False).encode("utf-8") + b"\n",
             )
             time.sleep(0.05)
             for p in valid_paths:
@@ -4300,7 +4617,7 @@ class PortalApp(ctk.CTk):
             )
             _portal_sendall(
                 client_socket,
-                json.dumps(hdr, ensure_ascii=False).encode("utf-8"),
+                json.dumps(hdr, ensure_ascii=False).encode("utf-8") + b"\n",
             )
             time.sleep(0.05)
             _portal_sendall(client_socket, image_bytes)
@@ -4437,7 +4754,8 @@ class PortalApp(ctk.CTk):
                 json.dumps(
                     merge_outgoing_shared_secret({"type": "get_clipboard"}),
                     ensure_ascii=False,
-                ).encode("utf-8"),
+                ).encode("utf-8")
+                + b"\n",
             )
             message, rest = read_one_json_object_from_socket(client_socket)
             if message.get("type") == "portal_auth_failed":
@@ -4741,7 +5059,10 @@ class PortalApp(ctk.CTk):
             message = merge_outgoing_shared_secret(message)
             # Без лимита времени на передачу больших файлов; отдельный таймаут на ответ OK
             client_socket.settimeout(None)
-            _portal_sendall(client_socket, json.dumps(message, ensure_ascii=False).encode("utf-8"))
+            _portal_sendall(
+                client_socket,
+                json.dumps(message, ensure_ascii=False).encode("utf-8") + b"\n",
+            )
             time.sleep(0.05)
 
             with open(filepath, "rb") as f:
@@ -4760,6 +5081,19 @@ class PortalApp(ctk.CTk):
             
             if response.startswith(b"OK"):
                 self.log(f"✅ Файл успешно отправлен: {filename}")
+                try:
+                    portal_history.append_event(
+                        direction="send",
+                        kind="file",
+                        peer_ip=target_ip,
+                        peer_label=portal_config.peer_display_label(target_ip),
+                        name=filename,
+                        stored_path=str(Path(filepath).resolve()),
+                        route_json=json.dumps([target_ip]),
+                        filesize=filesize,
+                    )
+                except Exception:
+                    pass
                 try:
                     self.after(
                         0,
@@ -4948,11 +5282,24 @@ class PortalApp(ctk.CTk):
             )
             _portal_sendall(
                 client_socket,
-                json.dumps(message, ensure_ascii=False).encode("utf-8"),
+                json.dumps(message, ensure_ascii=False).encode("utf-8") + b"\n",
             )
             client_socket.close()
             
             self.log(f"✅ Текст отправлен ({len(clipboard_text)} символов)")
+            try:
+                portal_history.append_event(
+                    direction="send",
+                    kind="text",
+                    peer_ip=target_ip,
+                    peer_label=portal_config.peer_display_label(target_ip),
+                    name="clipboard",
+                    snippet=str(clipboard_text)[:500],
+                    stored_path="",
+                    route_json=json.dumps([target_ip]),
+                )
+            except Exception:
+                pass
             try:
                 self.after(
                     0,

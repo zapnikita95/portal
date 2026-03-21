@@ -35,6 +35,9 @@ except ImportError:
     send_file_to_peer = None  # type: ignore
     send_text_clipboard = None  # type: ignore
 
+from portal_json_framing import parse_first_json_object_bytes
+import portal_history
+
 try:
     from android_share import (
         SharePayload,
@@ -138,6 +141,46 @@ def save_cfg(data: dict) -> None:
     p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def _android_fgs_jni_service_class() -> str:
+    """Совпадает с buildozer: services = receive:... → ServiceReceive (p4a)."""
+    return "org.portal.portalshare.ServiceReceive"
+
+
+def android_start_receive_foreground_service() -> bool:
+    """Запуск foreground service приёма (отдельный процесс p4a)."""
+    if kivy_platform != "android":
+        return False
+    try:
+        from jnius import autoclass  # type: ignore
+
+        svc = autoclass(_android_fgs_jni_service_class())
+        activity = autoclass("org.kivy.android.PythonActivity").mActivity
+        svc.start(
+            activity,
+            "ic_launcher",
+            "Portal",
+            "Приём файлов :12345",
+            "",
+        )
+        return True
+    except Exception as ex:
+        print(f"[Portal] foreground service start failed: {ex}")
+        return False
+
+
+def android_stop_receive_foreground_service() -> None:
+    try:
+        from jnius import autoclass  # type: ignore
+
+        Intent = autoclass("android.content.Intent")
+        activity = autoclass("org.kivy.android.PythonActivity").mActivity
+        svc = autoclass(_android_fgs_jni_service_class())
+        intent = Intent(activity, svc)
+        activity.stopService(intent)
+    except Exception:
+        pass
+
+
 def normalize_peers(raw) -> list:
     out = []
     for p in raw or []:
@@ -202,32 +245,8 @@ def _mascot_image_source() -> tuple:
 
 
 def _parse_json_header(data: bytes):
-    """Найти первый полный JSON-объект в буфере. Возвращает (dict, end_pos) или (None, 0)."""
-    depth = 0
-    in_str = False
-    esc = False
-    for i, b in enumerate(data):
-        ch = chr(b)
-        if in_str:
-            if esc:
-                esc = False
-            elif ch == "\\":
-                esc = True
-            elif ch == '"':
-                in_str = False
-        else:
-            if ch == '"':
-                in_str = True
-            elif ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    try:
-                        return json.loads(data[: i + 1].decode("utf-8", errors="replace")), i + 1
-                    except Exception:
-                        return None, 0
-    return None, 0
+    """Первый JSON-заголовок Portal (тот же алгоритм, что на десктопе)."""
+    return parse_first_json_object_bytes(data)
 
 
 # ── сервер приёма файлов ─────────────────────────────────────────────────────
@@ -241,11 +260,14 @@ class ReceiveServer:
         secret: str = "",
         on_event=None,
         saf_tree_uri: str = "",
+        *,
+        use_kivy_clock: bool = True,
     ):
         self.receive_dir = receive_dir or _default_receive_dir()
         self.saf_tree_uri = (saf_tree_uri or "").strip()
         self.secret = secret
         self.on_event = on_event   # callback(kind, message) - вызывается через Clock
+        self._use_kivy_clock = bool(use_kivy_clock)
         self._running  = False
         self._server: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
@@ -274,8 +296,15 @@ class ReceiveServer:
         self.saf_tree_uri = (saf_tree_uri or "").strip()
 
     def _emit(self, kind: str, msg: str) -> None:
-        if self.on_event:
+        if not self.on_event:
+            return
+        if self._use_kivy_clock:
             Clock.schedule_once(lambda _dt, k=kind, m=msg: self.on_event(k, m), 0)
+        else:
+            try:
+                self.on_event(kind, msg)
+            except Exception:
+                pass
 
     def _run(self) -> None:
         while self._running:
@@ -355,6 +384,19 @@ class ReceiveServer:
                 if text:
                     snippet = text[:80] + ("..." if len(text) > 80 else "")
                     self._emit("receive_text", f"Текст от {peer_ip}: {snippet!r}")
+                    try:
+                        portal_history.append_event(
+                            direction="receive",
+                            kind="text",
+                            peer_ip=peer_ip,
+                            peer_label=peer_ip,
+                            name="clipboard",
+                            snippet=text[:500],
+                            stored_path="",
+                            route_json=json.dumps([]),
+                        )
+                    except Exception:
+                        pass
                 conn.close()
                 return
 
@@ -407,7 +449,26 @@ class ReceiveServer:
                         f.write(chunk)
                         received += len(chunk)
                 if received < filesize:
+                    try:
+                        conn.sendall(b"ERR")
+                    except OSError:
+                        pass
                     self._emit("error", f"[!] Файл {safe}: получено {received}/{filesize} байт")
+                    return
+                try:
+                    if os.path.getsize(tmp_path) != filesize:
+                        try:
+                            conn.sendall(b"ERR")
+                        except OSError:
+                            pass
+                        self._emit("error", f"[!] Файл {safe}: размер на диске не совпадает")
+                        return
+                except OSError:
+                    try:
+                        conn.sendall(b"ERR")
+                    except OSError:
+                        pass
+                    self._emit("error", f"[!] Файл {safe}: не удалось проверить размер")
                     return
                 out_java, _uri = create_document_output_stream(
                     self.saf_tree_uri, f"{ts}_{safe}"
@@ -420,6 +481,10 @@ class ReceiveServer:
                     return
                 try:
                     if not copy_path_to_java_stream(tmp_path, out_java):
+                        try:
+                            conn.sendall(b"ERR")
+                        except OSError:
+                            pass
                         self._emit("error", f"[!] Ошибка записи в папку проводника: {safe}")
                         return
                 finally:
@@ -430,6 +495,19 @@ class ReceiveServer:
                     "receive_file",
                     f"[+] Получен файл от {peer_ip}: {safe} ({kb} КБ) -> папка (проводник)",
                 )
+                try:
+                    portal_history.append_event(
+                        direction="receive",
+                        kind="file",
+                        peer_ip=peer_ip,
+                        peer_label=peer_ip,
+                        name=safe,
+                        stored_path="",
+                        route_json=json.dumps([]),
+                        filesize=filesize,
+                    )
+                except Exception:
+                    pass
                 if is_android_runtime():
                     toast(f"Файл получен: {safe}", long=False)
                 return
@@ -452,15 +530,56 @@ class ReceiveServer:
                     f.write(chunk)
                     received += len(chunk)
             if received >= filesize:
+                try:
+                    if os.path.getsize(out_path) != filesize:
+                        try:
+                            conn.sendall(b"ERR")
+                        except OSError:
+                            pass
+                        try:
+                            os.remove(out_path)
+                        except OSError:
+                            pass
+                        self._emit("error", f"[!] Файл {safe}: размер на диске не совпадает")
+                        return
+                except OSError:
+                    try:
+                        conn.sendall(b"ERR")
+                    except OSError:
+                        pass
+                    self._emit("error", f"[!] Файл {safe}: не удалось проверить размер")
+                    return
                 conn.sendall(b"OK")
                 kb = max(1, filesize // 1024)
                 self._emit(
                     "receive_file",
                     f"[+] Получен файл от {peer_ip}: {safe} ({kb} КБ) -> {save_dir}",
                 )
+                try:
+                    portal_history.append_event(
+                        direction="receive",
+                        kind="file",
+                        peer_ip=peer_ip,
+                        peer_label=peer_ip,
+                        name=safe,
+                        stored_path=out_path or "",
+                        route_json=json.dumps([]),
+                        filesize=filesize,
+                    )
+                except Exception:
+                    pass
                 if is_android_runtime():
                     toast(f"Файл получен: {safe}", long=False)
             else:
+                try:
+                    conn.sendall(b"ERR")
+                except OSError:
+                    pass
+                try:
+                    if out_path and os.path.isfile(out_path):
+                        os.remove(out_path)
+                except OSError:
+                    pass
                 self._emit("error", f"[!] Файл {safe}: получено {received}/{filesize} байт")
         except Exception as e:
             self._emit("error", f"[!] Ошибка записи {safe}: {e}")
@@ -513,18 +632,20 @@ class SectionTitle(Label):
 
 
 class Hint(Label):
+    """Подсказка фиксированной высоты — иначе при появлении клавиатуры пересчёт высоты двигает заголовки."""
+
     def __init__(self, text, **kwargs):
         kwargs.setdefault("font_size", dp(12))
         kwargs.setdefault("color", C_MUTED)
         kwargs.setdefault("size_hint_y", None)
+        kwargs.setdefault("height", dp(72))
         kwargs.setdefault("halign", "left")
         kwargs.setdefault("valign", "top")
         super().__init__(text=text, **kwargs)
         self.bind(
-            width=lambda inst, w: setattr(inst, "text_size", (max(w - dp(4), dp(100)), None))
-        )
-        self.bind(
-            texture_size=lambda inst, ts: setattr(inst, "height", max(ts[1] + dp(4), dp(20)))
+            width=lambda inst, w: setattr(
+                inst, "text_size", (max(w - dp(4), dp(100)), dp(68))
+            )
         )
 
 
@@ -606,6 +727,8 @@ class PeerRow(BoxLayout):
             use_bubble=True,
             use_handles=True,
             size_hint_x=1,
+            size_hint_y=None,
+            height=dp(44),
             background_color=C_INPUT,
             foreground_color=C_TEXT,
             hint_text_color=C_MUTED,
@@ -628,6 +751,8 @@ class PeerRow(BoxLayout):
             use_bubble=True,
             use_handles=True,
             size_hint_x=1,
+            size_hint_y=None,
+            height=dp(38),
             background_color=C_INPUT,
             foreground_color=C_TEXT,
             hint_text_color=C_MUTED,
@@ -638,8 +763,8 @@ class PeerRow(BoxLayout):
 
         rm = Button(
             text="X Удалить",
-            size_hint=(None, 1),
-            width=dp(90),
+            size_hint=(None, None),
+            size=(dp(90), dp(38)),
             background_color=(0.42, 0.12, 0.12, 1),
             color=C_TEXT,
             font_size=dp(12),
@@ -677,6 +802,8 @@ class PortalAndroidApp(App):
         self._log_lines: list     = []
         self._ping_event          = None
         self._recv_server: Optional[ReceiveServer] = None
+        self._fg_receive_started = False
+        self._fg_receive_used = False
         self._receive_saf_uri: str = ""
         self._cold_share_container: Optional[BoxLayout] = None
         self._settings_popup = None
@@ -757,7 +884,7 @@ class PortalAndroidApp(App):
         sec_card.add_widget(SectionTitle("Пароль сети"))
         sec_card.add_widget(
             Hint(
-                "Как в настольном Portal: ⚙ Настройки → пароль. "
+                "Как в настольном Portal: Настройки, поле пароля. "
                 "Должен совпадать на телефоне и на ПК."
             )
         )
@@ -834,7 +961,7 @@ class PortalAndroidApp(App):
         test_paste_btn.bind(on_press=lambda *_: self._paste_clipboard_into(self._test_text))
         test_paste_row.add_widget(test_paste_btn)
         test_card.add_widget(test_paste_row)
-        send_txt_btn = _btn("Отправить текст →", bg=C_ACCENT, height=dp(48))
+        send_txt_btn = _btn("Отправить текст на ПК", bg=C_ACCENT, height=dp(48))
         send_txt_btn.bind(on_press=lambda *_: self.send_test_text())
         test_card.add_widget(send_txt_btn)
         body.add_widget(test_card)
@@ -912,7 +1039,7 @@ class PortalAndroidApp(App):
         box.add_widget(lbl)
         close_btn = _btn("Закрыть", bg=(0.18, 0.22, 0.32, 1), height=dp(44), font_size=dp(13))
         pop = Popup(
-            title="Связь с ПК",
+            title="Связь с компьютером",
             content=box,
             size_hint=(0.88, 0.42),
             separator_height=0,
@@ -924,7 +1051,7 @@ class PortalAndroidApp(App):
             if ping_peer is None:
                 def no_ping(_dt):
                     lbl.text = "Модуль проверки недоступен."
-                    self._log("[🔌] ping: модуль недоступен")
+                    self._log("[ping] модуль недоступен")
                 Clock.schedule_once(no_ping, 0)
                 return
             peers = [
@@ -936,7 +1063,7 @@ class PortalAndroidApp(App):
             if not peers:
                 def no_peers(_dt):
                     lbl.text = "Нет адреса с галочкой «отправка». Добавь IP на главном экране."
-                    self._log("[🔌] Нет пиров для проверки")
+                    self._log("[ping] Нет пиров для проверки")
                 Clock.schedule_once(no_peers, 0)
                 return
             ok = 0
@@ -950,18 +1077,18 @@ class PortalAndroidApp(App):
             def done(_dt):
                 total = len(peers)
                 if ok == total:
-                    msg = f"[OK] Все {total} ПК отвечают."
+                    msg = f"[OK] Все {total} выбранных устройств отвечают."
                 elif ok:
-                    msg = f"[~] Ответили {ok} из {total}."
+                    msg = f"[~] Ответили {ok} из {total} устройств."
                 else:
-                    msg = "[!] Нет ответа. Проверь IP, Wi‑Fi и пароль сети."
+                    msg = "[!] Нет ответа. Проверь IP, Wi-Fi и пароль сети."
                 lbl.text = msg
-                self._log(f"[🔌] {msg}")
+                self._log(f"[ping] {msg}")
                 self._apply_ping_ui(ok > 0, ok, total)
 
             Clock.schedule_once(done, 0)
 
-        self._log("[🔌] Ручная проверка связи…")
+        self._log("[ping] Ручная проверка связи…")
         pop.open()
         threading.Thread(target=run_ping, daemon=True).start()
 
@@ -971,9 +1098,12 @@ class PortalAndroidApp(App):
         Window.clearcolor = C_BG
         if kivy_platform == "android":
             try:
-                Window.softinput_mode = "resize"
+                Window.softinput_mode = "below_target"
             except Exception:
-                pass
+                try:
+                    Window.softinput_mode = "pan"
+                except Exception:
+                    pass
             self._install_android_activity_bindings()
         if is_android_runtime():
             try:
@@ -1005,6 +1135,16 @@ class PortalAndroidApp(App):
                         orientation="vertical",
                         spacing=dp(8),
                         size_hint_y=1,
+                    )
+                    self._cold_share_container.add_widget(
+                        Label(
+                            text="Чтение вложения...",
+                            font_size=dp(14),
+                            color=C_MUTED,
+                            size_hint_y=None,
+                            height=dp(36),
+                            halign="left",
+                        )
                     )
                     shell.add_widget(self._cold_share_container)
                     return shell
@@ -1071,12 +1211,12 @@ class PortalAndroidApp(App):
             font_size=dp(12),
             color=C_MUTED,
             size_hint_y=None,
-            height=dp(24),
+            height=dp(40),
             halign="left",
             valign="top",
         )
         self._conn_lbl.bind(
-            width=lambda inst, w: setattr(inst, "text_size", (w, None))
+            width=lambda inst, w: setattr(inst, "text_size", (max(w - dp(2), dp(80)), dp(36)))
         )
         title_col.add_widget(self._conn_lbl)
         header.add_widget(title_col)
@@ -1089,16 +1229,23 @@ class PortalAndroidApp(App):
         self._header_save_btn.width = 0
         header.add_widget(self._header_save_btn)
 
-        plug_btn = _btn("🔌", bg=(0.18, 0.38, 0.22, 1), height=dp(40), font_size=dp(16))
+        plug_btn = _btn("Ping", bg=(0.18, 0.38, 0.22, 1), height=dp(40), font_size=dp(11))
         plug_btn.size_hint = (None, None)
-        plug_btn.size = (dp(44), dp(40))
+        plug_btn.size = (dp(52), dp(40))
         plug_btn.pos_hint = {"center_y": 0.5}
         plug_btn.bind(on_press=lambda *_: self._show_ping_popup())
         header.add_widget(plug_btn)
 
-        gear_btn = _btn("⚙", bg=(0.14, 0.17, 0.25, 1), height=dp(40), font_size=dp(18))
+        hist_btn = _btn("Истр.", bg=(0.14, 0.17, 0.25, 1), height=dp(40), font_size=dp(11))
+        hist_btn.size_hint = (None, None)
+        hist_btn.size = (dp(52), dp(40))
+        hist_btn.pos_hint = {"center_y": 0.5}
+        hist_btn.bind(on_press=lambda *_: self._show_history_popup())
+        header.add_widget(hist_btn)
+
+        gear_btn = _btn("Настр.", bg=(0.14, 0.17, 0.25, 1), height=dp(40), font_size=dp(11))
         gear_btn.size_hint = (None, None)
-        gear_btn.size = (dp(44), dp(40))
+        gear_btn.size = (dp(64), dp(40))
         gear_btn.pos_hint = {"center_y": 0.5}
         gear_btn.bind(on_press=lambda *_: self._open_settings_popup())
         header.add_widget(gear_btn)
@@ -1131,7 +1278,9 @@ class PortalAndroidApp(App):
         peers_card = Card()
         peers_card.add_widget(SectionTitle("Адреса компьютеров"))
         peers_card.add_widget(
-            Hint("☑ галочка = разрешить отправку на этот адрес. IP как в настольном Portal.")
+            Hint(
+                "Галочка слева = разрешить отправку на этот адрес. IP как в настольном Portal."
+            )
         )
         self._peers_box = BoxLayout(
             orientation="vertical",
@@ -1142,7 +1291,7 @@ class PortalAndroidApp(App):
         peers_card.add_widget(self._peers_box)
         peers_card.add_widget(
             Hint(
-                "Пароль, папка приёма и тест текста — кнопка ⚙ сверху. "
+                "Пароль, папка приёма и тест текста — кнопка «Настр.» сверху. "
                 "«Сохранить» появится, если что-то изменилось."
             )
         )
@@ -1184,16 +1333,18 @@ class PortalAndroidApp(App):
 
         # ── Статусная строка ───────────────────────────────────────────────
         self._status_lbl = Label(
-            text='Адреса ниже; пароль и папка — ⚙. Отправка: «Поделиться» → Portal.',
+            text='Адреса ниже; пароль и папка — «Настр.». Отправка: «Поделиться» в Portal.',
             font_size=dp(12),
             color=C_MUTED,
             size_hint_y=None,
-            height=dp(36),
+            height=dp(44),
             halign="left",
             valign="top",
         )
         self._status_lbl.bind(
-            width=lambda inst, w: setattr(inst, "text_size", (max(w - dp(4), dp(100)), None))
+            width=lambda inst, w: setattr(
+                inst, "text_size", (max(w - dp(4), dp(100)), dp(40))
+            )
         )
         body.add_widget(self._status_lbl)
 
@@ -1223,7 +1374,11 @@ class PortalAndroidApp(App):
         # ВАЖНО: при старте из Share Sheet раньше не поднимали ReceiveServer - исправлено.
         Clock.schedule_once(lambda _dt: self._start_receive_server(), 0.05)
         if self._share_boot:
-            Clock.schedule_once(lambda _dt: self._mount_cold_share_ui(), 0.2)
+            for _delay in (0, 0.05, 0.2, 0.5):
+                Clock.schedule_once(
+                    lambda _dt, _d=_delay: self._mount_cold_share_ui(0),
+                    _d,
+                )
         else:
             Clock.schedule_once(lambda _dt: self._start_ping_watch(), 0.5)
 
@@ -1233,12 +1388,26 @@ class PortalAndroidApp(App):
                 self._ping_event.cancel()
             except Exception:
                 pass
+        # Foreground service продолжает приём в фоне.
         if self._recv_server:
             self._recv_server.stop()
 
     # ── Сервер приёма ────────────────────────────────────────────────────────
 
     def _start_receive_server(self):
+        if kivy_platform == "android" and is_android_runtime():
+            if getattr(self, "_fg_receive_started", False):
+                return
+            if android_start_receive_foreground_service():
+                self._fg_receive_started = True
+                self._fg_receive_used = True
+                self._recv_server = None
+                self._log("[*] Приём в foreground service (порт 12345)")
+                return
+            self._log(
+                "[!] Foreground service не запустился — приём в процессе приложения"
+            )
+
         if self._recv_server is not None:
             try:
                 self._recv_server.stop()
@@ -1363,7 +1532,7 @@ class PortalAndroidApp(App):
                 elif reason == "noping":
                     lbl.text = "Проверка недоступна."
                 else:
-                    lbl.text = "[!] Нет ответа от ПК."
+                    lbl.text = "[!] Нет ответа от устройств."
 
     # ── Peers ───────────────────────────────────────────────────────────────
 
@@ -1431,6 +1600,14 @@ class PortalAndroidApp(App):
                     receive_dir=recv_dir or _default_receive_dir(),
                     secret=secret,
                     saf_tree_uri=saf,
+                )
+            elif kivy_platform == "android" and is_android_runtime() and getattr(
+                self, "_fg_receive_used", False
+            ):
+                android_stop_receive_foreground_service()
+                Clock.schedule_once(
+                    lambda _dt: android_start_receive_foreground_service(),
+                    0.35,
                 )
 
             n_send = sum(1 for p in peers if p.get("send"))
@@ -1504,6 +1681,140 @@ class PortalAndroidApp(App):
         if self._status_lbl:
             self._status_lbl.text = msg
 
+    def _history_resend_android(self, event_id: int, secret: str) -> None:
+        ev = portal_history.get_event(event_id)
+        if not ev:
+            return
+        if send_file_to_peer is None or send_text_clipboard is None:
+            toast("Протокол недоступен", long=False)
+            return
+        kind = ev.get("kind") or ""
+        src = PORTAL_SOURCE_ANDROID
+
+        def work():
+            if kind == "file":
+                path = (ev.get("stored_path") or "").strip()
+                ips = portal_history.parse_route_ips(ev.get("route_json") or "")
+                if not ips:
+                    p = (ev.get("peer_ip") or "").strip()
+                    ips = [p] if p else []
+                if not path or not os.path.isfile(path):
+                    Clock.schedule_once(
+                        lambda _dt: toast("Нет файла на диске для повтора", long=True),
+                        0,
+                    )
+                    return
+                for ip in ips:
+                    send_file_to_peer(ip, path, secret=secret, portal_source=src)
+            elif kind == "text":
+                snip = ev.get("snippet") or ""
+                ips = portal_history.parse_route_ips(ev.get("route_json") or "")
+                if not ips:
+                    p = (ev.get("peer_ip") or "").strip()
+                    ips = [p] if p else []
+                for ip in ips:
+                    send_text_clipboard(ip, snip, secret=secret, portal_source=src)
+
+        threading.Thread(target=work, daemon=True).start()
+        toast("Повтор в фоне", long=False)
+
+    def _history_copy_android(self, event_id: int) -> None:
+        try:
+            from kivy.core.clipboard import Clipboard
+        except Exception:
+            toast("Буфер недоступен", long=False)
+            return
+        ev = portal_history.get_event(event_id)
+        if not ev:
+            return
+        path = (ev.get("stored_path") or "").strip()
+        snip = (ev.get("snippet") or "").strip()
+        if path:
+            Clipboard.copy(path)
+        elif snip:
+            Clipboard.copy(snip)
+        else:
+            toast("Нечего копировать", long=False)
+            return
+        toast("Скопировано", long=False)
+
+    def _show_history_popup(self) -> None:
+        import datetime
+
+        outer = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+        scroll = ScrollView(do_scroll_x=False, size_hint_y=1)
+        col = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None)
+        col.bind(minimum_height=col.setter("height"))
+        events: list = []
+        try:
+            events = portal_history.list_events(limit=80)
+        except Exception:
+            pass
+        if not events:
+            col.add_widget(
+                Label(
+                    text="Записей нет",
+                    font_size=dp(13),
+                    color=C_MUTED,
+                    size_hint_y=None,
+                    height=dp(36),
+                )
+            )
+        secret = self._effective_secret()
+        for ev in events:
+            eid = int(ev["id"])
+            ts = float(ev.get("ts") or 0)
+            tss = datetime.datetime.fromtimestamp(ts).strftime("%m-%d %H:%M")
+            line = f"{tss} {ev.get('direction')}/{ev.get('kind')} {ev.get('peer_ip', '')}"
+            nm = ev.get("name") or ""
+            if nm:
+                line += f" {nm}"[:48]
+            row = BoxLayout(
+                orientation="horizontal",
+                size_hint_y=None,
+                height=dp(54),
+                spacing=dp(4),
+            )
+            lbl = Label(
+                text=line[:100],
+                font_size=dp(11),
+                color=C_TEXT,
+                halign="left",
+                valign="middle",
+                size_hint_x=1,
+            )
+            lbl.bind(
+                size=lambda inst, sz: setattr(
+                    inst, "text_size", (max(sz[0] - 4, dp(60)), None)
+                )
+            )
+            row.add_widget(lbl)
+            b1 = _btn("Повт.", bg=(0.18, 0.35, 0.2, 1), height=dp(40), font_size=dp(10))
+            b1.size_hint = (None, None)
+            b1.size = (dp(56), dp(40))
+            b1.bind(
+                on_press=lambda *_a, i=eid, s=secret: self._history_resend_android(i, s)
+            )
+            b2 = _btn("Копир.", bg=(0.18, 0.22, 0.32, 1), height=dp(40), font_size=dp(10))
+            b2.size_hint = (None, None)
+            b2.size = (dp(64), dp(40))
+            b2.bind(on_press=lambda *_a, i=eid: self._history_copy_android(i))
+            row.add_widget(b1)
+            row.add_widget(b2)
+            col.add_widget(row)
+        scroll.add_widget(col)
+        outer.add_widget(scroll)
+        zb = _btn("Закрыть", bg=(0.18, 0.22, 0.32, 1), height=dp(44))
+        outer.add_widget(zb)
+        pop = Popup(
+            title="История Portal",
+            content=outer,
+            size_hint=(0.9, 0.82),
+            auto_dismiss=False,
+        )
+        zb.bind(on_press=lambda *_a, p=pop: p.dismiss())
+        pop.open()
+
     # ── Тест текста ─────────────────────────────────────────────────────────
 
     def send_test_text(self) -> None:
@@ -1534,17 +1845,66 @@ class PortalAndroidApp(App):
                     errs.append(f"{p.get('name') or p['ip']}: {err}")
             def done():
                 if oks == len(targets):
-                    msg = f"[OK] Текст доставлен на {oks} ПК."
+                    msg = f"[OK] Текст доставлен на {oks} устройств."
                 elif oks:
                     msg = f"[~] Частично: {oks} ок, {'; '.join(errs[:2])}"
                 else:
                     msg = f"[X] {'; '.join(errs[:2])}"
                 self._set_status(msg)
                 self._log(msg)
+                if oks == len(targets) and targets:
+                    try:
+                        ips_list = [p["ip"] for p in targets]
+                        portal_history.append_event(
+                            direction="send",
+                            kind="text",
+                            peer_ip=ips_list[0],
+                            peer_label=targets[0].get("name") or ips_list[0],
+                            name="clipboard",
+                            snippet=txt[:500],
+                            stored_path="",
+                            route_json=json.dumps(ips_list),
+                        )
+                    except Exception:
+                        pass
             Clock.schedule_once(lambda _dt: done(), 0)
         threading.Thread(target=work, daemon=True).start()
 
     # ── Share Sheet ──────────────────────────────────────────────────────────
+
+    def _cold_share_error_screen(self, msg: str) -> None:
+        """Не оставляем пустой экран при ошибке Share."""
+        cont = self._cold_share_container
+        if cont is None:
+            toast(msg, long=True)
+            finish_activity()
+            return
+        cont.clear_widgets()
+        box = BoxLayout(
+            orientation="vertical",
+            spacing=dp(14),
+            padding=dp(16),
+            size_hint_y=1,
+        )
+        lbl = Label(
+            text=msg,
+            font_size=dp(13),
+            color=C_TEXT,
+            size_hint_y=None,
+            valign="top",
+            halign="left",
+            height=dp(220),
+        )
+        lbl.bind(
+            width=lambda inst, w: setattr(
+                inst, "text_size", (max(w - dp(8), dp(100)), dp(200))
+            )
+        )
+        box.add_widget(lbl)
+        close = _btn("Закрыть", bg=(0.18, 0.22, 0.32, 1), height=dp(48))
+        close.bind(on_press=lambda *_: finish_activity())
+        box.add_widget(close)
+        cont.add_widget(box)
 
     def _mount_cold_share_ui(self, attempt: int = 0) -> None:
         if self._cold_share_ui_mounted:
@@ -1557,35 +1917,32 @@ class PortalAndroidApp(App):
         try:
             payload = read_share_intent()
         except Exception as ex:
-            toast(f"Portal: {ex}", long=True)
-            finish_activity()
+            self._cold_share_error_screen(f"Portal: {ex}")
             return
         if not self._payload_ok(payload):
-            # Intent/ClipData на части прошивок появляется не в первый кадр Activity.
-            if attempt < 3:
+            # ClipData на части прошивок появляется с задержкой.
+            if attempt < 10:
+                delay = 0.08 if attempt < 4 else 0.15 + 0.12 * (attempt - 4)
                 Clock.schedule_once(
                     lambda _dt, a=attempt + 1: self._mount_cold_share_ui(a),
-                    0.35,
+                    delay,
                 )
                 return
-            toast(
-                'Portal: не удалось прочитать файл из «Поделиться» (пусто). '
-                "Попробуй другое приложение-источник или обнови Portal.",
-                long=True,
+            self._cold_share_error_screen(
+                "Не удалось прочитать вложение из \"Поделиться\" (пусто). "
+                "Попробуй другой источник файла или открой Portal с иконки, "
+                "сохрани настройки и повтори отправку."
             )
-            finish_activity()
             return
         self._cold_share_ui_mounted = True
         cfg = load_cfg()
         peers = normalize_peers(cfg.get("peers"))
         targets = peers_marked_for_send(peers)
         if not targets:
-            toast(
-                'Нет адресов ПК. Открой Portal из иконки, добавь IP и "Сохранить", '
-                'затем снова "Поделиться" -> Portal.',
-                long=True,
+            self._cold_share_error_screen(
+                "Нет адресов для отправки. Открой Portal с иконки, добавь IP компьютера, "
+                "нажми \"Сохранить\", затем снова \"Поделиться\" -> Portal."
             )
-            finish_activity()
             return
         secret = (cfg.get("secret") or "").strip()
         cont.clear_widgets()
@@ -1627,15 +1984,18 @@ class PortalAndroidApp(App):
             font_size=dp(14),
             color=C_TEXT,
             size_hint_y=None,
+            height=dp(120),
             halign="left",
             valign="top",
         )
         prev_lbl.bind(
-            width=lambda inst, w: setattr(inst, "text_size", (max(w - dp(4), dp(80)), None))
+            width=lambda inst, w: setattr(
+                inst, "text_size", (max(w - dp(4), dp(80)), dp(112))
+            )
         )
         prev_lbl.bind(
             texture_size=lambda inst, ts: setattr(
-                inst, "height", max(ts[1] + dp(8), dp(44))
+                inst, "height", max(ts[1] + dp(10), dp(88))
             )
         )
         root.add_widget(prev_lbl)
@@ -1693,7 +2053,7 @@ class PortalAndroidApp(App):
         def confirm(*_a):
             sel = [peer for cb, peer in checks if cb.active]
             if not sel:
-                toast("Отметь хотя бы один ПК", long=False)
+                toast("Отметь хотя бы одно устройство", long=False)
                 return
             if popup is not None:
                 try:
@@ -1832,6 +2192,25 @@ class PortalAndroidApp(App):
                         0,
                     )
                     ok, err = send_file_to_peer(ip, fp, secret=secret, portal_source=src)
+                    if ok:
+                        try:
+                            fsz = None
+                            try:
+                                fsz = os.path.getsize(fp)
+                            except OSError:
+                                pass
+                            portal_history.append_event(
+                                direction="send",
+                                kind="file",
+                                peer_ip=ip,
+                                peer_label=name,
+                                name=fn,
+                                stored_path=fp,
+                                route_json=json.dumps([ip]),
+                                filesize=fsz,
+                            )
+                        except Exception:
+                            pass
                     if not ok:
                         errs.append(f"{name}: {fn} - {err}")
                 if (payload.text or "").strip():
@@ -1842,6 +2221,20 @@ class PortalAndroidApp(App):
                     ok, err = send_text_clipboard(
                         ip, payload.text, secret=secret, portal_source=src
                     )
+                    if ok:
+                        try:
+                            portal_history.append_event(
+                                direction="send",
+                                kind="text",
+                                peer_ip=ip,
+                                peer_label=name,
+                                name="clipboard",
+                                snippet=(payload.text or "")[:500],
+                                stored_path="",
+                                route_json=json.dumps([ip]),
+                            )
+                        except Exception:
+                            pass
                     if not ok:
                         errs.append(f"{name}: текст - {err}")
 
