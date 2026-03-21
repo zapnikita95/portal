@@ -3,6 +3,8 @@
 Анимация только при открытии/закрытии — без бесконечного цикла.
 """
 
+import io
+import glob
 import tkinter as tk
 import math
 import threading
@@ -12,6 +14,7 @@ import platform
 from pathlib import Path
 from PIL import Image, ImageTk, ImageSequence, ImageDraw, ImageFilter
 import os
+import subprocess
 from typing import Optional, Any, List
 
 import portal_config
@@ -41,6 +44,124 @@ def widget_chroma_hex() -> str:
     if platform.system() == "Darwin":
         return CHROMA_KEY_MAC
     return CHROMA_KEY_WIN
+
+
+def grab_clipboard_image():
+    """Картинка из буфера как PIL.Image RGBA или None."""
+    try:
+        from PIL import Image, ImageGrab
+
+        clip = ImageGrab.grabclipboard()
+        if isinstance(clip, Image.Image):
+            return clip.convert("RGBA")
+        if clip and isinstance(clip, list):
+            for p in clip:
+                ps = str(p).strip()
+                if ps and Path(ps).is_file():
+                    try:
+                        return Image.open(ps).convert("RGBA")
+                    except Exception:
+                        continue
+    except Exception:
+        pass
+    if platform.system() == "Darwin":
+        try:
+            from AppKit import NSPasteboard
+
+            pb = NSPasteboard.generalPasteboard()
+            for uti in ("public.png", "public.tiff", "public.jpeg", "public.jpg"):
+                data = pb.dataForType_(uti)
+                if data is None:
+                    continue
+                try:
+                    if hasattr(data, "bytes"):
+                        buf = bytes(data.bytes())
+                    else:
+                        buf = bytes(data)
+                except Exception:
+                    continue
+                if buf:
+                    from PIL import Image
+
+                    return Image.open(io.BytesIO(buf)).convert("RGBA")
+        except Exception:
+            pass
+    return None
+
+
+def grab_clipboard_file_paths() -> List[str]:
+    """
+    Пути файлов, скопированных в буфер (Finder / Проводник), без открытия как картинка.
+    Пустой список, если в буфере только текст или растровая картинка без путей.
+    """
+    out: List[str] = []
+    seen = set()
+
+    def add(p: str) -> None:
+        ps = (p or "").strip()
+        if not ps:
+            return
+        try:
+            rp = str(Path(ps).resolve())
+        except Exception:
+            rp = ps
+        if rp not in seen and Path(ps).is_file():
+            seen.add(rp)
+            out.append(ps)
+
+    try:
+        from PIL import ImageGrab
+
+        clip = ImageGrab.grabclipboard()
+        if isinstance(clip, list):
+            for p in clip:
+                add(str(p))
+            if out:
+                return list(out)
+    except Exception:
+        pass
+
+    if platform.system() == "Darwin":
+        try:
+            from AppKit import NSPasteboard, NSURL
+
+            pb = NSPasteboard.generalPasteboard()
+            urls = pb.readObjectsForClasses_options_([NSURL], None)
+            if urls:
+                for u in urls:
+                    try:
+                        p = u.path()
+                        if p:
+                            add(str(p))
+                    except Exception:
+                        continue
+                if out:
+                    return list(out)
+        except Exception:
+            pass
+
+    if platform.system() == "win32":
+        try:
+            import win32clipboard
+
+            win32clipboard.OpenClipboard()
+            try:
+                if win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_HDROP):
+                    raw = win32clipboard.GetClipboardData(win32clipboard.CF_HDROP)
+                    if isinstance(raw, (list, tuple)):
+                        for p in raw:
+                            add(str(p))
+                    elif isinstance(raw, str):
+                        for p in raw.split("\0"):
+                            add(p)
+            finally:
+                win32clipboard.CloseClipboard()
+            if out:
+                return list(out)
+        except Exception:
+            pass
+
+    return list(out)
 
 
 # ── Логгинг из фоновых потоков ────────────────────────────────────────────────
@@ -106,12 +227,15 @@ class PortalWidget:
         # Отключить: PORTAL_NO_MAC_DND=1 (если краш на Python 3.13+)
         if platform.system() != "Windows" and main_app is not None:
             try:
+                from portal_tk_compat import ensure_tkdnd_tk_misc_patch
+
                 from tkinterdnd2 import TkinterDnD
                 if os.environ.get("PORTAL_NO_MAC_DND", "").strip() in ("1", "true", "yes"):
                     print("[Portal] tkinterdnd2 отключён (PORTAL_NO_MAC_DND)")
                     self._dnd_tkinterdnd2 = False
                 else:
                     TkinterDnD._require(main_app)
+                    ensure_tkdnd_tk_misc_patch()
                     self._dnd_tkinterdnd2 = True
                     if sys.version_info >= (3, 13):
                         print(
@@ -127,9 +251,17 @@ class PortalWidget:
         else:
             self.root = tk.Tk()
 
-        self.root.title("🌀 Портал")
+        # Уникальный заголовок — по нему ищем NSWindow для настоящей прозрачности (macOS)
+        self.root.title("🌀 Портал · виджет")
 
         self.size = 220
+        # Тёмная подложка режима «окошко» (macOS): GIF композится на неё, без дыры в стол через -transparentcolor
+        self._frame_panel_rgb = (42, 45, 53)  # #2a2d35
+        self._mac_framed_window: bool = self._widget_framed_mode()
+        self._mac_using_rgba_window: bool = False  # True = реальная альфа, без хромакей-менты в PhotoImage
+        self._mac_nswindow_fixed: bool = False  # лог успеха Cocoa один раз
+        self._mac_nswindow_fail_logged: bool = False  # предупреждение «окно не найдено» один раз
+        self._mac_pyobjc_import_logged: bool = False  # «нет AppKit» один раз за сессию
 
         # Состояние анимации
         self.anim_state = self.ANIM_HIDDEN
@@ -153,11 +285,16 @@ class PortalWidget:
 
         self.setup_window()
 
+        _cbg = (
+            "#2a2d35"
+            if platform.system() == "Darwin" and getattr(self, "_mac_framed_window", False)
+            else self._chroma_hex
+        )
         self.canvas = tk.Canvas(
             self.root,
             width=self.size,
             height=self.size,
-            bg=self._chroma_hex,
+            bg=_cbg,
             highlightthickness=0,
             bd=0,
         )
@@ -178,12 +315,40 @@ class PortalWidget:
 
         # Анимация запустится при первом show() — не при init, т.к. виджет скрыт по умолчанию
 
+    def _mac_real_transparency_enabled(self) -> bool:
+        """macOS: настоящая прозрачность (альфа + NSWindow), без -transparentcolor."""
+        if platform.system() != "Darwin":
+            return False
+        return os.environ.get("PORTAL_MAC_CHROMA_ONLY", "").strip() not in (
+            "1",
+            "true",
+            "yes",
+        )
+
+    def _widget_framed_mode(self) -> bool:
+        """
+        macOS: обычное окно с заголовком и тёмным фоном — картинка на подложке, не магента на весь стол.
+        PORTAL_WIDGET_FRAMED=0 — прежний режим (полная прозрачность / хромакей на окне).
+        """
+        if platform.system() != "Darwin":
+            return False
+        v = os.environ.get("PORTAL_WIDGET_FRAMED", "").strip().lower()
+        if v in ("0", "false", "no", "off"):
+            return False
+        if v in ("1", "true", "yes", "on"):
+            return True
+        return True
+
     # ───────────────────────────── ОКНО ─────────────────────────────
 
     def setup_window(self):
         """Позиция, поверх остальных окон, без рамки"""
+        framed = platform.system() == "Darwin" and getattr(self, "_mac_framed_window", False)
+        bg_use = "#2a2d35" if framed else self._chroma_hex
         try:
-            self.root.configure(highlightthickness=0, bd=0, bg=self._chroma_hex)
+            ht = 1 if framed else 0
+            hb = "#555555" if framed else self._chroma_hex
+            self.root.configure(highlightthickness=ht, highlightbackground=hb, bd=0, bg=bg_use)
         except tk.TclError:
             pass
         try:
@@ -194,10 +359,13 @@ class PortalWidget:
             self.root.attributes("-alpha", 1.0)
         except tk.TclError:
             pass
-        try:
-            self.root.overrideredirect(True)
-        except tk.TclError:
-            pass
+        # macOS: overrideredirect до хромакея ломает -transparentcolor у части сборок Tk/Aqua —
+        # включаем рамку без декора после setup_transparency()
+        if platform.system() != "Darwin":
+            try:
+                self.root.overrideredirect(True)
+            except tk.TclError:
+                pass
 
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
@@ -211,13 +379,12 @@ class PortalWidget:
     def setup_transparency(self):
         """
         Windows: хромакей + -transparentcolor.
-        macOS: магента (или PORTAL_WIDGET_CHROMA) + transparentcolor + -transparent.
-        Отключить «дырявое» окно виджета: PORTAL_WIDGET_NO_MAC_TRANSPARENT=1
-        Старый флаг PORTAL_MAC_TRANSPARENT=1 всё ещё включает -transparent (дубль не страшен).
+        macOS по умолчанию: RGBA + systemTransparent + NSWindow opaque=NO (настоящая альфа пикселей).
+        PORTAL_MAC_CHROMA_ONLY=1 — только #FF00FF + -transparentcolor (если альфа не работает).
         """
-        self.root.configure(bg=self._chroma_hex)
-        self.canvas.configure(bg=self._chroma_hex)
         if platform.system() == "Windows":
+            self.root.configure(bg=self._chroma_hex)
+            self.canvas.configure(bg=self._chroma_hex)
             try:
                 self.root.attributes("-transparentcolor", self._chroma_hex)
             except tk.TclError:
@@ -225,95 +392,468 @@ class PortalWidget:
             return
 
         if platform.system() == "Darwin":
-            try:
-                self.root.attributes("-transparentcolor", self._chroma_hex)
-            except tk.TclError:
+            if getattr(self, "_mac_framed_window", False):
+                # Окошко: без -transparentcolor и без ORR — GIF на тёмной подложке (см. _photo_from_rgba_chroma)
+                self.root.configure(bg="#2a2d35")
+                self.canvas.configure(bg="#2a2d35")
                 try:
-                    self.root.wm_attributes("-transparentcolor", self._chroma_hex)
+                    self.root.attributes("-transparentcolor", "")
                 except tk.TclError:
                     pass
-            no_transparent = os.environ.get(
-                "PORTAL_WIDGET_NO_MAC_TRANSPARENT", ""
-            ).strip() in ("1", "true", "yes")
-            want_transparent = (
-                os.environ.get("PORTAL_MAC_TRANSPARENT", "").strip()
-                in ("1", "true", "yes")
-            ) or not no_transparent
-            if want_transparent:
+                try:
+                    self.root.wm_attributes("-transparent", False)
+                except tk.TclError:
+                    pass
+                return
+            # Режим A: не заливаем магентой — иначе Cocoa рисует непрозражный фон под альфой
+            if self._mac_real_transparency_enabled() and self._mac_using_rgba_window:
+                self._mac_refresh_real_transparency()
+                try:
+                    self.root.overrideredirect(True)
+                except tk.TclError:
+                    pass
+                self._mac_refresh_real_transparency()
+                try:
+                    for ms in (30, 80, 200, 450, 900):
+                        self.root.after(ms, self._mac_nswindow_make_opaque_false)
+                except Exception:
+                    pass
+                return
+            self.root.configure(bg=self._chroma_hex)
+            self.canvas.configure(bg=self._chroma_hex)
+            # Режим B: хромакей #FF00FF + -transparentcolor (если RGBA не взошёл — PORTAL_MAC_CHROMA_ONLY=1)
+            self._mac_apply_chroma_transparency()
+            try:
+                self.root.overrideredirect(True)
+            except tk.TclError:
+                pass
+            self._mac_apply_chroma_transparency()
+            if os.environ.get("PORTAL_MAC_TRANSPARENT", "").strip() in (
+                "1",
+                "true",
+                "yes",
+            ):
                 try:
                     self.root.wm_attributes("-transparent", True)
                 except tk.TclError:
                     pass
             return
 
-        # Linux: сплошной фон хромакея (уже задан выше)
+        self.root.configure(bg=self._chroma_hex)
+        self.canvas.configure(bg=self._chroma_hex)
+
+    def _mac_apply_chroma_transparency(self) -> None:
+        """Сброс + повторная установка хромакея (Aqua часто «забывает» цвет до/после ORR)."""
+        if platform.system() != "Darwin":
+            return
+        h = self._chroma_hex
+        try:
+            self.root.attributes("-transparentcolor", "")
+        except tk.TclError:
+            pass
+        try:
+            self.root.update_idletasks()
+        except tk.TclError:
+            pass
+        try:
+            self.root.attributes("-transparentcolor", h)
+        except tk.TclError:
+            try:
+                self.root.wm_attributes("-transparentcolor", h)
+            except tk.TclError:
+                pass
+
+    def _mac_refresh_real_transparency(self) -> None:
+        """Tk: прозрачный фон окна + слой с альфой (кадры GIF — RGBA PhotoImage)."""
+        if not self._mac_real_transparency_enabled():
+            return
+        for w in (self.root, self.canvas):
+            try:
+                w.configure(bg="systemTransparent")
+            except tk.TclError:
+                try:
+                    w.configure(bg=self._chroma_hex)
+                except tk.TclError:
+                    pass
+        try:
+            self.root.wm_attributes("-transparent", True)
+        except tk.TclError:
+            pass
+
+    def _mac_tk_rect_in_cocoa_space(self) -> Optional[tuple]:
+        """
+        Прямоугольник окна Tk в координатах Cocoa (origin — нижний левый угол экрана).
+        Нужен для поиска NSWindow: заголовок/видимость на macOS ненадёжны (Toplevel, withdraw).
+        """
+        if platform.system() != "Darwin":
+            return None
+        try:
+            self.root.update_idletasks()
+            rx = float(self.root.winfo_rootx())
+            ry = float(self.root.winfo_rooty())
+            w = float(self.root.winfo_width())
+            h = float(self.root.winfo_height())
+            sh = float(self.root.winfo_screenheight())
+            if w < 8 or h < 8:
+                return None
+            # Tk: Y сверху вниз. Cocoa: Y снизу вверх.
+            cocoa_x = rx
+            cocoa_y = sh - ry - h
+            return (cocoa_x, cocoa_y, w, h)
+        except tk.TclError:
+            return None
+
+    def _mac_nswindow_make_opaque_false(self) -> None:
+        """Cocoa: без opaque=NO Tk рисует магенту/серый фон поверх «прозрачного» окна."""
+        if not self._mac_real_transparency_enabled() or not self._mac_using_rgba_window:
+            return
+        try:
+            from AppKit import NSApplication, NSColor
+        except ImportError:
+            if not self._mac_pyobjc_import_logged:
+                self._mac_pyobjc_import_logged = True
+                print(
+                    "[Portal] Нет PyObjC AppKit — pip install pyobjc-framework-Cocoa "
+                    "(или PORTAL_MAC_CHROMA_ONLY=1 для режима #FF00FF)"
+                )
+            return
+        self.root.update_idletasks()
+        expected = self._mac_tk_rect_in_cocoa_space()
+        needle = "виджет"
+        target = None
+        best_score = float("inf")
+        try:
+            app = NSApplication.sharedApplication()
+            wins = list(app.windows())
+        except Exception as e:
+            print(f"[Portal] NSApplication.sharedApplication: {e}")
+            return
+
+        def score_window(win) -> Optional[tuple]:
+            """
+            Меньше = лучше. (score, win) или None если окно явно не наш виджет.
+            Не требуем isVisible: при withdraw() окно есть, но скрыто — прозрачность всё равно задаём.
+            """
+            try:
+                f = win.frame()
+                x0, y0 = float(f.origin.x), float(f.origin.y)
+                w0, h0 = float(f.size.width), float(f.size.height)
+                if w0 < 8 or h0 < 8:
+                    return None
+                title = str(win.title() or "")
+                tl = title.lower()
+
+                if expected is not None:
+                    ex, ey, ew, eh = expected
+                    dist = (
+                        abs(x0 - ex)
+                        + abs(y0 - ey)
+                        + abs(w0 - ew)
+                        + abs(h0 - eh)
+                    )
+                    # Жёсткий порог: другое окно того же размера в другом углу не цепляем
+                    if dist > 48:
+                        return None
+                    score = dist
+                    if needle in tl:
+                        score -= 18.0
+                    if "портал" in tl or "portal" in tl:
+                        score -= 8.0
+                    if win.isVisible():
+                        score -= 5.0
+                    return (score, win)
+
+                # Фолбэк без геометрии (старый эвристический режим)
+                sz = float(self.size)
+                size_ok = abs(w0 - sz) <= 36 and abs(h0 - sz) <= 36
+                size_loose = abs(w0 - sz) <= 72 and abs(h0 - sz) <= 72
+                if needle in tl and size_ok:
+                    return (-300.0, win)
+                if needle in tl and size_loose:
+                    return (-200.0, win)
+                if needle in tl:
+                    return (-150.0, win)
+                if size_ok and ("портал" in tl or "portal" in tl):
+                    return (-120.0, win)
+                if size_ok:
+                    return (-50.0, win)
+                return None
+            except Exception:
+                return None
+
+        for win in wins:
+            got = score_window(win)
+            if got is None:
+                continue
+            sc, wn = got
+            if sc < best_score:
+                best_score = sc
+                target = wn
+
+        if target is None:
+            if not self._mac_nswindow_fixed and not self._mac_nswindow_fail_logged:
+                self._mac_nswindow_fail_logged = True
+                hint = ""
+                if expected:
+                    ex, ey, ew, eh = expected
+                    hint = f" ожидалось Cocoa ({int(ex)},{int(ey)}) {int(ew)}×{int(eh)}."
+                print(
+                    f"[Portal] ⚠️ NSWindow виджета не найден по геометрии.{hint} "
+                    "pip install pyobjc-framework-Cocoa или PORTAL_MAC_CHROMA_ONLY=1"
+                )
+            return
+        try:
+            target.setOpaque_(False)
+            target.setBackgroundColor_(NSColor.clearColor())
+            cv = target.contentView()
+            if cv is not None:
+                # True часто даёт пустое окно: Tk рисует в NSView без слоя.
+                # PORTAL_MAC_CV_WANTSLAYER=1 — включить слой вручную.
+                use_layer = os.environ.get("PORTAL_MAC_CV_WANTSLAYER", "").strip() in (
+                    "1",
+                    "true",
+                    "yes",
+                )
+                cv.setWantsLayer_(use_layer)
+            if not self._mac_nswindow_fixed:
+                self._mac_nswindow_fixed = True
+                fr = target.frame()
+                vis = "видимо" if target.isVisible() else "скрыто (withdraw)"
+                print(
+                    f"[Portal] ✅ Прозрачность Cocoa: «{target.title()}» "
+                    f"{int(fr.size.width)}×{int(fr.size.height)} @ "
+                    f"({int(fr.origin.x)},{int(fr.origin.y)}), {vis}"
+                )
+            try:
+                if target.isVisible():
+                    target.orderFrontRegardless()
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[Portal] NSWindow setOpaque/clearColor: {e}")
 
     # ───────────────────────────── ЗАГРУЗКА GIF ─────────────────────
 
-    def load_portal_gif(self):
-        """Загрузить кадры GIF, вырезать круг, сделать фон прозрачным."""
+    def _find_portal_asset(self) -> Optional[str]:
+        """GIF или PNG в assets/ (любой portal*.gif / portal*.png)."""
         assets_dir = os.path.join(os.path.dirname(__file__), "assets")
-        search_paths = [
-            os.path.join(assets_dir, "portal_main.gif"),
-            os.path.join(assets_dir, "portal_animated_opening.gif"),
-            os.path.join(assets_dir, "portal_opening.gif"),
-            os.path.join(assets_dir, "portal_animated.gif"),
-            os.path.join(assets_dir, "portal_static.gif"),
+        os.makedirs(assets_dir, exist_ok=True)
+        priority = [
+            "portal_main.gif",
+            "portal_main.png",
+            "portal_opening.gif",
+            "portal_animated_opening.gif",
+            "portal_animated.gif",
+            "portal_static.gif",
         ]
+        for name in priority:
+            p = os.path.join(assets_dir, name)
+            if os.path.isfile(p):
+                return p
+        for pattern in ("portal*.gif", "portal*.png", "Portal*.gif", "Portal*.png"):
+            found = sorted(glob.glob(os.path.join(assets_dir, pattern)))
+            if found:
+                return found[0]
+        return None
 
-        gif_path = None
-        for p in search_paths:
-            if os.path.exists(p):
-                gif_path = p
-                break
+    def _prepare_portal_frame_rgba(self, frame: Image.Image) -> Image.Image:
+        """
+        Квадрат → resize; убрать магенту (#FF00FF) и тёмную «подложку» вокруг портала;
+        лёгкое размытие альфы по краю (без замены альфы жёстким кругом).
+        """
+        img = frame.convert("RGBA")
+        w, h = img.size
+        sq = min(w, h)
+        left = (w - sq) // 2
+        top = (h - sq) // 2
+        img = img.crop((left, top, left + sq, top + sq))
+        img = img.resize((self.size, self.size), Image.Resampling.LANCZOS)
 
-        if not gif_path:
-            print("[Portal] GIF не найден — используется рисованный портал")
+        cr, cg, cb = self._chroma_rgb
+        # Радиус в RGB²: дизер/сглаживание к магенте (не только чистый #FF00FF)
+        chroma_r2 = 105 * 105
+        size = self.size
+        cx = (size - 1) * 0.5
+        cy = (size - 1) * 0.5
+        rx = max(size * 0.44, 1.0)
+        ry = max(size * 0.50, 1.0)
+
+        px = img.load()
+        for y in range(size):
+            for x in range(size):
+                r, g, b, a = px[x, y]
+                if a == 0:
+                    continue
+                d2 = (r - cr) ** 2 + (g - cg) ** 2 + (b - cb) ** 2
+                if d2 <= chroma_r2:
+                    px[x, y] = (0, 0, 0, 0)
+                    continue
+                # «Розово-фиолетовая» кайма (R+B высокие, G подавлен) — остатки антиалиаса к фону GIF
+                if r >= 130 and b >= 130 and g <= 135 and (r + b) >= (g * 2.4 + 80):
+                    px[x, y] = (0, 0, 0, 0)
+                    continue
+                dx = (x - cx) / rx
+                dy = (y - cy) / ry
+                ell = math.hypot(dx, dy)
+                luma = (r + g + b) / 3.0
+                mn, mx = min(r, g, b), max(r, g, b)
+                grayish = (mx - mn) < 34
+                # Тёмная матовка вокруг огня (чёрный круг в ассете), не трогаем само пламя
+                if ell > 0.44 and grayish and luma < 54:
+                    px[x, y] = (0, 0, 0, 0)
+                    continue
+                if ell > 0.52 and luma < 40:
+                    px[x, y] = (0, 0, 0, 0)
+                    continue
+
+        rch, gch, bch, ach = img.split()
+        ach = ach.filter(ImageFilter.GaussianBlur(0.45))
+        img = Image.merge("RGBA", (rch, gch, bch, ach))
+        return img
+
+    @staticmethod
+    def _snap_near_chroma_rgb(
+        rgb_im: Image.Image, cr: int, cg: int, cb: int, tol: int = 108
+    ) -> Image.Image:
+        """
+        После композита полупрозрачные края дают RGB ≠ #FF00FF — Tk не вырезает их.
+        Подтягиваем близкие к ключу пиксели к точному цвету хромакея.
+        """
+        im = rgb_im.copy()
+        px = im.load()
+        w, h = im.size
+        t2 = tol * tol
+        for yy in range(h):
+            for xx in range(w):
+                r0, g0, b0 = px[xx, yy]
+                if (r0 - cr) ** 2 + (g0 - cg) ** 2 + (b0 - cb) ** 2 <= t2:
+                    px[xx, yy] = (cr, cg, cb)
+        return im
+
+    @staticmethod
+    def _purge_magenta_screen_rgb(
+        rgb_im: Image.Image, cr: int, cg: int, cb: int
+    ) -> Image.Image:
+        """
+        Остатки «экранной» магенты/фуксии (высокие R и B, G заметно ниже) → точный ключ.
+        Огонь/центр портала не трогаем (там B или R низкие).
+        """
+        im = rgb_im.copy()
+        px = im.load()
+        w, h = im.size
+        for yy in range(h):
+            for xx in range(w):
+                r0, g0, b0 = px[xx, yy]
+                mnrb = min(r0, b0)
+                if (
+                    mnrb >= 108
+                    and g0 < mnrb * 0.52 + 58
+                    and (r0 + b0) >= 278
+                ):
+                    px[xx, yy] = (cr, cg, cb)
+        return im
+
+    def _photo_from_rgba_chroma(self, rgba: Image.Image) -> ImageTk.PhotoImage:
+        """Win / macOS хромакей: фон под GIF + -transparentcolor. macOS «окошко»: фон панели без прозрачности окна."""
+        if platform.system() == "Darwin" and getattr(self, "_mac_framed_window", False):
+            pr, pg, pb = self._frame_panel_rgb
+            bg = Image.new("RGBA", rgba.size, (pr, pg, pb, 255))
+            composed = Image.alpha_composite(bg, rgba).convert("RGB")
+            composed = self._snap_near_chroma_rgb(composed, pr, pg, pb, tol=72)
+            return ImageTk.PhotoImage(composed, master=self.canvas)
+        r, g, b = self._chroma_rgb
+        bg = Image.new("RGBA", rgba.size, (r, g, b, 255))
+        composed = Image.alpha_composite(bg, rgba).convert("RGB")
+        composed = self._snap_near_chroma_rgb(composed, r, g, b)
+        composed = self._purge_magenta_screen_rgb(composed, r, g, b)
+        return ImageTk.PhotoImage(composed, master=self.canvas)
+
+    def load_portal_gif(self):
+        """Загрузить GIF или PNG из assets/, подготовить кадры под хромакей окна."""
+        asset_path = self._find_portal_asset()
+        if not asset_path:
+            print(
+                "[Portal] Нет portal*.gif / portal*.png в папке assets/ — рисованный портал. "
+                "Положи, например, assets/portal_main.gif или portal_main.png"
+            )
             return
 
         try:
-            gif = Image.open(gif_path)
+            src = Image.open(asset_path)
             raw_frames: List[Image.Image] = []
 
-            for frame in ImageSequence.Iterator(gif):
-                img = frame.convert("RGBA")
+            if asset_path.lower().endswith(".png") or getattr(src, "n_frames", 1) == 1:
+                try:
+                    src.seek(0)
+                except EOFError:
+                    pass
+                raw_frames.append(self._prepare_portal_frame_rgba(src))
+            else:
+                for frame in ImageSequence.Iterator(src):
+                    raw_frames.append(self._prepare_portal_frame_rgba(frame))
 
-                # Кроп до центрального квадрата
-                w, h = img.size
-                sq = min(w, h)
-                left = (w - sq) // 2
-                top  = (h - sq) // 2
-                img = img.crop((left, top, left + sq, top + sq))
+            if not raw_frames:
+                print("[Portal] Файл без кадров — рисованный портал")
+                return
 
-                # Ресайз до размера виджета
-                img = img.resize((self.size, self.size), Image.Resampling.LANCZOS)
+            self.gif_frames_raw = [f.copy() for f in raw_frames]
+            self.gif_frames = []
+            self._mac_using_rgba_window = False
 
-                # Антиалиасный круглый вырез — за пределами круга прозрачно
-                mask = Image.new("L", (self.size, self.size), 0)
-                draw = ImageDraw.Draw(mask)
-                margin = 4
-                draw.ellipse(
-                    [margin, margin, self.size - margin - 1, self.size - margin - 1],
-                    fill=255,
+            use_rgba_mac = self._mac_real_transparency_enabled() and not getattr(
+                self, "_mac_framed_window", False
+            )
+            if use_rgba_mac:
+                rgba_ok = True
+                for f in raw_frames:
+                    try:
+                        self.gif_frames.append(
+                            ImageTk.PhotoImage(f.convert("RGBA"), master=self.canvas)
+                        )
+                    except Exception as ex:
+                        print(
+                            f"[Portal] macOS RGBA PhotoImage не удался ({ex}) — режим хромакея"
+                        )
+                        rgba_ok = False
+                        self.gif_frames = []
+                        break
+                if rgba_ok and len(self.gif_frames) == len(raw_frames):
+                    self._mac_using_rgba_window = True
+
+            if not self.gif_frames:
+                for f in raw_frames:
+                    self.gif_frames.append(self._photo_from_rgba_chroma(f))
+                if platform.system() == "Darwin" and getattr(self, "_mac_framed_window", False):
+                    mode_note = "macOS: окно с рамкой, GIF на #2a2d35"
+                else:
+                    mode_note = f"хромакей {self._chroma_hex}"
+            else:
+                mode_note = (
+                    "macOS: альфа + прозрачное окно (pip: pyobjc — для NSWindow)"
+                    if self._mac_using_rgba_window
+                    else "хромакей"
                 )
-                mask = mask.filter(ImageFilter.GaussianBlur(3))
-                img.putalpha(mask)
 
-                # Композиция на хромакей — тот же цвет, что -transparentcolor
-                r, g, b = self._chroma_rgb
-                bg = Image.new("RGBA", (self.size, self.size), (r, g, b, 255))
-                composed = Image.alpha_composite(bg, img)
-                raw_frames.append(composed)
-
-            self.gif_frames_raw = raw_frames
-            master = self.root
-            self.gif_frames = [
-                ImageTk.PhotoImage(f.convert("RGB"), master=master) for f in raw_frames
-            ]
-            print(f"[Portal] Загружено {len(self.gif_frames)} кадров из {gif_path}")
+            print(
+                f"[Portal] Загружено {len(self.gif_frames)} кадр(ов) из {asset_path} ({mode_note})"
+            )
+            if platform.system() == "Darwin":
+                try:
+                    if self._mac_using_rgba_window:
+                        self._mac_refresh_real_transparency()
+                        for ms in (50, 150, 400):
+                            self.root.after(ms, self._mac_nswindow_make_opaque_false)
+                    elif not getattr(self, "_mac_framed_window", False):
+                        self.root.after(60, self._mac_apply_chroma_transparency)
+                        self.root.after(400, self._mac_apply_chroma_transparency)
+                except Exception:
+                    pass
 
         except Exception as e:
-            print(f"[Portal] Ошибка загрузки GIF: {e}")
+            print(f"[Portal] Ошибка загрузки ассета портала: {e}")
+            import traceback
+
+            traceback.print_exc()
 
     # ───────────────────────────── АНИМАЦИЯ ─────────────────────────
 
@@ -407,11 +947,43 @@ class PortalWidget:
             self.root.withdraw()
 
     def show(self):
-        """Показать виджет с анимацией разворачивания."""
+        """Показать виджет с анимацией разворачивания (главное окно не поднимаем)."""
         self._cancel_anim()
         self.root.deiconify()
-        self.root.lift()
-        self.root.update_idletasks()  # Убедиться что окно видимо перед анимацией
+        self.root.update_idletasks()
+        # macOS: main_app.lower() БЕЗ аргумента опускает ВСЁ окно приложения —
+        # виджет оказывается под рабочим столом и «невидим». Поднимаем виджет НАД CTk.
+        try:
+            if self.main_app is not None:
+                try:
+                    self.root.lift(self.main_app)
+                except tk.TclError:
+                    self.root.lift()
+            else:
+                self.root.lift()
+        except Exception:
+            try:
+                self.root.lift()
+            except tk.TclError:
+                pass
+        self.root.update_idletasks()
+        if platform.system() == "Darwin":
+            if self._mac_using_rgba_window:
+                self._mac_refresh_real_transparency()
+                # Сразу и с задержкой: после deiconify другой NSWindow / геометрия
+                self.root.after(0, self._mac_nswindow_make_opaque_false)
+                for ms in (20, 100, 250, 600):
+                    self.root.after(ms, self._mac_nswindow_make_opaque_false)
+            else:
+                self._mac_apply_chroma_transparency()
+        try:
+            self.root.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        try:
+            self.root.focus_force()
+        except Exception:
+            pass
         self.anim_state = self.ANIM_OPENING
         self.anim_frame_idx = 0
         self._animate_step()
@@ -439,7 +1011,9 @@ class PortalWidget:
         bind_drag(self.root)
         bind_drag(self.canvas)
 
-        self.canvas.bind("<Double-Button-1>", lambda e: self.show_settings())
+        self.canvas.bind("<Double-Button-1>", self.on_double_click_clipboard_image)
+        self.root.bind("<Double-Button-1>", self.on_double_click_clipboard_image)
+        self.canvas.bind("<Triple-Button-1>", lambda e: self.show_settings())
         self.canvas.bind("<Control-Button-1>", lambda e: self.on_portal_click())
         self.root.bind("<Button-3>", self.show_context_menu)
         self.canvas.bind("<Button-3>", self.show_context_menu)
@@ -482,8 +1056,11 @@ class PortalWidget:
         except Exception as e:
             print(f"[Portal] windnd не сработал ({e}), пробуем tkinterdnd2…")
             try:
+                from portal_tk_compat import ensure_tkdnd_tk_misc_patch
+
                 from tkinterdnd2 import TkinterDnD, DND_FILES
                 TkinterDnD._require(self.root)
+                ensure_tkdnd_tk_misc_patch()
                 self._dnd_tkinterdnd2 = True
                 self.canvas.drop_target_register(DND_FILES)
                 self.canvas.dnd_bind("<<Drop>>", self._on_tkdnd_drop)
@@ -522,7 +1099,10 @@ class PortalWidget:
 
     def show_context_menu(self, event):
         menu = tk.Menu(self.root, tearoff=0)
-        menu.add_command(label="IP удалённого ПК", command=self.show_ip_dialog)
+        menu.add_command(
+            label="IP удалённого ПК (или тройной клик по порталу)",
+            command=self.show_ip_dialog,
+        )
         menu.add_command(label="Выбрать файл (Ctrl+клик)", command=self.on_portal_click)
         menu.add_command(label="Скрыть", command=self.hide)
         menu.add_separator()
@@ -536,6 +1116,50 @@ class PortalWidget:
 
     def show_settings(self, event=None):
         self.show_ip_dialog()
+
+    def on_double_click_clipboard_image(self, event=None):
+        """Двойной клик: картинка из буфера → временный файл → отправка на второй ПК."""
+        self.root.after(10, self._double_click_clipboard_worker)
+
+    def _double_click_clipboard_worker(self):
+        im = grab_clipboard_image()
+        if im is None:
+            if self.main_app and hasattr(self.main_app, "log"):
+                self.main_app.log(
+                    "⚠️ В буфере нет картинки. Скопируй изображение (не только файл в Finder)."
+                )
+            return
+
+        def send_with_ip(addr: str):
+            ip = (addr or "").strip()
+            if not ip:
+                return
+            self.target_ip = ip
+            if self.main_app and hasattr(self.main_app, "set_remote_peer_ip"):
+                self.main_app.set_remote_peer_ip(ip)
+            else:
+                portal_config.save_remote_ip(ip)
+            self._save_clipboard_image_and_send(im, ip)
+
+        ip = self._resolve_peer_ip()
+        if not ip:
+            self.show_ip_dialog_sync(send_with_ip)
+            return
+        self._save_clipboard_image_and_send(im, ip)
+
+    def _save_clipboard_image_and_send(self, im, ip: str):
+        import tempfile
+
+        tmp = Path(tempfile.gettempdir()) / f"portal_clip_{int(time.time() * 1000)}.png"
+        try:
+            im.save(tmp, "PNG")
+            if self.main_app and hasattr(self.main_app, "log"):
+                self.main_app.log(f"📋 Картинка из буфера → {tmp.name} → отправка на {ip}")
+            self.send_files([str(tmp)], portal_clipboard=True)
+        except Exception as e:
+            if self.main_app and hasattr(self.main_app, "log"):
+                self.main_app.log(f"❌ Не удалось сохранить картинку из буфера: {e}")
+            print(f"[Portal] clipboard image: {e}")
 
     def show_ip_dialog(self):
         dialog = tk.Toplevel(self.root)
@@ -600,35 +1224,48 @@ class PortalWidget:
             ip = portal_config.load_remote_ip()
         return ip
 
-    def send_files(self, files: List[str]):
-        ip = self._resolve_peer_ip()
-        if not ip:
-            result: List[str] = []
+    def send_files(self, files: List[str], portal_clipboard: bool = False):
+        targets: List[str] = []
+        if self.main_app and hasattr(self.main_app, "get_target_ips"):
+            try:
+                targets = list(self.main_app.get_target_ips() or [])
+            except Exception:
+                targets = []
 
-            def cb(addr: str):
-                result.append(addr)
+        if not targets:
+            ip = self._resolve_peer_ip()
+            if not ip:
+                result: List[str] = []
 
-            self.show_ip_dialog_sync(cb)
-            if not result:
-                return
-            ip = result[0].strip()
-            self.target_ip = ip
-            if self.main_app and hasattr(self.main_app, "set_remote_peer_ip"):
-                self.main_app.set_remote_peer_ip(ip)
+                def cb(addr: str):
+                    result.append(addr)
+
+                self.show_ip_dialog_sync(cb)
+                if not result:
+                    return
+                ip = result[0].strip()
+                self.target_ip = ip
+                if self.main_app and hasattr(self.main_app, "set_remote_peer_ip"):
+                    self.main_app.set_remote_peer_ip(ip)
+                else:
+                    portal_config.save_remote_ip(ip)
+                targets = [ip]
             else:
-                portal_config.save_remote_ip(ip)
-        else:
-            self.target_ip = ip
+                self.target_ip = ip
+                targets = [ip]
 
         for fp in files:
             if self.main_app and hasattr(self.main_app, "send_file"):
                 if hasattr(self.main_app, "log"):
-                    self.main_app.log(f"📤 Виджет: {Path(fp).name}")
-                threading.Thread(
-                    target=self.main_app.send_file,
-                    args=(fp, ip),
-                    daemon=True,
-                ).start()
+                    self.main_app.log(f"📤 Виджет: {Path(fp).name} → {len(targets)} ПК")
+                kw = {"portal_clipboard": True} if portal_clipboard else {}
+                for ip in targets:
+                    threading.Thread(
+                        target=self.main_app.send_file,
+                        args=(fp, ip),
+                        kwargs=kw,
+                        daemon=True,
+                    ).start()
 
 
 # ─────────────────────────── ГОРЯЧИЕ КЛАВИШИ ────────────────────────────────
@@ -648,6 +1285,7 @@ class GlobalHotkeyManager:
     _NSCmd   = 1 << 20   # NSCommandKeyMask
     _NSAlt   = 1 << 19   # NSAlternateKeyMask (Option)
     _NSShift = 1 << 17   # NSShiftKeyMask
+    _NSControl = 1 << 18  # NSControlKeyMask (Cmd+Ctrl+P/C/V — без конфликта с Терминалом)
     _NSMask  = 0xFFFF0000
     _NSKeyDownMask = 1 << 10
 
@@ -662,6 +1300,10 @@ class GlobalHotkeyManager:
         self._hk_r: Optional[int] = None
         self._hk_w: Optional[int] = None
         self._last_toggle_debounce = 0.0
+        self._last_push_debounce = 0.0
+        self._last_pull_debounce = 0.0
+        self._hotkey_helper_proc: Optional[Any] = None
+        self._hotkey_pipe_got_byte = False
 
     def _log(self, msg: str, prefix: str = "⌨️") -> None:
         portal_thread_log(self.main_app, msg, prefix)
@@ -674,28 +1316,65 @@ class GlobalHotkeyManager:
         self._bind_tk_all()
 
         if platform.system() == "Darwin":
-            try:
-                import fcntl
+            # Python 3.13 + PyObjC NSEvent в фоне даёт PyEval_RestoreThread / Abort — только bind_all
+            use_objc = sys.version_info < (3, 13) or os.environ.get(
+                "PORTAL_MAC_FORCE_GLOBAL_HOTKEYS", ""
+            ).strip() in ("1", "true", "yes")
+            if use_objc:
+                try:
+                    import fcntl
 
-                self._hk_r, self._hk_w = os.pipe()
-                fcntl.fcntl(self._hk_r, fcntl.F_SETFL, os.O_NONBLOCK)
-            except Exception as e:
-                self._log(f"⚠️ pipe хоткеев не создан: {e}")
+                    self._hk_r, self._hk_w = os.pipe()
+                    fcntl.fcntl(self._hk_r, fcntl.F_SETFL, os.O_NONBLOCK)
+                except Exception as e:
+                    self._log(f"⚠️ pipe хоткеев не создан: {e}")
+                    self._hk_r = self._hk_w = None
+                self._schedule_hotkey_poll()
+                threading.Thread(
+                    target=self._run_mac_global, daemon=True, name="portal-hotkeys-global"
+                ).start()
+                try:
+                    self.main_app.after(350, self._setup_nslocal_monitor)
+                except Exception as e:
+                    self._log(f"after(local monitor): {e}")
+                self._log(
+                    "✅ Хоткеи: Cmd+Option+P / Cmd+Shift+C/V (global+local NSEvent, см. Accessibility)"
+                )
+            else:
+                # Python 3.13+: pynput в том же процессе, что и Tk → часто Trace/BPT (CGEventTap).
+                # Глобальные хоткеи — отдельный процесс portal_mac_hotkey_helper.py → тот же pipe, что у NSEvent.
                 self._hk_r = self._hk_w = None
-            self._schedule_hotkey_poll()
-            t = threading.Thread(
-                target=self._run_mac_global, daemon=True, name="portal-hotkeys-global"
-            )
-            t.start()
-            # Local monitor: когда в фокусе сам Портал (global такие события не получает)
-            try:
-                self.main_app.after(350, self._setup_nslocal_monitor)
-            except Exception as e:
-                self._log(f"after(local monitor): {e}")
-            self._log(
-                "✅ Хоткеи: Cmd+Option+P / Cmd+Shift+C/V — из других приложений (Accessibility→Терминал или Python) "
-                "и из окна Портала"
-            )
+                if os.environ.get("PORTAL_MAC_NO_HOTKEY_HELPER", "").strip() in (
+                    "1",
+                    "true",
+                    "yes",
+                ):
+                    self._log(
+                        "PORTAL_MAC_NO_HOTKEY_HELPER=1 — только Cmd+Shift+C/P/V при фокусе на окне Портала"
+                    )
+                else:
+                    try:
+                        import fcntl
+
+                        self._hk_r, self._hk_w = os.pipe()
+                        fcntl.fcntl(self._hk_r, fcntl.F_SETFL, os.O_NONBLOCK)
+                    except Exception as e:
+                        self._log(f"⚠️ pipe хоткеев: {e}")
+                        self._hk_r = self._hk_w = None
+                    self._schedule_hotkey_poll()
+                    threading.Thread(
+                        target=self._run_mac_hotkey_helper_subprocess,
+                        daemon=True,
+                        name="portal-mac-hotkey-helper",
+                    ).start()
+                    try:
+                        self.main_app.after(2800, self._hotkey_helper_healthcheck)
+                    except Exception:
+                        pass
+                    self._log(
+                        "✅ macOS 3.13+: глобальные хоткеи — отдельный процесс pynput (без краша Tk). "
+                        "Нужны Input Monitoring + Accessibility для Python/Терминала"
+                    )
         else:
             t = threading.Thread(target=self._run_win, daemon=True, name="portal-hotkeys-win")
             t.start()
@@ -709,17 +1388,17 @@ class GlobalHotkeyManager:
         Биндим несколько вариантов написания.
         """
         def _toggle(e=None):
-            self._log("🔑 Tk bind: Cmd+Option+P → переключить виджет", "🔑")
+            self._log("🔑 Tk bind → переключить виджет", "🔑")
             self._toggle_ui()
             return "break"
 
         def _push(e=None):
-            self._log("🔑 Tk bind: Cmd+Shift+C → отправить буфер", "🔑")
+            self._log("🔑 Tk bind → отправить буфер", "🔑")
             self._on_push()
             return "break"
 
         def _pull(e=None):
-            self._log("🔑 Tk bind: Cmd+Shift+V → получить буфер", "🔑")
+            self._log("🔑 Tk bind → забрать буфер с удалённого ПК", "🔑")
             self._on_pull()
             return "break"
 
@@ -744,19 +1423,53 @@ class GlobalHotkeyManager:
 
         try:
             if is_mac:
-                toggle_seqs = [
-                    "<Command-Option-p>", "<Command-Alt-p>",
-                    "<Meta-Option-p>", "<Meta-Alt-p>",
-                    "<Command-Option-P>", "<Meta-Option-P>",
-                ]
-                push_seqs = [
-                    "<Command-Shift-C>", "<Command-Shift-c>",
-                    "<Meta-Shift-C>", "<Meta-Shift-c>",
-                ]
-                pull_seqs = [
-                    "<Command-Shift-V>", "<Command-Shift-v>",
-                    "<Meta-Shift-V>", "<Meta-Shift-v>",
-                ]
+                legacy = os.environ.get("PORTAL_MAC_HOTKEY_LEGACY", "").strip().lower() in (
+                    "1",
+                    "true",
+                    "yes",
+                )
+                if legacy:
+                    toggle_seqs = [
+                        "<Command-Option-p>",
+                        "<Command-Alt-p>",
+                        "<Meta-Option-p>",
+                        "<Meta-Alt-p>",
+                        "<Command-Option-P>",
+                        "<Meta-Option-P>",
+                    ]
+                    push_seqs = [
+                        "<Command-Shift-C>",
+                        "<Command-Shift-c>",
+                        "<Meta-Shift-C>",
+                        "<Meta-Shift-c>",
+                    ]
+                    pull_seqs = [
+                        "<Command-Shift-V>",
+                        "<Command-Shift-v>",
+                        "<Meta-Shift-V>",
+                        "<Meta-Shift-v>",
+                    ]
+                else:
+                    toggle_seqs = [
+                        "<Command-Control-p>",
+                        "<Command-Control-P>",
+                        "<Control-Command-p>",
+                        "<Control-Command-P>",
+                        "<Meta-Control-p>",
+                        "<Meta-Control-P>",
+                    ]
+                    push_seqs = [
+                        "<Command-Control-c>",
+                        "<Command-Control-C>",
+                        "<Control-Command-c>",
+                        "<Control-Command-C>",
+                    ]
+                    pull_seqs = [
+                        "<Command-Control-v>",
+                        "<Command-Control-V>",
+                        "<Control-Command-v>",
+                        "<Control-Command-V>",
+                    ]
             else:
                 toggle_seqs = ["<Control-Alt-p>"]
                 push_seqs   = ["<Control-Alt-c>"]
@@ -797,7 +1510,12 @@ class GlobalHotkeyManager:
                     except Exception:
                         pass
 
-            self._log("Tk bind_all + bind на виджет (фокус на Портале)")
+            if is_mac:
+                self._log(
+                    "Tk bind_all (macOS: legacy=Cmd+Opt/Shift иначе Cmd+Ctrl — см. PORTAL_MAC_HOTKEY_LEGACY)"
+                )
+            else:
+                self._log("Tk bind_all + bind на виджет (фокус на Портале)")
         except Exception as e:
             self._log(f"bind_all ошибка: {e}")
 
@@ -818,20 +1536,48 @@ class GlobalHotkeyManager:
                     if not chunk:
                         break
                     for c in chunk:
+                        if c in (ord("t"), ord("c"), ord("v")):
+                            self._hotkey_pipe_got_byte = True
                         if c == ord("t"):
-                            self._log("🔑 Глобальный хоткей: Cmd+Option+P → виджет", "🔑")
+                            self._log("🔑 Глобальный хоткей → виджет", "🔑")
                             self._toggle_ui()
                         elif c == ord("c"):
-                            self._log("🔑 Глобальный хоткей: Cmd+Shift+C → буфер", "🔑")
+                            self._log("🔑 Глобальный хоткей → отправить буфер", "🔑")
                             self._on_push()
                         elif c == ord("v"):
-                            self._log("🔑 Глобальный хоткей: Cmd+Shift+V → буфер", "🔑")
+                            self._log("🔑 Глобальный хоткей → забрать буфер", "🔑")
                             self._on_pull()
             except BlockingIOError:
                 pass
             except OSError:
                 pass
         self._schedule_hotkey_poll()
+
+    def _hotkey_helper_healthcheck(self) -> None:
+        """Один раз через ~3 с: если helper молчит или упал — подсказка в журнал."""
+        if platform.system() != "Darwin" or sys.version_info < (3, 13):
+            return
+        if os.environ.get("PORTAL_MAC_NO_HOTKEY_HELPER", "").strip() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            return
+        if self._hotkey_pipe_got_byte:
+            return
+        proc = self._hotkey_helper_proc
+        if proc is not None and proc.poll() is not None:
+            rc = proc.returncode
+            self._log(
+                f"⚠️ hotkey-helper завершился (код {rc}). Проверь pynput, "
+                "права «Мониторинг ввода» + «Универсальный доступ» для того же Python, что запускает Портал."
+            )
+            return
+        self._log(
+            "⚠️ Глобальные хоткеи пока не приходят (helper жив, но тишина). "
+            "Добавь права Input Monitoring + Accessibility для Python/Терминала; "
+            "пока работают сочетания только при фокусе на окне Портала (bind_all)."
+        )
 
     def _setup_nslocal_monitor(self) -> None:
         """События внутри приложения Портал (global их не видит)."""
@@ -862,19 +1608,24 @@ class GlobalHotkeyManager:
 
     def _dispatch_local_hotkey(self, cmd: str) -> None:
         if cmd == "t":
-            self._log("🔑 Local: Cmd+Option+P", "🔑")
+            self._log("🔑 Local → виджет", "🔑")
             self._toggle_ui()
         elif cmd == "c":
-            self._log("🔑 Local: Cmd+Shift+C", "🔑")
+            self._log("🔑 Local → отправить буфер", "🔑")
             self._on_push()
         elif cmd == "v":
-            self._log("🔑 Local: Cmd+Shift+V", "🔑")
+            self._log("🔑 Local → забрать буфер", "🔑")
             self._on_pull()
 
     def _nsevent_match_command(self, event) -> Optional[str]:
         """Возвращает 't'|'c'|'v' или None. Модификаторы — по битам, не строгое равенство."""
         try:
-            CMD, ALT, SHIFT = self._NSCmd, self._NSAlt, self._NSShift
+            CMD, ALT, SHIFT, CTRL = (
+                self._NSCmd,
+                self._NSAlt,
+                self._NSShift,
+                self._NSControl,
+            )
             try:
                 from AppKit import NSDeviceIndependentModifierFlagsMask
 
@@ -883,13 +1634,43 @@ class GlobalHotkeyManager:
                 mask = self._NSMask
             f = int(event.modifierFlags()) & mask
             keycode = int(event.keyCode())
-            # Cmd+Option+P (без требования «ровно два» бита — CapsLock и др. не ломают)
-            if keycode == self._KEY_P and (f & CMD) and (f & ALT) and not (f & SHIFT):
-                return "t"
-            if keycode == self._KEY_C and (f & CMD) and (f & SHIFT) and not (f & ALT):
-                return "c"
-            if keycode == self._KEY_V and (f & CMD) and (f & SHIFT) and not (f & ALT):
-                return "v"
+            legacy = os.environ.get("PORTAL_MAC_HOTKEY_LEGACY", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            if legacy:
+                if keycode == self._KEY_P and (f & CMD) and (f & ALT) and not (f & SHIFT):
+                    return "t"
+                if keycode == self._KEY_C and (f & CMD) and (f & SHIFT) and not (f & ALT):
+                    return "c"
+                if keycode == self._KEY_V and (f & CMD) and (f & SHIFT) and not (f & ALT):
+                    return "v"
+            else:
+                if (
+                    keycode == self._KEY_P
+                    and (f & CMD)
+                    and (f & CTRL)
+                    and not (f & ALT)
+                    and not (f & SHIFT)
+                ):
+                    return "t"
+                if (
+                    keycode == self._KEY_C
+                    and (f & CMD)
+                    and (f & CTRL)
+                    and not (f & ALT)
+                    and not (f & SHIFT)
+                ):
+                    return "c"
+                if (
+                    keycode == self._KEY_V
+                    and (f & CMD)
+                    and (f & CTRL)
+                    and not (f & ALT)
+                    and not (f & SHIFT)
+                ):
+                    return "v"
         except Exception:
             pass
         return None
@@ -953,33 +1734,107 @@ class GlobalHotkeyManager:
 
         return handle
 
-    # ── Windows ────────────────────────────────────────────────────────────────
+    # ── pynput (Windows + macOS 3.13+) ─────────────────────────────────────────
 
-    def _run_win(self):
+    def _run_pynput_hotkeys(self, combo: dict, label: str) -> None:
         try:
             from pynput import keyboard
         except ImportError:
-            self._log("pynput не установлен — хоткеи отключены")
+            self._log("pynput не установлен — pip install pynput; хоткеи отключены")
             return
-
-        combo = {
-            "<ctrl>+<alt>+p": self.toggle_widget,
-            "<ctrl>+<alt>+c": self.push_clipboard,
-            "<ctrl>+<alt>+v": self.pull_clipboard,
-        }
         try:
-            with keyboard.GlobalHotKeys(combo) as h:
-                self._log("✅ pynput GlobalHotKeys активен: Ctrl+Alt+P | C | V")
+            with keyboard.GlobalHotKeys(combo, suppress=False) as h:
+                self._log(f"✅ pynput GlobalHotKeys: {label}")
                 h.join()
         except Exception as e:
-            self._log(f"pynput GlobalHotKeys: {e}")
+            self._log(f"pynput GlobalHotKeys ({label}): {e}")
+
+    def _run_mac_hotkey_helper_subprocess(self) -> None:
+        """Запуск portal_mac_hotkey_helper.py; stdout → байты в pipe → _poll_hotkey_queue."""
+        hw = self._hk_w
+        if hw is None:
+            return
+        helper = Path(__file__).resolve().parent / "portal_mac_hotkey_helper.py"
+        if not helper.is_file():
+            self._log(f"⚠️ Нет {helper.name} — глобальные хоткеи отключены")
+            try:
+                os.close(hw)
+            except OSError:
+                pass
+            return
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, "-u", str(helper)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                bufsize=1,
+                text=True,
+                cwd=str(helper.parent),
+                close_fds=True,
+            )
+            self._hotkey_helper_proc = proc
+        except Exception as e:
+            self._log(f"⚠️ Запуск hotkey-helper: {e}")
+            return
+
+        def err_reader():
+            try:
+                if proc.stderr:
+                    for line in proc.stderr:
+                        _log_to_file(f"[hotkey-helper] {line.rstrip()}")
+            except Exception:
+                pass
+
+        threading.Thread(target=err_reader, daemon=True, name="hotkey-helper-stderr").start()
+
+        def out_reader():
+            try:
+                if not proc.stdout:
+                    return
+                for line in proc.stdout:
+                    c = (line or "").strip().lower()
+                    if len(c) == 1 and c in "tcv":
+                        try:
+                            os.write(hw, c.encode("ascii"))
+                        except (OSError, BlockingIOError, TypeError, ValueError):
+                            pass
+            except Exception:
+                pass
+            finally:
+                try:
+                    rc = proc.poll()
+                    if rc is not None and rc != 0:
+                        self._log(
+                            f"⚠️ hotkey-helper код выхода {rc} — проверь Input Monitoring / Accessibility"
+                        )
+                    else:
+                        self._log(
+                            "⚠️ hotkey-helper завершился — глобальные сочетания недоступны (остался Tk bind при фокусе)"
+                        )
+                except Exception:
+                    pass
+
+        threading.Thread(
+            target=out_reader, daemon=True, name="hotkey-helper-stdout"
+        ).start()
+
+    def _run_win(self) -> None:
+        self._run_pynput_hotkeys(
+            {
+                "<ctrl>+<alt>+p": self.toggle_widget,
+                "<ctrl>+<alt>+c": self.push_clipboard,
+                "<ctrl>+<alt>+v": self.pull_clipboard,
+            },
+            "Win Ctrl+Alt+P | C | V",
+        )
 
     # ── Общие обработчики ──────────────────────────────────────────────────────
 
     def _toggle_ui(self):
         """Всегда на главном потоке Tk."""
         now = time.monotonic()
-        if now - self._last_toggle_debounce < 0.2:
+        if now - self._last_toggle_debounce < 0.35:
             return
         self._last_toggle_debounce = now
         state = self.widget.anim_state
@@ -998,6 +1853,10 @@ class GlobalHotkeyManager:
         self.toggle_widget()
 
     def _on_push(self):
+        now = time.monotonic()
+        if now - self._last_push_debounce < 0.45:
+            return
+        self._last_push_debounce = now
         if self.main_app and hasattr(self.main_app, "push_shared_clipboard_hotkey"):
             try:
                 self.main_app.after(0, self.main_app.push_shared_clipboard_hotkey)
@@ -1005,6 +1864,10 @@ class GlobalHotkeyManager:
                 pass
 
     def _on_pull(self):
+        now = time.monotonic()
+        if now - self._last_pull_debounce < 0.45:
+            return
+        self._last_pull_debounce = now
         if self.main_app and hasattr(self.main_app, "pull_shared_clipboard_hotkey"):
             try:
                 self.main_app.after(0, self.main_app.pull_shared_clipboard_hotkey)

@@ -4,9 +4,11 @@
 """
 
 import sys
+import os
 
-# Проверка версии Python (Python 3.13 может иметь проблемы с некоторыми библиотеками)
-if sys.version_info >= (3, 13):
+# Проверка версии Python (один раз за процесс)
+if sys.version_info >= (3, 13) and not os.environ.get("_PORTAL_PY313_WARN_DONE"):
+    os.environ["_PORTAL_PY313_WARN_DONE"] = "1"
     print("⚠️  Python 3.13+ обнаружен. Некоторые библиотеки могут работать нестабильно.")
     print("   Рекомендуется Python 3.11 или 3.12 для стабильности.")
     print("   Если видите ошибки, попробуйте: pyenv install 3.12.7 && pyenv local 3.12.7\n")
@@ -15,21 +17,130 @@ import customtkinter as ctk
 import socket
 import threading
 import json
-import os
 import shutil
 import pyperclip
 import time
+import io
+import uuid
+import struct
+import ctypes
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict, Tuple, Any
 import subprocess
 import platform
 
 import portal_config
+from portal_tk_compat import ensure_tkdnd_tk_misc_patch
 
 # Порт протокола Портала (должен совпадать на всех машинах)
 PORTAL_PORT = 12345
 # Как часто обновлять статус «пара онлайн?» (мс)
 PEER_STATUS_POLL_MS = 20000
+# Один файл из буфера удалённого ПК по get_clipboard (не гоняем гигабайты по TCP)
+CLIPBOARD_PULL_FILE_MAX_BYTES = 100 * 1024 * 1024
+
+
+def set_system_clipboard_png(png_bytes: bytes) -> bool:
+    """Положить PNG в системный буфер (macOS / Windows)."""
+    if not png_bytes:
+        return False
+    try:
+        if platform.system() == "Darwin":
+            from AppKit import NSPasteboard
+            from Foundation import NSData
+
+            pboard = NSPasteboard.generalPasteboard()
+            pboard.clearContents()
+            data = NSData.dataWithBytes_length_(png_bytes, len(png_bytes))
+            return bool(pboard.setData_forType_(data, "public.png"))
+        if platform.system() == "win32":
+            import win32clipboard
+            from PIL import Image
+
+            im = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+            out = io.BytesIO()
+            im.save(out, "BMP")
+            dib = out.getvalue()[14:]
+            win32clipboard.OpenClipboard(0)
+            try:
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardData(win32clipboard.CF_DIB, dib)
+            finally:
+                win32clipboard.CloseClipboard()
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def set_system_clipboard_file_paths(paths: List[str]) -> bool:
+    """Один или несколько файлов в буфере как «скопированные файлы»."""
+    clean = [str(Path(p).resolve()) for p in paths if p and Path(p).is_file()]
+    if not clean:
+        return False
+    try:
+        if platform.system() == "Darwin":
+            from AppKit import NSURL, NSPasteboard
+
+            urls = [NSURL.fileURLWithPath_(p) for p in clean]
+            pb = NSPasteboard.generalPasteboard()
+            pb.clearContents()
+            return bool(pb.writeObjects_(urls))
+        if platform.system() == "win32":
+            import win32clipboard
+
+            # UTF-16-LE, двойной \0 в конце списка
+            payload = "\0".join(clean) + "\0\0"
+            blob = payload.encode("utf-16-le")
+            # DROPFILES: pFiles, pt.x, pt.y, fNC, fWide (UTF-16 имена)
+            off = 20
+            header = struct.pack("<IiiII", off, 0, 0, 0, 1)
+            hdrop = header + blob
+            gmem = ctypes.windll.kernel32.GlobalAlloc(0x2000, len(hdrop))  # GMEM_MOVEABLE
+            if not gmem:
+                return False
+            ptr = ctypes.windll.kernel32.GlobalLock(gmem)
+            if not ptr:
+                ctypes.windll.kernel32.GlobalFree(gmem)
+                return False
+            try:
+                ctypes.memmove(ptr, hdrop, len(hdrop))
+            finally:
+                ctypes.windll.kernel32.GlobalUnlock(gmem)
+            win32clipboard.OpenClipboard(0)
+            try:
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardData(win32clipboard.CF_HDROP, gmem)
+            except Exception:
+                ctypes.windll.kernel32.GlobalFree(gmem)
+                raise
+            finally:
+                win32clipboard.CloseClipboard()
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def set_system_clipboard_image_from_file(filepath: Path) -> bool:
+    """Картинка из файла → буфер (для приёма PNG/JPEG/WebP и т.д.)."""
+    fp = Path(filepath)
+    if not fp.is_file():
+        return False
+    suf = fp.suffix.lower()
+    try:
+        if suf in (".png",) and platform.system() == "Darwin":
+            data = fp.read_bytes()
+            return set_system_clipboard_png(data)
+        from PIL import Image
+
+        im = Image.open(fp).convert("RGBA")
+        buf = io.BytesIO()
+        im.save(buf, format="PNG")
+        return set_system_clipboard_png(buf.getvalue())
+    except Exception:
+        return False
+
 
 # Настройка темы
 ctk.set_appearance_mode("dark")
@@ -84,26 +195,126 @@ def parse_first_json_object_bytes(buf: bytes) -> tuple[Optional[dict], int]:
     """
     Первый полный JSON-объект в буфере + сколько байт он занял.
     Нужно для ping и для file (после JSON сразу идут бинарные чанки в том же recv).
+
+    Важно: нельзя считать «{»/«}» вручную — в имени файла может быть «}» (например doc}.txt),
+    тогда ломался разбор, файл не принимался, отправитель получал пустой ответ.
     """
     if not buf:
         return None, 0
     start = buf.find(b"{")
     if start < 0:
         return None, 0
-    depth = 0
-    for i in range(start, len(buf)):
-        c = buf[i]
-        if c == ord("{"):
-            depth += 1
-        elif c == ord("}"):
-            depth -= 1
-            if depth == 0:
-                try:
-                    obj = json.loads(buf[start : i + 1].decode("utf-8"))
-                    return obj, i + 1
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    return None, 0
-    return None, 0
+    try:
+        chunk = buf[start:].decode("utf-8")
+    except UnicodeDecodeError:
+        return None, 0
+    decoder = json.JSONDecoder()
+    try:
+        obj, end = decoder.raw_decode(chunk)
+    except json.JSONDecodeError:
+        return None, 0
+    if not isinstance(obj, dict):
+        return None, 0
+    consumed = chunk[:end].encode("utf-8")
+    return obj, start + len(consumed)
+
+
+def _portal_sendall(sock: socket.socket, data: bytes) -> None:
+    """Полная отправка (на Windows send() может отдать только часть)."""
+    if data:
+        sock.sendall(data)
+
+
+def _safe_incoming_filename(name: Any) -> str:
+    """Безопасное имя файла при приёме (Windows / кроссплатформа)."""
+    s = os.path.basename(str(name or "") or "received_file") or "received_file"
+    for c in '<>:"/\\|?*\x00':
+        s = s.replace(c, "_")
+    s = s.strip(" .")
+    if not s or s in (".", ".."):
+        s = "received_file"
+    stem = Path(s).stem.upper()
+    if sys.platform == "win32" and stem in (
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        "COM1",
+        "COM2",
+        "COM3",
+        "COM4",
+        "COM5",
+        "COM6",
+        "COM7",
+        "COM8",
+        "COM9",
+        "LPT1",
+        "LPT2",
+        "LPT3",
+        "LPT4",
+        "LPT5",
+        "LPT6",
+        "LPT7",
+        "LPT8",
+        "LPT9",
+    ):
+        s = f"_{s}"
+    return s
+
+
+def _recv_ok_prefix(sock: socket.socket, max_total: int = 64) -> bytes:
+    """Прочитать ответ получателя до OK или закрытия (короткий ответ)."""
+    buf = b""
+    while len(buf) < max_total:
+        chunk = sock.recv(max(8, max_total - len(buf)))
+        if not chunk:
+            break
+        buf += chunk
+        if buf.startswith(b"OK"):
+            break
+    return buf
+
+
+def read_first_json_from_socket(
+    sock: socket.socket, max_header_bytes: int = 1_048_576
+) -> Tuple[Optional[dict], bytes]:
+    """
+    Читать из сокета до первого полного JSON-объекта (ping / file / clipboard).
+    TCP может разрезать заголовок между пакетами — один recv(65536) тогда ломает приём.
+    """
+    buf = b""
+    while True:
+        msg, json_end = parse_first_json_object_bytes(buf)
+        if msg is not None:
+            return msg, buf[json_end:]
+        if len(buf) >= max_header_bytes:
+            return None, buf
+        chunk = sock.recv(65536)
+        if not chunk:
+            return (None, buf)
+        buf += chunk
+
+
+def read_one_json_object_from_socket(
+    sock: socket.socket, max_buf: int = 4_194_304
+) -> Tuple[dict, bytes]:
+    """
+    Первый полный JSON в TCP-потоке + «хвост» после него.
+    Для get_clipboard: сервер раньше слал текст без \\n — клиент ждал \\n и падал.
+    """
+    buf = b""
+    while True:
+        msg, end = parse_first_json_object_bytes(buf)
+        if msg is not None:
+            if not isinstance(msg, dict):
+                raise ValueError("Ответ не JSON-объект")
+            return msg, buf[end:]
+        if len(buf) >= max_buf:
+            raise ValueError("Слишком длинный ответ сервера")
+        chunk = sock.recv(65536)
+        if not chunk:
+            raise ValueError("Пустой или неполный ответ")
+        buf += chunk
 
 
 class PortalApp(ctk.CTk):
@@ -124,8 +335,13 @@ class PortalApp(ctk.CTk):
         self.sync_clipboard_enabled = False
         self.sync_target_ip = None
         self.is_receiving_clipboard = False
-        # IP второго ПК — из файла настроек (один раз указал в главном окне)
+        # Первый IP из списка (совместимость с виджетом / старым кодом)
         self.remote_peer_ip: Optional[str] = portal_config.load_remote_ip()
+        self._clip_batch_lock = threading.Lock()
+        self._clip_batches: Dict[str, Dict[str, Any]] = {}
+        self._peer_checkbox_vars: Dict[str, Any] = {}
+        # Один push буфера за раз (двойной хоткей / два источника событий)
+        self._clipboard_push_lock = threading.Lock()
         
         # Создание UI
         self.create_ui()
@@ -262,53 +478,151 @@ class PortalApp(ctk.CTk):
         peer_frame.pack(fill="x", padx=20, pady=(0, 10))
         ctk.CTkLabel(
             peer_frame,
-            text="🖥 IP второго компьютера (Tailscale / LAN) — указывается один раз:",
+            text="🖥 IP других компьютеров (Tailscale / LAN) — список, несколько строк:",
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(anchor="w", padx=12, pady=(10, 4))
         ctk.CTkLabel(
             peer_frame,
-            text="Сохраняется на диск. Отправка файлов/буфера и виджет используют его без повторных вопросов.",
+            text="Сохраняется на диск. Ниже отметь галочками, кому слать сразу (файлы, буфер, виджет).",
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(anchor="w", padx=12, pady=(0, 4))
         ctk.CTkLabel(
             peer_frame,
-            text=f"💡 Указывай только IP (например 100.65.63.84), порт :{PORTAL_PORT} добавляется автоматически.",
+            text=f"💡 Только IP в строке (например 100.65.63.84), порт :{PORTAL_PORT} добавляется сам.",
             font=ctk.CTkFont(size=11),
             text_color="gray70",
         ).pack(anchor="w", padx=12, pady=(0, 8))
-        row = ctk.CTkFrame(peer_frame, fg_color="transparent")
-        row.pack(fill="x", padx=12, pady=(0, 12))
-        self.peer_ip_entry = ctk.CTkEntry(row, width=280, placeholder_text="например 100.65.63.84")
-        self.peer_ip_entry.pack(side="left", padx=(0, 10))
-        if self.remote_peer_ip:
-            self.peer_ip_entry.insert(0, self.remote_peer_ip)
-        self.peer_ip_entry.bind("<KeyRelease>", self._on_peer_ip_edited)
+
+        ctk.CTkLabel(
+            peer_frame,
+            text="📁 Папка для входящих файлов (по умолчанию — Рабочий стол):",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(anchor="w", padx=12, pady=(4, 2))
+        recv_row = ctk.CTkFrame(peer_frame, fg_color="transparent")
+        recv_row.pack(fill="x", padx=12, pady=(0, 8))
+        self.receive_dir_entry = ctk.CTkEntry(recv_row, width=360, placeholder_text="~/Desktop")
+        self.receive_dir_entry.pack(side="left", padx=(0, 8))
+        try:
+            self.receive_dir_entry.insert(0, str(portal_config.receive_dir_path()))
+        except Exception:
+            pass
         ctk.CTkButton(
-            row,
-            text="Сохранить IP",
-            width=120,
-            command=self.save_peer_ip_from_ui,
-            font=ctk.CTkFont(size=13),
+            recv_row,
+            text="Сохранить папку",
+            width=130,
+            command=self.save_receive_dir_from_ui,
+            font=ctk.CTkFont(size=12),
         ).pack(side="left")
+        self.receive_dir_feedback = ctk.CTkLabel(
+            recv_row, text="", font=ctk.CTkFont(size=12), text_color="gray"
+        )
+        self.receive_dir_feedback.pack(side="left", padx=(8, 0))
+
+        ctk.CTkLabel(
+            peer_frame,
+            text="Входящие файлы (не «как из буфера» у отправителя — там всегда диск+буфер):",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(anchor="w", padx=12, pady=(4, 2))
+        self._receive_files_mode_labels = {
+            "both": "На диск и в буфер (Cmd+V)",
+            "disk_only": "Только в папку приёма",
+            "clipboard_only": "В буфер (+ файл в папке; без «Показать в Finder»)",
+        }
+        rm_row = ctk.CTkFrame(peer_frame, fg_color="transparent")
+        rm_row.pack(fill="x", padx=12, pady=(0, 6))
+        self.receive_mode_menu = ctk.CTkOptionMenu(
+            rm_row,
+            values=list(self._receive_files_mode_labels.values()),
+            command=self._on_receive_files_mode_menu,
+            width=420,
+            font=ctk.CTkFont(size=12),
+        )
+        self.receive_mode_menu.pack(side="left", padx=(0, 8))
+        cur_m = portal_config.receive_files_mode()
+        self.receive_mode_menu.set(self._receive_files_mode_labels.get(cur_m, self._receive_files_mode_labels["both"]))
+
+        ip_edit_row = ctk.CTkFrame(peer_frame, fg_color="transparent")
+        ip_edit_row.pack(fill="x", padx=12, pady=(0, 6))
+        self.peer_ips_text = ctk.CTkTextbox(ip_edit_row, width=420, height=88, font=ctk.CTkFont(size=13))
+        self.peer_ips_text.pack(side="left", padx=(0, 10), anchor="nw")
+        self._fill_peer_ips_textbox()
+        self.peer_ips_text.bind("<KeyRelease>", self._on_peer_ips_edited)
+        btn_col = ctk.CTkFrame(ip_edit_row, fg_color="transparent")
+        btn_col.pack(side="left", fill="y")
+        ctk.CTkButton(
+            btn_col,
+            text="Сохранить\nсписок IP",
+            width=130,
+            command=self.save_peer_ips_from_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(pady=(0, 6))
+        ctk.CTkButton(
+            btn_col,
+            text="Сохранить\nвыбор",
+            width=130,
+            command=self.save_peer_selection_from_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack()
         self.ip_saved_feedback = ctk.CTkLabel(
-            row,
+            peer_frame,
             text="",
-            font=ctk.CTkFont(size=14, weight="bold"),
+            font=ctk.CTkFont(size=12, weight="bold"),
             text_color="#3dd68c",
         )
-        self.ip_saved_feedback.pack(side="left", padx=(10, 0))
+        self.ip_saved_feedback.pack(anchor="w", padx=12, pady=(0, 4))
+
+        if platform.system() == "Darwin":
+            _hk = (
+                "Cmd+Shift+C"
+                if os.environ.get("PORTAL_MAC_HOTKEY_LEGACY", "").strip().lower() in ("1", "true", "yes")
+                else "Cmd+Ctrl+C"
+            )
+        else:
+            _hk = "Ctrl+Alt+C"
+        ctk.CTkLabel(
+            peer_frame,
+            text=f"Кому отправлять ({_hk}, файлы, виджет):",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(anchor="w", padx=12, pady=(4, 2))
+        # Одна компактная строка с чекбоксами (без высокого ScrollableFrame)
+        self.peer_select_frame = ctk.CTkFrame(peer_frame, fg_color="transparent", height=42)
+        self.peer_select_frame.pack(fill="x", padx=12, pady=(0, 4))
+        try:
+            self.peer_select_frame.pack_propagate(False)
+        except Exception:
+            pass
+        self.rebuild_peer_checkboxes()
 
         # Подсказки по хоткеям (виджет + общий буфер)
         hotkey_frame = ctk.CTkFrame(peer_frame, fg_color="transparent")
         hotkey_frame.pack(fill="x", padx=12, pady=(0, 10))
         if platform.system() == "Darwin":
-            hotkey_text = (
-                "🔑 Быстрые клавиши (из любого приложения, нужен Accessibility → Терминал):\n"
-                "   Показать или скрыть портал — Cmd+Option+P\n"
-                "   Отправить буфер на другой ПК — Cmd+Shift+C\n"
-                "   Вставить буфер с другого ПК — Cmd+Shift+V"
+            _leg = os.environ.get("PORTAL_MAC_HOTKEY_LEGACY", "").strip().lower() in ("1", "true", "yes")
+            if _leg:
+                hotkey_text = (
+                    "🔑 macOS (режим PORTAL_MAC_HOTKEY_LEGACY=1 — может конфликтовать с Терминалом):\n"
+                    "   Портал — Cmd+Option+P\n"
+                    "   Отправить буфер — Cmd+Shift+C\n"
+                    "   Забрать буфер — Cmd+Shift+V"
+                )
+            else:
+                hotkey_text = (
+                    "🔑 macOS по умолчанию (Cmd+Ctrl — реже лезет в Терминал):\n"
+                    "   Показать/скрыть портал — Cmd+Ctrl+P\n"
+                    "   Отправить буфер на другие ПК — Cmd+Ctrl+C\n"
+                    "   Забрать буфер с первого отмеченного IP — Cmd+Ctrl+V"
+                )
+            hotkey_text += (
+                "\n📌 Забрать буфер = **первый отмеченный IP**. На том ПК в логе будет get_clipboard — это ответ твоему запросу."
+                "\n💡 Старые сочетания: экспорт PORTAL_MAC_HOTKEY_LEGACY=1 перед запуском."
             )
+            if sys.version_info >= (3, 13):
+                hotkey_text += (
+                    "\n✅ Python 3.13+: глобальные хоткеи — отдельный процесс pynput (не падает вместе с окном). "
+                    "Права: Input Monitoring + Универсальный доступ для Терминала/Python. "
+                    "Отключить helper: PORTAL_MAC_NO_HOTKEY_HELPER=1 (только при фокусе на Портале)."
+                )
         else:
             hotkey_text = (
                 "🔑 Быстрые клавиши:\n"
@@ -345,7 +659,7 @@ class PortalApp(ctk.CTk):
         self.local_link_status_label.pack(anchor="w")
         self.peer_link_status_label = ctk.CTkLabel(
             conn_frame,
-            text="⚪ Пара: укажи IP и нажми «Сохранить IP»",
+            text="⚪ Пары: сохрани список IP и проверь связь",
             font=ctk.CTkFont(size=12),
             text_color="gray",
             justify="left",
@@ -363,7 +677,7 @@ class PortalApp(ctk.CTk):
         ).pack(side="left")
         ctk.CTkLabel(
             probe_row,
-            text=f"авто каждые {PEER_STATUS_POLL_MS // 1000} с, если указан IP",
+            text=f"авто каждые {PEER_STATUS_POLL_MS // 1000} с, если есть IP",
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(side="left", padx=(12, 0))
@@ -420,12 +734,33 @@ class PortalApp(ctk.CTk):
             font=ctk.CTkFont(size=14, weight="bold")
         )
         log_title.pack(pady=(10, 5))
-        
+
+        log_btn_row = ctk.CTkFrame(log_frame, fg_color="transparent")
+        log_btn_row.pack(fill="x", padx=10, pady=(0, 4))
+        ctk.CTkButton(
+            log_btn_row,
+            text="📋 Копировать весь журнал",
+            width=200,
+            command=self.copy_whole_activity_log,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 10))
+        _lp = portal_config.activity_log_path()
+        ctk.CTkLabel(
+            log_btn_row,
+            text=f"Также пишется в: {_lp}",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            anchor="w",
+        ).pack(side="left", fill="x", expand=True)
+
         self.log_text = ctk.CTkTextbox(log_frame, height=300, wrap="word")
         self.log_text.pack(fill="x", expand=False, padx=10, pady=(0, 10))
         self.log_text.insert("1.0", "Готов к работе...\n")
         self.log_text.configure(state="disabled")
         self._log_max_lines = 400
+        # Cmd/Ctrl+C: копировать выделение или весь журнал (в disabled-текстбоксе своё копирование часто ломается)
+        self.log_text.bind("<Command-c>", self._log_copy_selection_hotkey)
+        self.log_text.bind("<Control-c>", self._log_copy_selection_hotkey)
 
         self._refresh_local_link_status_label()
         self.after(800, lambda: self.check_peer_connection_async(silent=True))
@@ -433,6 +768,7 @@ class PortalApp(ctk.CTk):
 
     def setup_main_window_drag_drop(self):
         """Drag & Drop файлов в главное окно (не только в виджет)."""
+        ensure_tkdnd_tk_misc_patch()
         if platform.system() == "Windows":
             try:
                 import windnd
@@ -456,14 +792,15 @@ class PortalApp(ctk.CTk):
                         for fp in paths:
                             if os.path.exists(fp):
                                 self.log(f"   📄 {Path(fp).name}")
-                                if self.remote_peer_ip:
-                                    threading.Thread(
-                                        target=self.send_file,
-                                        args=(fp, self.remote_peer_ip),
-                                        daemon=True,
-                                    ).start()
+                                if self.get_target_ips():
+                                    for ip in self.get_target_ips():
+                                        threading.Thread(
+                                            target=self.send_file,
+                                            args=(fp, ip),
+                                            daemon=True,
+                                        ).start()
                                 else:
-                                    self.log("⚠️ Сначала укажите IP выше и нажмите «Сохранить IP»")
+                                    self.log("⚠️ Сначала сохрани список IP и отметь получателей")
                                     self.send_file_to_dialog(fp)
 
                 # windnd работает на Tk окне (CTk наследует Tk)
@@ -475,8 +812,9 @@ class PortalApp(ctk.CTk):
             try:
                 from tkinterdnd2 import TkinterDnD, DND_FILES
 
-                # CTk наследует Tk, можно использовать TkinterDnD
+                # _require вешает методы на BaseWidget → копируем на Misc (Python 3.13 + CTk).
                 TkinterDnD._require(self)
+                ensure_tkdnd_tk_misc_patch()
                 self.drop_target_register(DND_FILES)
                 self.dnd_bind("<<Drop>>", self._on_main_window_drop)
                 self.log("✅ Drag & Drop включён в главном окне (macOS/Linux)")
@@ -501,117 +839,139 @@ class PortalApp(ctk.CTk):
                 fp = fp.strip()
                 if os.path.exists(fp):
                     self.log(f"   📄 {Path(fp).name}")
-                    if self.remote_peer_ip:
-                        threading.Thread(
-                            target=self.send_file,
-                            args=(fp, self.remote_peer_ip),
-                            daemon=True,
-                        ).start()
+                    if self.get_target_ips():
+                        for ip in self.get_target_ips():
+                            threading.Thread(
+                                target=self.send_file,
+                                args=(fp, ip),
+                                daemon=True,
+                            ).start()
                     else:
-                        self.log("⚠️ Сначала укажите IP выше и нажмите «Сохранить IP»")
+                        self.log("⚠️ Сначала сохрани список IP и отметь получателей")
                         self.send_file_to_dialog(fp)
 
-    def _on_peer_ip_edited(self, _event=None):
-        """Сбросить зелёную галочку, если пользователь снова правит IP."""
+    def get_target_ips(self) -> List[str]:
+        """IP получателей для одновременной отправки (галочки), без дубликатов."""
+        raw = portal_config.load_peer_send_targets()
+        seen = set()
+        out: List[str] = []
+        for x in raw:
+            s = str(x).strip()
+            if s and s not in seen:
+                seen.add(s)
+                out.append(s)
+        return out
+
+    def _on_peer_ips_edited(self, _event=None):
         if hasattr(self, "ip_saved_feedback"):
             self.ip_saved_feedback.configure(text="")
 
-    def _peer_ip_entry_set_silent(self, text: str) -> None:
-        """Обновить поле IP без срабатывания KeyRelease (иначе сбросится «✅ Сохранено»)."""
-        if not hasattr(self, "peer_ip_entry"):
+    def _fill_peer_ips_textbox(self) -> None:
+        if not hasattr(self, "peer_ips_text"):
             return
-        try:
-            self.peer_ip_entry.unbind("<KeyRelease>")
-            self.peer_ip_entry.delete(0, "end")
-            if text:
-                self.peer_ip_entry.insert(0, text)
-        finally:
-            self.peer_ip_entry.bind("<KeyRelease>", self._on_peer_ip_edited)
+        ips = portal_config.load_peer_ips()
+        self.peer_ips_text.delete("1.0", "end")
+        self.peer_ips_text.insert("1.0", "\n".join(ips) if ips else "")
 
-    def save_peer_ip_from_ui(self):
-        """Сохранить IP второго ПК из поля ввода (в файл + в память)."""
-        ip = self.peer_ip_entry.get().strip()
-        if not ip:
-            self.log("⚠️ Введите IP адрес перед сохранением")
-            if hasattr(self, "ip_saved_feedback"):
-                self.ip_saved_feedback.configure(text="❌ Введите IP", text_color="#e74c3c")
-            return
-        
+    def save_peer_ips_from_ui(self) -> None:
+        raw = self.peer_ips_text.get("1.0", "end") if hasattr(self, "peer_ips_text") else ""
+        lines = [ln.strip() for ln in raw.replace("\r", "").split("\n")]
+        ips = [x for x in lines if x]
         if hasattr(self, "ip_saved_feedback"):
             self.ip_saved_feedback.configure(text="⏳ …", text_color="gray")
-        self.log(f"💾 Сохранение IP: {ip}...")
-        
-        # Сохраняем напрямую через portal_config для проверки результата
-        try:
-            success = portal_config.save_remote_ip(ip)
-        except Exception as e:
-            self.log(f"❌ ИСКЛЮЧЕНИЕ при сохранении: {str(e)}")
-            import traceback
-            self.log(f"   {traceback.format_exc()}")
-            success = False
-        
-        if success:
-            # Обновляем в памяти
-            self.remote_peer_ip = ip
-            config_file = portal_config.config_path()
-            # Двойная проверка - читаем сразу после сохранения
-            verify = portal_config.load_remote_ip()
-            if verify == ip:
-                self.log(f"✅ IP второго ПК сохранён: {ip}")
-                self.log(f"💾 Файл: {config_file}")
-                if hasattr(self, "ip_saved_feedback"):
-                    self.ip_saved_feedback.configure(
-                        text="✅ Сохранено",
-                        text_color="#3dd68c",
-                    )
-                # Обновляем поле (чтобы показать что сохранилось)
-                try:
-                    self._peer_ip_entry_set_silent(ip)
-                except Exception as e:
-                    self.log(f"⚠️ Не удалось обновить поле ввода: {e}")
-                self.check_peer_connection_async(silent=False)
-                self._arm_peer_poll()
-            else:
-                self.log(f"❌ ОШИБКА: IP не сохранился!")
-                self.log(f"   Введено: {ip}")
-                self.log(f"   Проверка после сохранения: {verify or '(пусто)'}")
-                self.log(f"   Файл: {config_file}")
-                if hasattr(self, "ip_saved_feedback"):
-                    self.ip_saved_feedback.configure(
-                        text="❌ Не записалось",
-                        text_color="#e74c3c",
-                    )
-        else:
-            # Проверяем что в файле
-            saved = portal_config.load_remote_ip()
-            config_file = portal_config.config_path()
-            self.log(f"❌ ОШИБКА СОХРАНЕНИЯ!")
-            self.log(f"   Введено: {ip}")
-            self.log(f"   Прочитано из файла: {saved or '(пусто)'}")
-            self.log(f"   Файл: {config_file}")
-            self.log(f"   Файл существует: {config_file.exists()}")
-            if config_file.exists():
-                try:
-                    content = config_file.read_text(encoding="utf-8")
-                    self.log(f"   Содержимое: {content[:200]}")
-                except Exception as e:
-                    self.log(f"   Не удалось прочитать файл: {e}")
-            else:
-                self.log(f"   Папка существует: {config_file.parent.exists()}")
-                self.log(f"   Папка: {config_file.parent}")
+        ok = portal_config.save_peer_ips(ips)
+        self.remote_peer_ip = portal_config.load_remote_ip()
+        if ok:
+            self.log(f"💾 Список IP сохранён ({len(ips)}): {', '.join(ips) or '(пусто)'}")
             if hasattr(self, "ip_saved_feedback"):
-                self.ip_saved_feedback.configure(
-                    text="❌ Ошибка записи",
-                    text_color="#e74c3c",
-                )
+                self.ip_saved_feedback.configure(text="✅ Список сохранён", text_color="#3dd68c")
+            self.rebuild_peer_checkboxes()
+            self.check_peer_connection_async(silent=False)
+            self._arm_peer_poll()
+        else:
+            self.log("❌ Не удалось сохранить список IP")
+            if hasattr(self, "ip_saved_feedback"):
+                self.ip_saved_feedback.configure(text="❌ Ошибка записи", text_color="#e74c3c")
 
-    def _peer_ip_for_probe(self) -> Optional[str]:
-        """IP для ручной проверки: сначала поле ввода, иначе сохранённый."""
-        if hasattr(self, "peer_ip_entry"):
-            t = self.peer_ip_entry.get().strip()
-            if t:
-                return t
-        return self.remote_peer_ip
+    def rebuild_peer_checkboxes(self) -> None:
+        if not hasattr(self, "peer_select_frame"):
+            return
+        for w in self.peer_select_frame.winfo_children():
+            w.destroy()
+        self._peer_checkbox_vars.clear()
+        ips = portal_config.load_peer_ips()
+        targets_set = set(portal_config.load_peer_send_targets())
+        if not ips:
+            ctk.CTkLabel(
+                self.peer_select_frame,
+                text="Добавь IP выше → «Сохранить список IP»",
+                font=ctk.CTkFont(size=11),
+                text_color="gray",
+            ).pack(side="left", padx=4, pady=4)
+            return
+        row = ctk.CTkFrame(self.peer_select_frame, fg_color="transparent")
+        row.pack(fill="x", pady=2)
+        for ip in ips:
+            var = ctk.BooleanVar(value=ip in targets_set)
+            self._peer_checkbox_vars[ip] = var
+            ctk.CTkCheckBox(
+                row,
+                text=ip,
+                variable=var,
+                font=ctk.CTkFont(size=11),
+            ).pack(side="left", padx=(0, 16), pady=0)
+
+    def save_peer_selection_from_ui(self) -> None:
+        ips = portal_config.load_peer_ips()
+        chosen = [ip for ip in ips if self._peer_checkbox_vars.get(ip) and self._peer_checkbox_vars[ip].get()]
+        if not chosen:
+            self.log("⚠️ Отметь хотя бы один IP или сохрани список IP")
+            if hasattr(self, "ip_saved_feedback"):
+                self.ip_saved_feedback.configure(text="❌ Нет галочек", text_color="#e74c3c")
+            return
+        portal_config.save_peer_send_targets(chosen)
+        self.log(f"💾 Отправка на выбранные ПК: {', '.join(chosen)}")
+        if hasattr(self, "ip_saved_feedback"):
+            self.ip_saved_feedback.configure(text="✅ Выбор сохранён", text_color="#3dd68c")
+        self.check_peer_connection_async(silent=False)
+
+    def _on_receive_files_mode_menu(self, choice: str) -> None:
+        rev = {v: k for k, v in getattr(self, "_receive_files_mode_labels", {}).items()}
+        key = rev.get(choice, "both")
+        if portal_config.save_receive_files_mode(key):
+            self.log(f"💾 Входящие файлы: {choice}")
+        else:
+            self.log("⚠️ Не удалось сохранить режим приёма")
+
+    def save_receive_dir_from_ui(self):
+        """Сохранить папку для входящих файлов (пусто = только рабочий стол по умолчанию)."""
+        raw = self.receive_dir_entry.get().strip() if hasattr(self, "receive_dir_entry") else ""
+        ok = portal_config.save_receive_dir(raw)
+        if ok:
+            p = portal_config.receive_dir_path()
+            self.log(f"✅ Папка для входящих: {p}")
+            if hasattr(self, "receive_dir_feedback"):
+                self.receive_dir_feedback.configure(text="✅ OK", text_color="#3dd68c")
+            try:
+                self.receive_dir_entry.delete(0, "end")
+                self.receive_dir_entry.insert(0, str(p))
+            except Exception:
+                pass
+        else:
+            self.log("❌ Не удалось сохранить папку (проверь путь и права)")
+            if hasattr(self, "receive_dir_feedback"):
+                self.receive_dir_feedback.configure(text="❌ Ошибка", text_color="#e74c3c")
+
+    def _parse_peer_ips_draft(self) -> List[str]:
+        if not hasattr(self, "peer_ips_text"):
+            return list(portal_config.load_peer_ips())
+        raw = self.peer_ips_text.get("1.0", "end")
+        lines = [ln.strip() for ln in raw.replace("\r", "").split("\n")]
+        return [x for x in lines if x]
+
+    def _peer_ips_for_probe(self) -> List[str]:
+        draft = self._parse_peer_ips_draft()
+        return draft if draft else list(portal_config.load_peer_ips())
 
     def _format_peer_probe_result(self, ip: str, ok: bool, code: str) -> tuple[str, str]:
         """Текст и цвет для строки статуса пары."""
@@ -674,45 +1034,61 @@ class PortalApp(ctk.CTk):
 
     def _arm_peer_poll(self) -> None:
         self._cancel_peer_poll()
-        if not self.remote_peer_ip:
+        if not portal_config.load_peer_ips():
             return
         self._peer_poll_job = self.after(PEER_STATUS_POLL_MS, self._peer_poll_tick)
 
     def _peer_poll_tick(self) -> None:
         self._peer_poll_job = None
-        if self.remote_peer_ip:
+        if portal_config.load_peer_ips():
             self.check_peer_connection_async(silent=True)
-        if self.remote_peer_ip:
+        if portal_config.load_peer_ips():
             self._arm_peer_poll()
 
     def check_peer_connection_async(self, silent: bool = False) -> None:
-        """Фоновый ping → pong к Порталу на другой машине; обновляет подпись под IP."""
-        ip = self._peer_ip_for_probe()
-        if not ip:
+        """Фоновый ping → pong ко всем IP из списка (черновик в текстбоксе или сохранённый)."""
+        ips = self._peer_ips_for_probe()
+        if not ips:
             self.after(
                 0,
                 lambda: self.peer_link_status_label.configure(
-                    text="⚪ Пара: укажи IP и «Сохранить IP»",
+                    text="⚪ Пары: добавь IP в список",
                     text_color="gray",
                 ),
             )
             return
 
         def worker():
-            ok, code = probe_portal_peer(ip)
-            msg_t, msg_c = self._format_peer_probe_result(ip, ok, code)
+            results: List[Tuple[str, bool, str]] = []
+            for ip in ips:
+                ok, code = probe_portal_peer(ip)
+                results.append((ip, ok, code))
 
             def apply():
-                if hasattr(self, "peer_link_status_label"):
-                    self.peer_link_status_label.configure(text=msg_t, text_color=msg_c)
-                if not silent:
-                    if ok:
-                        self.log(
-                            f"📡 Связь с парой: OK — {ip}:{PORTAL_PORT} "
-                            f"(это Портал, ответ pong)"
-                        )
+                if not hasattr(self, "peer_link_status_label"):
+                    return
+                if len(results) == 1:
+                    ip, ok, code = results[0]
+                    msg_t, msg_c = self._format_peer_probe_result(ip, ok, code)
+                else:
+                    oks = sum(1 for _, o, _ in results if o)
+                    bad = [ip for ip, o, _ in results if not o]
+                    if oks == len(results):
+                        msg_t = f"🟢 Все {len(results)} ПК отвечают на :{PORTAL_PORT}"
+                        msg_c = "#3dd68c"
+                    elif oks:
+                        msg_t = f"⚠️ Онлайн {oks}/{len(results)} — нет: {', '.join(bad[:5])}"
+                        msg_c = "#e67e22"
                     else:
-                        self.log(f"📡 Связь с парой: нет — {ip} ({code})")
+                        msg_t = f"🔌 Ни один из {len(results)} ПК не отвечает ({bad[0]}…)"
+                        msg_c = "#e74c3c"
+                self.peer_link_status_label.configure(text=msg_t, text_color=msg_c)
+                if not silent:
+                    for ip, ok, code in results:
+                        if ok:
+                            self.log(f"📡 {ip}: OK (Портал)")
+                        else:
+                            self.log(f"📡 {ip}: нет связи ({code})")
 
             try:
                 self.after(0, apply)
@@ -725,13 +1101,49 @@ class PortalApp(ctk.CTk):
         """Добавление сообщения в лог с автоскроллом вниз и ограничением строк"""
         self.log_text.configure(state="normal")
         timestamp = time.strftime("%H:%M:%S")
-        self.log_text.insert("end", f"[{timestamp}] {message}\n")
+        line = f"[{timestamp}] {message}\n"
+        self.log_text.insert("end", line)
         lines = int(self.log_text.index("end-1c").split(".")[0])
         if lines > self._log_max_lines:
             self.log_text.delete("1.0", f"{lines - self._log_max_lines + 1}.0")
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
-    
+        try:
+            with portal_config.activity_log_path().open("a", encoding="utf-8") as af:
+                af.write(line)
+        except Exception:
+            pass
+
+    def copy_whole_activity_log(self):
+        """Кнопка: весь текст журнала в буфер обмена."""
+        try:
+            self.log_text.configure(state="normal")
+            t = self.log_text.get("1.0", "end-1c")
+            self.log_text.configure(state="disabled")
+            if t.strip():
+                pyperclip.copy(t)
+                self.log("📋 Весь журнал скопирован в буфер обмена")
+        except Exception as e:
+            self.log(f"⚠️ Копирование журнала: {e}")
+
+    def _log_copy_selection_hotkey(self, event=None):
+        """Cmd/Ctrl+C в журнале: выделение или весь текст (CTk часто не копирует из disabled)."""
+        try:
+            self.log_text.configure(state="normal")
+            if self.log_text.tag_ranges("sel"):
+                t = self.log_text.get("sel.first", "sel.last")
+            else:
+                t = self.log_text.get("1.0", "end-1c")
+            self.log_text.configure(state="disabled")
+            if t:
+                pyperclip.copy(t)
+        except Exception:
+            try:
+                self.log_text.configure(state="disabled")
+            except Exception:
+                pass
+        return "break"
+
     def toggle_server(self):
         """Запуск/остановка сервера"""
         if not self.is_server_running:
@@ -794,8 +1206,9 @@ class PortalApp(ctk.CTk):
         while self.is_server_running:
             try:
                 client_socket, addr = self.server_socket.accept()
-                self._log_from_thread(f"🔗 Подключение от {addr[0]}")
-                
+                # Не логируем каждое соединение: авто-ping со второго ПК каждые ~20 с
+                # путает с «вот-вот пришлют файл». Тип запроса пишем в handle_client.
+
                 # Обработка клиента в отдельном потоке
                 client_thread = threading.Thread(
                     target=self.handle_client,
@@ -818,13 +1231,16 @@ class PortalApp(ctk.CTk):
     def handle_client(self, client_socket: socket.socket, addr):
         """Обработка клиентского подключения"""
         try:
-            data = client_socket.recv(65536)
-            message, json_end = parse_first_json_object_bytes(data)
+            message, tail = read_first_json_from_socket(client_socket)
             if not message:
-                self._log_from_thread("⚠️ Клиент прислал не-JSON (ожидался ping / метаданные файла)")
+                self._log_from_thread(
+                    "⚠️ Клиент прислал не-JSON или обрыв заголовка (ping / метаданные файла)"
+                )
                 return
 
-            tail = data[json_end:] if json_end <= len(data) else b""
+            req = message.get("type")
+            if req != "ping":
+                self._log_from_thread(f"🔗 {addr[0]} · {req}")
 
             if message.get("type") == "file":
                 self.receive_file(client_socket, message, prefix=tail)
@@ -853,37 +1269,190 @@ class PortalApp(ctk.CTk):
         prefix: bytes = b"",
     ):
         """Прием файла; prefix — байты уже прочитанные после JSON в первом recv."""
-        filename = message.get("filename", "received_file")
-        filesize = message.get("filesize", 0)
+        filepath: Optional[Path] = None
+        try:
+            raw_name = message.get("filename", "received_file")
+            filename = _safe_incoming_filename(raw_name)
+            try:
+                filesize = int(message.get("filesize", 0) or 0)
+            except (TypeError, ValueError):
+                filesize = 0
+            if filesize < 0:
+                filesize = 0
 
-        self._log_from_thread(f"📥 Прием файла: {filename} ({filesize} байт)")
+            self._log_from_thread(f"📥 Прием файла: {filename} ({filesize} байт)")
 
-        # Создание папки для приема
-        receive_dir = Path.home() / "Desktop" / "Portal_Received"
-        receive_dir.mkdir(exist_ok=True)
+            receive_dir = portal_config.receive_dir_path()
+            receive_dir.mkdir(parents=True, exist_ok=True)
 
-        filepath = receive_dir / filename
+            filepath = receive_dir / filename
+            if filepath.exists():
+                stem, suf = filepath.stem, filepath.suffix
+                filepath = receive_dir / f"{stem}_{int(time.time())}{suf}"
 
-        with open(filepath, "wb") as f:
             remaining = filesize
             chunk_buf = prefix
-            while remaining > 0:
-                if chunk_buf:
-                    take = min(len(chunk_buf), remaining)
-                    f.write(chunk_buf[:take])
-                    chunk_buf = chunk_buf[take:]
-                    remaining -= take
-                    continue
-                chunk = client_socket.recv(min(8192, remaining))
-                if not chunk:
-                    break
-                f.write(chunk)
-                remaining -= len(chunk)
+            with open(filepath, "wb") as f:
+                while remaining > 0:
+                    if chunk_buf:
+                        take = min(len(chunk_buf), remaining)
+                        f.write(chunk_buf[:take])
+                        chunk_buf = chunk_buf[take:]
+                        remaining -= take
+                        continue
+                    chunk = client_socket.recv(min(65536, remaining))
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    remaining -= len(chunk)
 
-        self._log_from_thread(f"✅ Файл сохранен: {filepath}")
+            self._log_from_thread(f"✅ Файл сохранен: {filepath}")
 
-        client_socket.send(b"OK")
-    
+            _portal_sendall(client_socket, b"OK")
+
+            # Finder / NSPasteboard только из главного потока Tk — иначе на macOS возможен обрыв сокета (10054).
+            fp_saved = filepath
+            msg_local = dict(message)
+
+            def _finish_receive():
+                try:
+                    p = Path(fp_saved)
+                    reveal_ok = os.environ.get("PORTAL_REVEAL_RECEIVED", "1").strip().lower() not in (
+                        "0",
+                        "false",
+                        "no",
+                        "off",
+                    )
+                    if msg_local.get("portal_clipboard"):
+                        if platform.system() == "Darwin" and reveal_ok:
+                            try:
+                                subprocess.run(
+                                    ["open", "-R", str(p)],
+                                    check=False,
+                                    timeout=8,
+                                    capture_output=True,
+                                )
+                            except Exception:
+                                pass
+                        bd = msg_local.get("clip_batch")
+                        if isinstance(bd, dict) and bd.get("id") is not None:
+                            try:
+                                bid = str(bd["id"])
+                                i = int(bd.get("i", 0))
+                                n = int(bd.get("n", 1))
+                                self._clip_batch_add(bid, i, n, p)
+                            except (TypeError, ValueError):
+                                self._apply_portal_clipboard_files([p])
+                        else:
+                            self._apply_portal_clipboard_files([p])
+                    else:
+                        self._apply_receive_mode_after_saved_file(p, reveal_mac_allowed=reveal_ok)
+                except Exception as ex:
+                    self.log(f"❌ После приёма (Finder/буфер): {ex}")
+
+            try:
+                self.after(0, _finish_receive)
+            except Exception:
+                _finish_receive()
+        except Exception as e:
+            self._log_from_thread(f"❌ Ошибка приёма файла: {e}")
+
+    def _apply_receive_mode_after_saved_file(self, p: Path, *, reveal_mac_allowed: bool) -> None:
+        """Обычный приём файла: режим both / disk_only / clipboard_only (не portal_clipboard)."""
+        mode = portal_config.receive_files_mode()
+        if not p.is_file():
+            return
+        if (
+            reveal_mac_allowed
+            and platform.system() == "Darwin"
+            and mode in ("both", "disk_only")
+        ):
+            try:
+                subprocess.run(
+                    ["open", "-R", str(p)],
+                    check=False,
+                    timeout=8,
+                    capture_output=True,
+                )
+            except Exception:
+                pass
+        if mode in ("both", "clipboard_only"):
+            self._apply_portal_clipboard_files([p])
+            self.log(f"📋 В буфере для вставки: {p.name}")
+
+    def _clip_batch_add(self, batch_id: str, index: int, total: int, path: Path) -> None:
+        with self._clip_batch_lock:
+            entry = self._clip_batches.setdefault(
+                batch_id, {"total": total, "paths": {}}
+            )
+            entry["paths"][index] = path
+            if len(entry["paths"]) >= entry["total"]:
+                ordered = [entry["paths"][j] for j in sorted(entry["paths"])]
+                del self._clip_batches[batch_id]
+                paths_copy = list(ordered)
+            else:
+                paths_copy = None
+        if paths_copy is not None:
+            self._apply_portal_clipboard_files(paths_copy)
+
+    def _apply_portal_clipboard_files(self, paths: List[Path]) -> None:
+        """Безопасно с любого потока: выполнение на главном цикле Tk (pasteboard / win32)."""
+        snap: List[Path] = []
+        for p in paths:
+            try:
+                snap.append(Path(p))
+            except Exception:
+                continue
+
+        def _do():
+            try:
+                self._apply_portal_clipboard_files_impl(snap)
+            except Exception as e:
+                self.log(f"❌ Буфер (файлы): {e}")
+
+        try:
+            self.after(0, _do)
+        except Exception:
+            _do()
+
+    def _apply_portal_clipboard_files_impl(self, paths: List[Path]) -> None:
+        paths = [p for p in paths if p.is_file()]
+        if not paths:
+            return
+        paths_str = [str(p.resolve()) for p in paths]
+        if len(paths) == 1:
+            suf = paths[0].suffix.lower()
+            if suf in (
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".gif",
+                ".webp",
+                ".bmp",
+                ".tif",
+                ".tiff",
+            ):
+                if set_system_clipboard_image_from_file(paths[0]):
+                    self._log_from_thread(
+                        f"📋 Буфер: картинка «{paths[0].name}» ({paths[0].stat().st_size} байт)"
+                    )
+                    return
+        if set_system_clipboard_file_paths(paths_str):
+            self._log_from_thread(
+                f"📋 Буфер: {len(paths_str)} файл(ов) — можно вставить (Ctrl+V / Cmd+V)"
+            )
+        else:
+            self._log_from_thread(
+                "📋 Не удалось положить файлы в буфер ОС (CF_HDROP) — открой папку приёма"
+            )
+            try:
+                pyperclip.copy("\n".join(paths_str))
+                self._log_from_thread(
+                    "📋 В буфер как текст скопированы полные пути к файлам (вставь в адресную строку Проводника)"
+                )
+            except Exception:
+                pass
+
     def receive_clipboard(self, message: dict):
         """Прием буфера обмена"""
         clipboard_text = message.get("text", "")
@@ -897,50 +1466,116 @@ class PortalApp(ctk.CTk):
             )
     
     def send_clipboard_response(self, client_socket: socket.socket):
-        """Отправка текущего локального буфера клиенту (запрос get_clipboard)"""
+        """Ответ на get_clipboard: текст, иначе PNG картинки, иначе пути файлов из буфера, иначе пусто."""
         try:
+            from portal_widget import grab_clipboard_file_paths, grab_clipboard_image
+
             text = pyperclip.paste()
             if text is None:
                 text = ""
-            resp = json.dumps({"type": "clipboard", "text": text}, ensure_ascii=False)
-            client_socket.sendall(resp.encode("utf-8"))
+            if str(text).strip():
+                resp = json.dumps({"type": "clipboard", "text": text}, ensure_ascii=False)
+                # Завершающий \n — иначе клиент (Cmd+Shift+V), ждущий строку, получает обрыв
+                client_socket.sendall(resp.encode("utf-8") + b"\n")
+                self._log_from_thread(
+                    f"📋 get_clipboard → отдан текст ({len(str(text))} симв.)"
+                )
+                return
+
+            im = grab_clipboard_image()
+            if im is not None:
+                buf = io.BytesIO()
+                im.save(buf, format="PNG")
+                data = buf.getvalue()
+                meta = json.dumps(
+                    {"type": "clipboard_image", "format": "png", "size": len(data)},
+                    ensure_ascii=False,
+                )
+                client_socket.sendall(meta.encode("utf-8") + b"\n" + data)
+                self._log_from_thread(
+                    f"📋 get_clipboard → отдана картинка ({len(data)} байт)"
+                )
+                return
+
+            paths = grab_clipboard_file_paths()
+            if len(paths) == 1:
+                one = Path(paths[0])
+                if one.is_file():
+                    try:
+                        sz = int(one.stat().st_size)
+                    except OSError:
+                        sz = 0
+                    if 0 < sz <= CLIPBOARD_PULL_FILE_MAX_BYTES:
+                        hdr = json.dumps(
+                            {
+                                "type": "clipboard_file",
+                                "filename": one.name,
+                                "filesize": sz,
+                            },
+                            ensure_ascii=False,
+                        )
+                        client_socket.sendall(hdr.encode("utf-8") + b"\n")
+                        with open(one, "rb") as src_f:
+                            while True:
+                                chunk = src_f.read(65536)
+                                if not chunk:
+                                    break
+                                _portal_sendall(client_socket, chunk)
+                        self._log_from_thread(
+                            f"📋 get_clipboard → отдан файл «{one.name}» ({sz} байт)"
+                        )
+                        return
+            if paths:
+                joined = "\n".join(paths)
+                resp = json.dumps({"type": "clipboard", "text": joined}, ensure_ascii=False)
+                client_socket.sendall(resp.encode("utf-8") + b"\n")
+                self._log_from_thread(
+                    f"📋 get_clipboard → отданы пути {len(paths)} файл(ов) (>1 или >{CLIPBOARD_PULL_FILE_MAX_BYTES // (1024 * 1024)} МБ — только как текст)"
+                )
+                return
+
+            resp = json.dumps({"type": "clipboard", "text": ""}, ensure_ascii=False)
+            client_socket.sendall(resp.encode("utf-8") + b"\n")
             self._log_from_thread(
-                f"📋 Отправлен буфер по запросу ({len(text)} символов)"
+                "📋 get_clipboard → буфер пустой (нет текста, картинки и файлов на том ПК)"
             )
         except Exception as e:
             self._log_from_thread(f"❌ Ошибка ответа буфера: {str(e)}")
     
     def set_remote_peer_ip(self, ip: Optional[str]):
-        """Сохранить IP второго компьютера (файл + поле в главном окне)."""
+        """Добавить/обновить IP в списке пиров (файл + текстбокс в главном окне)."""
         ip_clean = (ip or "").strip() or None
-        self.remote_peer_ip = ip_clean
         success = portal_config.save_remote_ip(ip_clean)
+        self.remote_peer_ip = portal_config.load_remote_ip()
         if not success and ip_clean:
             if hasattr(self, "log"):
-                self.log(f"⚠️ Не удалось сохранить IP в файл! Проверь права на запись")
+                self.log("⚠️ Не удалось сохранить IP в файл! Проверь права на запись")
             else:
                 print(f"[Portal] Не удалось сохранить IP: {ip_clean}")
-        # Обновляем поле ввода
         try:
-            self._peer_ip_entry_set_silent(self.remote_peer_ip or "")
+            self._fill_peer_ips_textbox()
+            self.rebuild_peer_checkboxes()
         except Exception as e:
-            print(f"[Portal] Ошибка обновления поля IP: {e}")
+            print(f"[Portal] Ошибка обновления списка IP: {e}")
     
     def push_shared_clipboard_hotkey(self):
-        """Ctrl+Alt+C / Cmd+Shift+C — отправить локальный буфер на удалённый ПК"""
-        ip = self.remote_peer_ip
-        if not ip:
-            self.log("⚠️ Сначала укажите IP в виджете (двойной клик по порталу)")
+        """Ctrl+Alt+C / Cmd+Ctrl+C (legacy: Cmd+Shift+C) — отправить локальный буфер на выбранные ПК"""
+        if not self.get_target_ips():
+            self.log("⚠️ Сохрани список IP и отметь получателей (галочки) или укажи IP в виджете")
             return
-        threading.Thread(target=self.send_clipboard, args=(ip,), daemon=True).start()
+        threading.Thread(target=self._broadcast_clipboard_push_worker, daemon=True).start()
     
     def pull_shared_clipboard_hotkey(self):
-        """Ctrl+Alt+V / Cmd+Shift+V — забрать буфер с удалённого ПК"""
-        ip = self.remote_peer_ip
-        if not ip:
-            self.log("⚠️ Сначала укажите IP в виджете (двойной клик по порталу)")
+        """Ctrl+Alt+V / Cmd+Ctrl+V — забрать буфер с первого выбранного ПК"""
+        targets = self.get_target_ips()
+        if not targets:
+            self.log("⚠️ Сохрани список IP и отметь, с какого ПК забирать (первый в списке)")
             return
-        threading.Thread(target=self._pull_clipboard_worker, args=(ip,), daemon=True).start()
+        src = targets[0]
+        self.log(
+            f"📥 Забираю буфер с {src} (на том ПК в логе будет строка get_clipboard — он отвечает твоему запросу)"
+        )
+        threading.Thread(target=self._pull_clipboard_worker, args=(src,), daemon=True).start()
     
     def _pull_clipboard_worker(self, target_ip: str):
         """Запрос буфера с удалённой машины (сервер должен быть запущен)"""
@@ -950,41 +1585,118 @@ class PortalApp(ctk.CTk):
             except Exception:
                 print(msg)
 
+        client_socket: Optional[socket.socket] = None
         try:
-            _log(f"📥 Запрос буфера с {target_ip}...")
+            _log(f"🔌 Соединение с {target_ip} для get_clipboard…")
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client_socket.settimeout(30)
             client_socket.connect((target_ip, PORTAL_PORT))
+            client_socket.settimeout(600)
             _log(f"✅ Подключение установлено: {target_ip}:{PORTAL_PORT}")
-            client_socket.send(json.dumps({"type": "get_clipboard"}).encode("utf-8"))
-            buf = b""
-            message = None
-            while True:
-                part = client_socket.recv(65536)
-                if not part:
-                    break
-                buf += part
-                try:
-                    message = json.loads(buf.decode("utf-8", errors="replace"))
-                    break
-                except json.JSONDecodeError:
-                    if len(buf) > 4 * 1024 * 1024:
-                        break
-                    continue
-            client_socket.close()
-            if message is None:
-                raise ValueError("Пустой ответ")
+            _portal_sendall(
+                client_socket,
+                json.dumps({"type": "get_clipboard"}).encode("utf-8"),
+            )
+            message, rest = read_one_json_object_from_socket(client_socket)
             if message.get("type") == "clipboard":
                 text = message.get("text", "")
+                lines = [ln.strip() for ln in (text or "").split("\n") if ln.strip()]
+                resolved: List[str] = []
+                for ln in lines:
+                    try:
+                        pp = Path(ln)
+                        if pp.is_file():
+                            resolved.append(str(pp.resolve()))
+                    except Exception:
+                        pass
                 self.is_receiving_clipboard = True
-                pyperclip.copy(text)
+                try:
+                    if lines and len(resolved) == len(lines):
+                        if set_system_clipboard_file_paths(resolved):
+                            _log(f"📋 С буфера удалённого ПК: {len(resolved)} файл(ов) (пути есть локально)")
+                        else:
+                            pyperclip.copy(text)
+                            _log(f"📋 Текст с удалённого ПК ({len(text)} символов)")
+                    else:
+                        pyperclip.copy(text)
+                        _log(f"📋 Текст с удалённого ПК ({len(text)} символов)")
+                finally:
+                    self.is_receiving_clipboard = False
                 self.last_clipboard = text
-                self.is_receiving_clipboard = False
-                _log(f"📋 Буфер с удалённого ПК вставлен ({len(text)} символов)")
+            elif message.get("type") == "clipboard_file":
+                raw_name = message.get("filename", "remote_clipboard_file")
+                fname = _safe_incoming_filename(raw_name)
+                try:
+                    need = int(message.get("filesize", 0) or 0)
+                except (TypeError, ValueError):
+                    need = 0
+                if need <= 0 or need > CLIPBOARD_PULL_FILE_MAX_BYTES:
+                    raise ValueError(f"Некорректный размер файла в ответе: {need}")
+                receive_dir = portal_config.receive_dir_path()
+                receive_dir.mkdir(parents=True, exist_ok=True)
+                filepath = receive_dir / fname
+                if filepath.exists():
+                    stem, suf = filepath.stem, filepath.suffix
+                    filepath = receive_dir / f"{stem}_{int(time.time())}{suf}"
+                data = bytearray(rest.lstrip(b"\n\r"))
+                while len(data) < need:
+                    part = client_socket.recv(min(65536, need - len(data)))
+                    if not part:
+                        break
+                    data.extend(part)
+                if len(data) < need:
+                    raise ValueError("Обрезаны данные файла из буфера")
+                filepath.write_bytes(bytes(data))
+                _log(f"✅ Файл из буфера удалённого ПК сохранён: {filepath.name}")
+                reveal_ok = os.environ.get("PORTAL_REVEAL_RECEIVED", "1").strip().lower() not in (
+                    "0",
+                    "false",
+                    "no",
+                    "off",
+                )
+
+                def _finish_pull_file():
+                    try:
+                        self._apply_receive_mode_after_saved_file(
+                            filepath, reveal_mac_allowed=reveal_ok
+                        )
+                    except Exception as ex:
+                        self.log(f"❌ После приёма файла из буфера: {ex}")
+
+                try:
+                    self.after(0, _finish_pull_file)
+                except Exception:
+                    _finish_pull_file()
+            elif message.get("type") == "clipboard_image":
+                need = int(message.get("size", 0))
+                # После JSON сервер шлёт \n и сразу PNG
+                data = bytearray(rest.lstrip(b"\n\r"))
+                while len(data) < need:
+                    part = client_socket.recv(min(65536, need - len(data)))
+                    if not part:
+                        break
+                    data.extend(part)
+                if len(data) < need:
+                    raise ValueError("Обрезаны данные картинки")
+                self.is_receiving_clipboard = True
+                try:
+                    ok = set_system_clipboard_png(bytes(data))
+                finally:
+                    self.is_receiving_clipboard = False
+                if ok:
+                    _log(f"📋 Буфер с удалённого ПК: картинка ({len(data)} байт)")
+                else:
+                    _log("⚠️ Картинка получена, но не удалось записать в буфер ОС")
             else:
                 _log("⚠️ Неожиданный ответ при запросе буфера")
         except Exception as e:
             _log(f"❌ Не удалось получить буфер: {str(e)}")
+        finally:
+            if client_socket is not None:
+                try:
+                    client_socket.close()
+                except OSError:
+                    pass
     
     def send_file_dialog(self):
         """Выбор файла; IP берётся из сохранённых настроек (без лишних окон)."""
@@ -997,15 +1709,17 @@ class PortalApp(ctk.CTk):
             self.log("❌ Файл не выбран (отменено)")
             return
         self.log(f"✅ Файл выбран: {Path(filepath).name} ({Path(filepath).stat().st_size / 1024 / 1024:.2f} MB)")
-        if self.remote_peer_ip:
-            self.log(f"📤 Отправка на {self.remote_peer_ip}...")
-            threading.Thread(
-                target=self.send_file,
-                args=(filepath, self.remote_peer_ip),
-                daemon=True,
-            ).start()
+        targets = self.get_target_ips()
+        if targets:
+            self.log(f"📤 Отправка на {len(targets)} ПК: {', '.join(targets)}")
+            for ip in targets:
+                threading.Thread(
+                    target=self.send_file,
+                    args=(filepath, ip),
+                    daemon=True,
+                ).start()
         else:
-            self.log("⚠️ Сначала укажите IP второго ПК выше и нажмите «Сохранить IP»")
+            self.log("⚠️ Сначала сохрани список IP и отметь получателей")
             self.send_file_to_dialog(filepath)
     
     def send_file_to_dialog(self, filepath: str):
@@ -1045,21 +1759,20 @@ class PortalApp(ctk.CTk):
         send_button.pack(pady=20)
     
     def send_clipboard_dialog(self):
-        """Отправка буфера на сохранённый IP без лишних окон."""
-        if self.remote_peer_ip:
+        """Отправка буфера (текст / картинка / файлы) на все отмеченные ПК."""
+        if self.get_target_ips():
             threading.Thread(
-                target=self.send_clipboard,
-                args=(self.remote_peer_ip,),
+                target=self._broadcast_clipboard_push_worker,
                 daemon=True,
             ).start()
         else:
-            self.log("⚠️ Сначала укажите IP второго ПК выше и нажмите «Сохранить IP»")
+            self.log("⚠️ Сначала сохрани список IP и отметь получателей")
             dialog = ctk.CTkToplevel(self)
             dialog.title("Отправить буфер обмена")
             dialog.geometry("400x200")
             label = ctk.CTkLabel(
                 dialog,
-                text="Введите IP второго ПК (будет сохранён):",
+                text="Введите IP ПК (добавится в список):",
                 font=ctk.CTkFont(size=14),
             )
             label.pack(pady=20)
@@ -1071,10 +1784,11 @@ class PortalApp(ctk.CTk):
                 ip = ip_entry.get().strip()
                 if ip:
                     self.set_remote_peer_ip(ip)
+                    portal_config.save_peer_send_targets([ip])
+                    self.rebuild_peer_checkboxes()
                     dialog.destroy()
                     threading.Thread(
-                        target=self.send_clipboard,
-                        args=(ip,),
+                        target=self._broadcast_clipboard_push_worker,
                         daemon=True,
                     ).start()
 
@@ -1086,13 +1800,19 @@ class PortalApp(ctk.CTk):
             )
             send_button.pack(pady=20)
     
-    def send_file(self, filepath: str, target_ip: str):
-        """Отправка файла"""
+    def send_file(
+        self,
+        filepath: str,
+        target_ip: str,
+        portal_clipboard: bool = False,
+        clip_batch: Optional[Tuple[str, int, int]] = None,
+    ):
+        """Отправка файла; portal_clipboard — на приёме положить в буфер ОС."""
         try:
             self.log(f"📤 Отправка файла на {target_ip}...")
             
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client_socket.settimeout(10)  # Таймаут 10 секунд
+            client_socket.settimeout(15)
             try:
                 client_socket.connect((target_ip, PORTAL_PORT))
                 self.log(f"✅ Подключение установлено: {target_ip}:{PORTAL_PORT}")
@@ -1114,39 +1834,67 @@ class PortalApp(ctk.CTk):
                 else:
                     self.log(f"❌ Ошибка сети: {str(e)}")
                 return
-            
+
             filename = os.path.basename(filepath)
             filesize = os.path.getsize(filepath)
-            
-            # Отправка метаданных
-            message = {
+
+            message: Dict[str, Any] = {
                 "type": "file",
                 "filename": filename,
-                "filesize": filesize
+                "filesize": filesize,
             }
-            client_socket.send(json.dumps(message).encode('utf-8'))
-            time.sleep(0.1)  # Небольшая задержка
-            
-            # Отправка файла
+            if portal_clipboard:
+                message["portal_clipboard"] = True
+            if clip_batch is not None:
+                bid, i, n = clip_batch
+                message["clip_batch"] = {"id": bid, "i": i, "n": n}
+
+            # Без лимита времени на передачу больших файлов; отдельный таймаут на ответ OK
+            client_socket.settimeout(None)
+            _portal_sendall(client_socket, json.dumps(message, ensure_ascii=False).encode("utf-8"))
+            time.sleep(0.05)
+
             with open(filepath, "rb") as f:
                 while True:
-                    chunk = f.read(8192)
+                    chunk = f.read(65536)
                     if not chunk:
                         break
-                    client_socket.send(chunk)
-            
-            # Ожидание подтверждения
-            response = client_socket.recv(1024)
-            client_socket.close()
-            
-            if response == b"OK":
+                    _portal_sendall(client_socket, chunk)
+
+            client_socket.settimeout(180)
+            response = _recv_ok_prefix(client_socket)
+            try:
+                client_socket.close()
+            except OSError:
+                pass
+
+            if response.startswith(b"OK"):
                 self.log(f"✅ Файл успешно отправлен: {filename}")
             else:
-                self.log(f"⚠️ Неопределенный ответ от получателя")
+                self.log(
+                    f"⚠️ Ответ приёма файлов: {response!r} — смотри лог на ПК-получателе (ошибка приёма / JSON)"
+                )
                 
         except socket.timeout:
             self.log(f"❌ Таймаут при отправке на {target_ip}")
             self.log("💡 Файл слишком большой или медленное соединение")
+        except (ConnectionResetError, BrokenPipeError) as e:
+            self.log(f"❌ Сеть: {target_ip} — соединение разорвано ({e})")
+            self.log(
+                "💡 Часто ПК-получатель закрыл сокет (ошибка приёма / краш). На Mac обнови Портал и смотри "
+                f"{portal_config.activity_log_path().name} на том ПК."
+            )
+        except OSError as e:
+            err_msg = str(e)
+            if getattr(e, "winerror", None) == 10054 or "10054" in err_msg:
+                self.log(f"❌ Сеть: {target_ip} — удалённый хост разорвал соединение (WinError 10054)")
+                self.log(
+                    "💡 Обычно сбой на стороне приёма (буфер/Finder из фонового потока). Обнови Портал на получателе."
+                )
+            elif "timed out" in err_msg.lower() or "timeout" in err_msg.lower():
+                self.log(f"❌ Таймаут: {target_ip} не отвечает")
+            else:
+                self.log(f"❌ Ошибка отправки: {err_msg}")
         except Exception as e:
             err_msg = str(e)
             if "timed out" in err_msg.lower() or "timeout" in err_msg.lower():
@@ -1155,19 +1903,108 @@ class PortalApp(ctk.CTk):
             elif "refused" in err_msg.lower():
                 self.log(f"❌ Подключение отклонено: портал на {target_ip} не запущен")
                 self.log("💡 На втором ПК нажми «Запустить портал»")
+            elif "10054" in err_msg or "forcibly closed" in err_msg.lower():
+                self.log(f"❌ Сеть: {target_ip} — соединение сброшено")
+                self.log("💡 Проверь журнал Портала на ПК-получателе и обнови приложение там.")
             else:
                 self.log(f"❌ Ошибка отправки: {err_msg}")
     
+    def _broadcast_clipboard_push_worker(self) -> None:
+        """Фон: файлы из буфера → send_file; картинка без путей → PNG; иначе текст."""
+        with self._clipboard_push_lock:
+            self._broadcast_clipboard_push_worker_impl()
+
+    def _broadcast_clipboard_push_worker_impl(self) -> None:
+        from portal_widget import grab_clipboard_image, grab_clipboard_file_paths
+
+        targets = self.get_target_ips()
+        if not targets:
+            self.after(0, lambda: self.log("⚠️ Нет получателей — отметь IP галочками"))
+            return
+
+        paths = grab_clipboard_file_paths()
+        if paths:
+            batch_id = str(uuid.uuid4())
+            n = len(paths)
+            for i, fp in enumerate(paths):
+                if not os.path.isfile(fp):
+                    continue
+                batch_arg: Optional[Tuple[str, int, int]] = (
+                    (batch_id, i, n) if n > 1 else None
+                )
+                for ip in targets:
+                    threading.Thread(
+                        target=self.send_file,
+                        args=(fp, ip),
+                        kwargs={
+                            "portal_clipboard": True,
+                            "clip_batch": batch_arg,
+                        },
+                        daemon=True,
+                    ).start()
+            self.after(
+                0,
+                lambda: self.log(
+                    f"📤 Буфер: {len(paths)} файл(ов) → {len(targets)} ПК (вставка Ctrl+V)"
+                ),
+            )
+            return
+
+        im = grab_clipboard_image()
+        if im is not None:
+            import tempfile
+
+            tmp = Path(tempfile.gettempdir()) / f"portal_push_{int(time.time() * 1000)}.png"
+            try:
+                im.save(tmp, "PNG")
+            except Exception as e:
+                self.after(0, lambda: self.log(f"❌ Не удалось сохранить картинку: {e}"))
+                return
+            for ip in targets:
+                threading.Thread(
+                    target=self.send_file,
+                    args=(str(tmp), ip),
+                    kwargs={"portal_clipboard": True},
+                    daemon=True,
+                ).start()
+            self.after(
+                0,
+                lambda: self.log(f"📤 Буфер: картинка → {len(targets)} ПК"),
+            )
+            return
+
+        text = pyperclip.paste() or ""
+        if not str(text).strip():
+            self.after(
+                0,
+                lambda: self.log(
+                    "⚠️ Буфер пуст (нет текста, картинки и скопированных файлов)"
+                ),
+            )
+            return
+        for ip in targets:
+            threading.Thread(
+                target=self.send_clipboard_text,
+                args=(ip, text),
+                daemon=True,
+            ).start()
+
     def send_clipboard(self, target_ip: str):
-        """Отправка буфера обмена"""
+        """Синхронизация / совместимость: отправить текущий текст буфера."""
+        text = pyperclip.paste() or ""
+        if not text:
+            return
+        self.send_clipboard_text(target_ip, text)
+
+    def send_clipboard_text(self, target_ip: str, clipboard_text: str):
+        """Отправка текста в буфер на удалённый ПК (JSON type clipboard)."""
         try:
-            clipboard_text = pyperclip.paste()
             if not clipboard_text:
                 self.log("⚠️ Буфер обмена пуст")
                 return
-            
-            self.log(f"📤 Отправка буфера обмена на {target_ip}...")
-            
+
+            self.log(f"📤 Отправка текста на {target_ip}...")
+
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client_socket.settimeout(10)
             try:
@@ -1183,17 +2020,16 @@ class PortalApp(ctk.CTk):
                     self.log(f"❌ Нет пути к {target_ip}")
                     self.log("💡 Проверь что оба ПК в одной сети")
                 return
-            
-            # Отправка метаданных
-            message = {
-                "type": "clipboard",
-                "text": clipboard_text
-            }
-            client_socket.send(json.dumps(message).encode('utf-8'))
+
+            message = {"type": "clipboard", "text": clipboard_text}
+            _portal_sendall(
+                client_socket,
+                json.dumps(message, ensure_ascii=False).encode("utf-8"),
+            )
             client_socket.close()
-            
-            self.log(f"✅ Буфер обмена отправлен ({len(clipboard_text)} символов)")
-                
+
+            self.log(f"✅ Текст отправлен ({len(clipboard_text)} символов)")
+
         except Exception as e:
             err_msg = str(e)
             if "timed out" in err_msg.lower() or "timeout" in err_msg.lower():
@@ -1251,7 +2087,7 @@ if __name__ == "__main__":
             GlobalHotkeyManager(widget, app).start()
             widget.root.withdraw()
             app.log("✅ Виджет скрыт по умолчанию — Ctrl+Alt+P (Win) / Cmd+Option+P (Mac) чтобы показать")
-            app.log("💡 IP второго ПК вводится один раз в поле выше → «Сохранить IP»")
+            app.log("💡 Список IP и галочки «кому слать» — в главном окне Портала")
             app.log("⌨️ Смотри строки «⌨️ …» ниже: если жмёшь хоткей — должны появляться сообщения.")
             app.log(
                 "📡 Под IP — блок «Статус связи»: зелёный = второй ПК отвечает как Портал; "
