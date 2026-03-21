@@ -6,11 +6,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import tempfile
 import secrets
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # Алфавит без O/0/I/1 — проще диктовать и копировать
 _SHARED_SECRET_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -195,7 +196,100 @@ def save_peer_ips(ips: List[str]) -> bool:
     else:
         data.pop("remote_ip", None)
         data.pop("peer_send_targets", None)
+    allowed = set(clean)
+    na = data.get("peer_aliases")
+    if isinstance(na, dict):
+        pruned = {
+            str(k).strip(): str(v).strip()
+            for k, v in na.items()
+            if str(k).strip() in allowed and str(v).strip()
+        }
+        if pruned:
+            data["peer_aliases"] = pruned
+        else:
+            data.pop("peer_aliases", None)
+    elif not clean:
+        data.pop("peer_aliases", None)
     return _write_all(data)
+
+
+def load_peer_aliases() -> Dict[str, str]:
+    """Отображаемые имена пиров на этой машине (IP → имя)."""
+    data = _load_all()
+    raw = data.get("peer_aliases")
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, str] = {}
+    for k, v in raw.items():
+        ip = str(k).strip()
+        nm = str(v).strip() if v is not None else ""
+        if ip and nm:
+            out[ip] = nm
+    return out
+
+
+def save_peer_aliases(aliases: Dict[str, str]) -> bool:
+    """Полная замена словаря имён (только для IP из списка пиров)."""
+    data = _load_all()
+    allowed = set(load_peer_ips())
+    clean: Dict[str, str] = {}
+    for k, v in (aliases or {}).items():
+        ip = str(k).strip()
+        nm = str(v).strip()
+        if ip in allowed and nm:
+            clean[ip] = nm
+    if clean:
+        data["peer_aliases"] = clean
+    else:
+        data.pop("peer_aliases", None)
+    return _write_all(data)
+
+
+def _is_ipv4(s: str) -> bool:
+    parts = s.split(".")
+    if len(parts) != 4:
+        return False
+    for p in parts:
+        if not p.isdigit():
+            return False
+        n = int(p)
+        if n < 0 or n > 255:
+            return False
+    return True
+
+
+def parse_peer_line(line: str) -> Optional[Tuple[str, str]]:
+    """
+    Строка списка пиров: «100.x.x.x» или «100.x.x.x Имя» / «100.x.x.x, Имя».
+    Возвращает (ip, name) где name может быть пустой строкой.
+    """
+    s = (line or "").strip()
+    if not s or s.startswith("#"):
+        return None
+    s = re.sub(r"^#\s*", "", s)
+    # «ip, name»
+    if "," in s:
+        left, _, right = s.partition(",")
+        ip = left.strip()
+        name = right.strip()
+        if _is_ipv4(ip):
+            return ip, name
+        return None
+    parts = s.split(None, 1)
+    ip = parts[0].strip()
+    name = parts[1].strip() if len(parts) > 1 else ""
+    if not _is_ipv4(ip):
+        return None
+    return ip, name
+
+
+def peer_display_label(ip: str) -> str:
+    """Подпись в UI: «Мой Мак (100.x.x.x)» или просто IP."""
+    ip = str(ip).strip()
+    if not ip:
+        return ""
+    al = load_peer_aliases().get(ip, "").strip()
+    return f"{al} ({ip})" if al else ip
 
 
 def load_peer_send_targets() -> List[str]:

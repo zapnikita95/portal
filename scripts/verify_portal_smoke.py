@@ -35,6 +35,9 @@ def main() -> int:
             "load_widget_media_path",
             "load_widget_media_mode",
             "WIDGET_MEDIA_MODE_LABELS_RU",
+            "load_peer_aliases",
+            "parse_peer_line",
+            "peer_display_label",
         ]
         for name in need:
             if not hasattr(portal_config, name):

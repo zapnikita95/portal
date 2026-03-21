@@ -35,6 +35,42 @@ import portal_clipboard_rich as portal_clip_rich
 from portal_tk_compat import ensure_tkdnd_tk_misc_patch
 
 
+def _portal_message_from_mobile(message: Optional[dict]) -> bool:
+    """True, если отправитель пометил себя как мобильный клиент (например Android Share)."""
+    if not isinstance(message, dict):
+        return False
+    v = message.get("portal_source")
+    if isinstance(v, str) and v.strip().lower() == "android":
+        return True
+    return v is True
+
+
+def _portal_desktop_notify(title: str, body: str) -> None:
+    """Короткое системное уведомление на ПК (macOS / Linux). Windows — без лишних зависимостей не подключаем."""
+    t = (title or "Portal").strip() or "Portal"
+    b = (body or "").strip() or "Портал"
+    try:
+        if platform.system() == "Darwin":
+            # display notification (Notification Center)
+            te = b.replace("\\", "\\\\").replace('"', '\\"')
+            ti = t.replace("\\", "\\\\").replace('"', '\\"')
+            subprocess.run(
+                ["osascript", "-e", f'display notification "{te}" with title "{ti}"'],
+                check=False,
+                timeout=6,
+                capture_output=True,
+            )
+        elif platform.system() == "Linux":
+            subprocess.run(
+                ["notify-send", "-a", t, t, b],
+                check=False,
+                timeout=6,
+                capture_output=True,
+            )
+    except Exception:
+        pass
+
+
 def refresh_windows_shell_after_new_file(filepath: Path) -> None:
     """Подтолкнуть Explorer обновить список (только Windows)."""
     if platform.system() != "win32":
@@ -439,6 +475,7 @@ class PortalApp(ctk.CTk):
         self._ui_signal_queue: queue.SimpleQueue = queue.SimpleQueue()
         self.portal_widget_ref: Optional[Any] = None
         self._hotkey_mgr: Optional[Any] = None
+        self._widget_pulse_generation: int = 0
         
         # Создание UI
         self.create_ui()
@@ -815,9 +852,20 @@ class PortalApp(ctk.CTk):
             justify="left",
         ).pack(anchor="w", padx=12, pady=(0, 6))
 
+        ctk.CTkLabel(
+            peer_frame,
+            text=(
+                "Список пиров: один на строку — только IPv4 (100.x.x.x) или «IP Имя» / «IP, Имя» "
+                "(имена только на этом ПК, на другом компе могут быть свои)."
+            ),
+            font=ctk.CTkFont(size=10),
+            text_color="gray",
+            wraplength=640,
+            justify="left",
+        ).pack(anchor="w", padx=12, pady=(0, 2))
         ip_edit_row = ctk.CTkFrame(peer_frame, fg_color="transparent")
         ip_edit_row.pack(fill="x", padx=12, pady=(0, 6))
-        self.peer_ips_text = ctk.CTkTextbox(ip_edit_row, width=420, height=88, font=ctk.CTkFont(size=13))
+        self.peer_ips_text = ctk.CTkTextbox(ip_edit_row, width=420, height=100, font=ctk.CTkFont(size=13))
         self.peer_ips_text.pack(side="left", padx=(0, 10), anchor="nw")
         self._fill_peer_ips_textbox()
         self.peer_ips_text.bind("<KeyRelease>", self._on_peer_ips_edited)
@@ -1213,19 +1261,51 @@ class PortalApp(ctk.CTk):
         if not hasattr(self, "peer_ips_text"):
             return
         ips = portal_config.load_peer_ips()
+        al = portal_config.load_peer_aliases()
+        lines_out: List[str] = []
+        for ip in ips:
+            nm = al.get(ip, "").strip()
+            lines_out.append(f"{ip}  {nm}".rstrip() if nm else ip)
         self.peer_ips_text.delete("1.0", "end")
-        self.peer_ips_text.insert("1.0", "\n".join(ips) if ips else "")
+        self.peer_ips_text.insert("1.0", "\n".join(lines_out) if lines_out else "")
 
     def save_peer_ips_from_ui(self) -> None:
         raw = self.peer_ips_text.get("1.0", "end") if hasattr(self, "peer_ips_text") else ""
         lines = [ln.strip() for ln in raw.replace("\r", "").split("\n")]
-        ips = [x for x in lines if x]
+        ips: List[str] = []
+        aliases: Dict[str, str] = {}
+        bad_lines: List[str] = []
+        seen_ip = set()
+        for line in lines:
+            if not line or line.lstrip().startswith("#"):
+                continue
+            p = portal_config.parse_peer_line(line)
+            if not p:
+                bad_lines.append(line)
+                continue
+            ip, name = p
+            if ip in seen_ip:
+                if name:
+                    aliases[ip] = name
+                continue
+            seen_ip.add(ip)
+            ips.append(ip)
+            if name:
+                aliases[ip] = name
         if hasattr(self, "ip_saved_feedback"):
             self.ip_saved_feedback.configure(text="⏳ …", text_color="gray")
         ok = portal_config.save_peer_ips(ips)
+        if ok:
+            portal_config.save_peer_aliases(aliases)
         self.remote_peer_ip = portal_config.load_remote_ip()
         if ok:
-            self.log(f"💾 Список IP сохранён ({len(ips)}): {', '.join(ips) or '(пусто)'}")
+            if bad_lines:
+                self.log(
+                    f"⚠️ Строки без корректного IPv4 пропущены: {bad_lines[:5]}"
+                    + (" …" if len(bad_lines) > 5 else "")
+                )
+            shown = [portal_config.peer_display_label(ip) for ip in ips]
+            self.log(f"💾 Список пиров сохранён ({len(ips)}): {', '.join(shown) or '(пусто)'}")
             if hasattr(self, "ip_saved_feedback"):
                 self.ip_saved_feedback.configure(text="✅ Список сохранён", text_color="#3dd68c")
             self.rebuild_peer_checkboxes()
@@ -1259,7 +1339,7 @@ class PortalApp(ctk.CTk):
             self._peer_checkbox_vars[ip] = var
             ctk.CTkCheckBox(
                 row,
-                text=ip,
+                text=portal_config.peer_display_label(ip),
                 variable=var,
                 font=ctk.CTkFont(size=11),
             ).pack(side="left", padx=(0, 16), pady=0)
@@ -1273,7 +1353,8 @@ class PortalApp(ctk.CTk):
                 self.ip_saved_feedback.configure(text="❌ Нет галочек", text_color="#e74c3c")
             return
         portal_config.save_peer_send_targets(chosen)
-        self.log(f"💾 Отправка на выбранные ПК: {', '.join(chosen)}")
+        labels = [portal_config.peer_display_label(ip) for ip in chosen]
+        self.log(f"💾 Отправка на выбранные ПК: {', '.join(labels)}")
         if hasattr(self, "ip_saved_feedback"):
             self.ip_saved_feedback.configure(text="✅ Выбор сохранён", text_color="#3dd68c")
         self.check_peer_connection_async(silent=False)
@@ -1407,12 +1488,73 @@ class PortalApp(ctk.CTk):
                 "медиа подхватится при следующей загрузке."
             )
 
+    def _pulse_portal_widget(self, seconds: Optional[float] = None) -> None:
+        """
+        Кратко показать виджет-портал при приёме файла (если был скрыт).
+        Отключить: PORTAL_WIDGET_PULSE_ON_RECEIVE=0
+        """
+        if os.environ.get("PORTAL_WIDGET_PULSE_ON_RECEIVE", "1").strip().lower() in (
+            "0",
+            "false",
+            "no",
+            "off",
+        ):
+            return
+        w = getattr(self, "portal_widget_ref", None)
+        if w is None or not hasattr(w, "show") or not hasattr(w, "hide"):
+            return
+        try:
+            if w.is_visible():
+                return
+        except Exception:
+            pass
+        if seconds is None:
+            try:
+                seconds = float(os.environ.get("PORTAL_WIDGET_PULSE_SECONDS", "3").strip() or "3")
+            except ValueError:
+                seconds = 3.0
+        seconds = max(0.5, min(float(seconds), 30.0))
+
+        def run() -> None:
+            try:
+                self._widget_pulse_generation += 1
+                gen = self._widget_pulse_generation
+                w.show()
+
+                def hide_later() -> None:
+                    if self._widget_pulse_generation != gen:
+                        return
+                    try:
+                        if w.is_visible():
+                            w.hide()
+                    except Exception:
+                        pass
+
+                self.after(int(seconds * 1000), hide_later)
+            except Exception as ex:
+                try:
+                    self.log(f"⚠️ Импульс виджета: {ex}")
+                except Exception:
+                    pass
+
+        try:
+            self.after(0, run)
+        except Exception:
+            run()
+
     def _parse_peer_ips_draft(self) -> List[str]:
         if not hasattr(self, "peer_ips_text"):
             return list(portal_config.load_peer_ips())
         raw = self.peer_ips_text.get("1.0", "end")
         lines = [ln.strip() for ln in raw.replace("\r", "").split("\n")]
-        return [x for x in lines if x]
+        out: List[str] = []
+        for line in lines:
+            if not line or line.lstrip().startswith("#"):
+                continue
+            p = portal_config.parse_peer_line(line)
+            if p:
+                out.append(p[0])
+        return out
 
     def _peer_ips_for_probe(self) -> List[str]:
         draft = self._parse_peer_ips_draft()
@@ -1422,31 +1564,32 @@ class PortalApp(ctk.CTk):
         """Текст и цвет для строки статуса пары."""
         if not ip:
             return "⚪ Пара: укажи IP и «Сохранить IP»", "gray"
+        lbl = portal_config.peer_display_label(ip)
         if ok:
             return (
-                f"🟢 Пара ({ip}): Портал на :{PORTAL_PORT} отвечает",
+                f"🟢 Пара ({lbl}): Портал на :{PORTAL_PORT} отвечает",
                 "#3dd68c",
             )
         if code == "refused":
             return (
-                f"🔌 Пара ({ip}): порт {PORTAL_PORT} закрыт — на том ПК «Запустить портал»",
+                f"🔌 Пара ({lbl}): порт {PORTAL_PORT} закрыт — на том ПК «Запустить портал»",
                 "#e74c3c",
             )
         if code == "timeout":
             return (
-                f"⏱ Пара ({ip}): таймаут — Tailscale, IP или файрвол",
+                f"⏱ Пара ({lbl}): таймаут — Tailscale, IP или файрвол",
                 "#e67e22",
             )
         if code == "dns":
-            return f"❓ Пара ({ip}): адрес не найден (DNS)", "#e74c3c"
+            return f"❓ Пара ({lbl}): адрес не найден (DNS)", "#e74c3c"
         if code == "bad_reply":
             return (
-                f"⚠ Пара ({ip}): порт открыт, но ответ не Портал",
+                f"⚠ Пара ({lbl}): порт открыт, но ответ не Портал",
                 "#f39c12",
             )
         if code == "no_host":
             return "⚪ Пара: укажи IP", "gray"
-        return f"❌ Пара ({ip}): ошибка ({code})", "#e74c3c"
+        return f"❌ Пара ({lbl}): ошибка ({code})", "#e74c3c"
 
     def _refresh_local_link_status_label(self) -> None:
         if not hasattr(self, "local_link_status_label"):
@@ -1988,6 +2131,14 @@ class PortalApp(ctk.CTk):
                         self._apply_receive_mode_after_saved_file(p, reveal_mac_allowed=reveal_ok)
                 except Exception as ex:
                     self.log(f"❌ После приёма (Finder/буфер): {ex}")
+                else:
+                    self._pulse_portal_widget()
+                    if _portal_message_from_mobile(msg_local):
+                        self.log("📱 Получено с телефона — файл сохранён")
+                        _portal_desktop_notify(
+                            "Portal",
+                            f"Файл с телефона: {fp_saved.name}",
+                        )
 
             try:
                 self.after(0, _finish_receive)
@@ -2311,7 +2462,10 @@ class PortalApp(ctk.CTk):
             self._log_from_thread(
                 f"📋 Буфер обмена обновлен ({len(clipboard_text)} символов) — Ctrl+V для вставки"
             )
-    
+            if _portal_message_from_mobile(message):
+                self._log_from_thread("📱 Получено с телефона — текст в буфере")
+                _portal_desktop_notify("Portal", "Текст с телефона — в буфере обмена")
+
     def _clipboard_snapshot_resolved_for_send(self) -> Tuple[str, dict]:
         """Снимок буфера для отправки (push и ответ get_clipboard): snapshot + фолбэки."""
         from portal_widget import grab_clipboard_file_paths, grab_clipboard_image
