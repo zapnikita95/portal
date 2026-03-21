@@ -238,19 +238,19 @@ def parse_first_json_object_bytes(buf: bytes) -> tuple[Optional[dict], int]:
         i += 1
     if i >= n:
         return None, 0
+    if s[i] != "{":
+        j = s.find("{", i)
+        if j < 0:
+            return None, 0
+        i = j
     try:
-        chunk = buf[start:].decode("utf-8")
-    except UnicodeDecodeError:
-        return None, 0
-    decoder = json.JSONDecoder()
-    try:
-        obj, end = decoder.raw_decode(chunk)
+        obj, end_char = decoder.raw_decode(s, i)
     except json.JSONDecodeError:
         return None, 0
     if not isinstance(obj, dict):
         return None, 0
-    consumed = chunk[:end].encode("utf-8")
-    return obj, start + len(consumed)
+    consumed = s[:end_char].encode("utf-8")
+    return obj, len(consumed)
 
 
 def _portal_sendall(sock: socket.socket, data: bytes) -> None:
@@ -1539,9 +1539,11 @@ class PortalApp(ctk.CTk):
                 self.receive_clipboard_rich(client_socket, message, prefix=tail)
             elif message.get("type") == "clipboard":
                 self.receive_clipboard(message)
-            elif mtype == "get_clipboard":
+            elif message.get("type") == "clipboard_file":
+                self._receive_clipboard_file_payload(client_socket, message, prefix=tail)
+            elif req == "get_clipboard":
                 self.send_clipboard_response(client_socket)
-            elif mtype == "ping":
+            elif req == "ping":
                 # Как в репо: отвечаем pong сразу (проверка «это Портал» с другого ПК)
                 pong = json.dumps(
                     {"type": "pong", "ok": True, "version": 1},
@@ -1551,14 +1553,68 @@ class PortalApp(ctk.CTk):
                 # Не спамим лог при авто-проверке каждые 20 с (тихий pong)
             else:
                 self._log_from_thread(
-                    f"⚠️ Неизвестный тип запроса: {mtype!r} — обнови Портал на обоих ПК до одной версии"
+                    f"⚠️ Неизвестный тип запроса: {req!r} — обнови Портал на обоих ПК до одной версии"
                 )
 
         except Exception as e:
             self._log_from_thread(f"❌ Ошибка обработки клиента: {str(e)}")
         finally:
             client_socket.close()
-    
+
+    def _receive_clipboard_file_payload(
+        self,
+        client_socket: socket.socket,
+        message: dict,
+        prefix: bytes = b"",
+    ) -> None:
+        """Один файл в стиле clipboard_file (JSON + сырые байты), как в ответе get_clipboard."""
+        try:
+            raw_name = message.get("filename", "remote_clipboard_file")
+            fname = _safe_incoming_filename(raw_name)
+            try:
+                need = int(message.get("filesize", 0) or 0)
+            except (TypeError, ValueError):
+                need = 0
+            if need <= 0 or need > CLIPBOARD_PULL_FILE_MAX_BYTES:
+                self._log_from_thread(f"⚠️ clipboard_file: некорректный размер {need}")
+                _portal_sendall(client_socket, b"ERR")
+                return
+            receive_dir = portal_config.incoming_clipboard_files_save_dir()
+            receive_dir.mkdir(parents=True, exist_ok=True)
+            filepath = receive_dir / f"{int(time.time() * 1000)}_{fname}"
+            data = bytearray(prefix.lstrip(b"\n\r"))
+            while len(data) < need:
+                part = client_socket.recv(min(65536, need - len(data)))
+                if not part:
+                    break
+                data.extend(part)
+            if len(data) < need:
+                self._log_from_thread("❌ clipboard_file: обрезаны данные")
+                _portal_sendall(client_socket, b"ERR")
+                return
+            filepath.write_bytes(bytes(data))
+            refresh_windows_shell_after_new_file(filepath)
+            _portal_sendall(client_socket, b"OK")
+            p = str(filepath.resolve())
+
+            def _apply():
+                try:
+                    self._apply_incoming_clipboard_files([p])
+                except Exception as ex:
+                    self._log_from_thread(f"❌ После приёма clipboard_file: {ex}")
+
+            try:
+                self.after(0, _apply)
+            except Exception:
+                _apply()
+            self._log_from_thread(f"✅ clipboard_file: {filepath.name}")
+        except Exception as e:
+            self._log_from_thread(f"❌ clipboard_file: {e}")
+            try:
+                _portal_sendall(client_socket, b"ERR")
+            except Exception:
+                pass
+
     def receive_file(
         self,
         client_socket: socket.socket,
@@ -2037,9 +2093,16 @@ class PortalApp(ctk.CTk):
                             if not chunk:
                                 break
                             _portal_sendall(client_socket, chunk)
-                    log(
-                        f"📋 {context_label} → один файл «{one.name}» ({sz} байт)"
-                    )
+                    # Ответ get_clipboard: клиент pull не шлёт OK. Push на сервер — приёмник шлёт OK.
+                    if str(context_label).startswith("push"):
+                        okp = _recv_ok_prefix(client_socket, timeout=180.0)
+                        log(
+                            f"📋 {context_label} → один файл «{one.name}» ({sz} байт); ответ: {okp[:32]!r}"
+                        )
+                    else:
+                        log(
+                            f"📋 {context_label} → один файл «{one.name}» ({sz} байт)"
+                        )
                     return
             specs = [
                 {"filename": os.path.basename(p), "filesize": os.path.getsize(p)}
