@@ -22,7 +22,7 @@ pyinstaller pyinstaller_portal.spec
 
 ## GitHub Actions (без своей машины)
 
-Шаблон в корне репо: **`github-workflow-portal-desktop.yml`** → скопируй в **`.github/workflows/portal-desktop-release.yml`** (см. **BUILD_DESKTOP.md**). Push workflow-файла с GitHub PAT требует scope **`workflow`**.
+Шаблон: **`github-workflow-portal-desktop.yml`**. Добавить в репо безопаснее **через веб GitHub** (Create new file → `.github/workflows/portal-desktop-release.yml` → вставить содержимое шаблона) — см. **BUILD_DESKTOP.md** («ошибка workflow scope»). Push этого файла по **HTTPS + PAT** требует scope **`workflow`**; иначе используй веб, **SSH** или новый PAT.
 
 1. **Артефакты без релиза:** **Actions** → **Portal Desktop Build** → **Run workflow** → скачай **Portal-macOS** / **Portal-Windows**.
 2. **Релиз с вложениями:** запушь тег `v1.0.0`:
