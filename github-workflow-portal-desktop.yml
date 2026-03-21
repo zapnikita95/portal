@@ -2,7 +2,7 @@
 # (шаблон в корне — чтобы push с PAT без scope `workflow` не блокировался.)
 #
 # Сборка Portal для macOS (.app) и Windows (.exe) через PyInstaller.
-# Артефакты: Portal-macOS.zip, Portal-Windows.zip
+# Артефакты: Portal-macOS.zip + Portal-macOS.dmg, Portal-Windows.zip
 # Релиз: push тега v* (например v1.2.0).
 # Ручной запуск: Actions → «Portal Desktop Build» → Run workflow.
 
@@ -39,13 +39,19 @@ jobs:
       - name: PyInstaller (Portal.app)
         run: pyinstaller -y pyinstaller_portal.spec
 
-      - name: ZIP для релиза
-        run: cd dist && ditto -c -k --sequesterRsrc --keepParent Portal.app Portal-macOS.zip
+      - name: ZIP + DMG для релиза
+        run: |
+          cd dist
+          ditto -c -k --sequesterRsrc --keepParent Portal.app Portal-macOS.zip
+          hdiutil create -volname "Portal" -srcfolder Portal.app -ov -format UDZO \
+            -imagekey zlib-level=9 Portal-macOS.dmg
 
       - uses: actions/upload-artifact@v4
         with:
           name: Portal-macOS
-          path: dist/Portal-macOS.zip
+          path: |
+            dist/Portal-macOS.zip
+            dist/Portal-macOS.dmg
 
   build-windows:
     runs-on: windows-latest
@@ -99,6 +105,7 @@ jobs:
           name: Portal Desktop ${{ github.ref_name }}
           files: |
             rel/Portal-macOS.zip
+            rel/Portal-macOS.dmg
             rel/Portal-Windows.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

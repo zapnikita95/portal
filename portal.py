@@ -1714,7 +1714,8 @@ class PortalApp(ctk.CTk):
                 extra.append(
                     "Python 3.13+: глобальные хоткеи — отдельный процесс pynput; "
                     "права Input Monitoring + Универсальный доступ; "
-                    "PORTAL_MAC_NO_HOTKEY_HELPER=1 — только при фокусе на окне Портала."
+                    "PORTAL_MAC_NO_HOTKEY_HELPER=1 — только при фокусе на окне Портала. "
+                    "Свёрнутое окно: хоткеи обрабатываются через Tk fileevent (не нужен фокус на Portal)."
                 )
             return nl.join(lines + extra)
         lines = [

@@ -1756,6 +1756,8 @@ class GlobalHotkeyManager:
         self._last_pull_debounce = 0.0
         self._hotkey_helper_proc: Optional[Any] = None
         self._hotkey_pipe_got_byte = False
+        # macOS: чтение pipe через Tk fileevent — иначе after(25) замирает при свёрнутом окне
+        self._mac_pipe_fileevent_installed = False
 
     def _enqueue_toggle(self) -> None:
         q = getattr(self.main_app, "_ui_signal_queue", None)
@@ -2091,38 +2093,74 @@ class GlobalHotkeyManager:
             self._log(f"bind_all ошибка: {e}")
 
     def _schedule_hotkey_poll(self) -> None:
+        """
+        Глобальные хоткеи macOS пишут байты в pipe (NSEvent или hotkey-helper).
+        Раньше опрашивали pipe через main_app.after(25) — на macOS при свёрнутом окне
+        Tk/App Nap часто не вызывает after, и хоткеи «умирают». Решение: Tk fileevent
+        (createfilehandler) на читающем конце pipe — срабатывает из главного цикла Tcl.
+        """
+        if platform.system() != "Darwin" or self._hk_r is None:
+            try:
+                self.main_app.after(25, self._poll_hotkey_queue)
+            except Exception:
+                pass
+            return
+        try:
+            self.main_app.tk.createfilehandler(
+                self._hk_r,
+                tk.READABLE,
+                self._mac_hotkey_pipe_readable,
+            )
+            self._mac_pipe_fileevent_installed = True
+            self._log(
+                "✅ macOS: глобальные хоткеи через Tk fileevent (свёрнутое окно / другой фокус)"
+            )
+        except Exception as e:
+            self._log(f"⚠️ fileevent для хоткеев недоступен, опрос 25 мс: {e}")
+            try:
+                self.main_app.after(25, self._poll_hotkey_queue)
+            except Exception:
+                pass
+
+    def _mac_hotkey_pipe_readable(self, *_args) -> None:
+        """Колбэк Tcl fileevent — всегда главный поток Tk."""
+        self._drain_hotkey_pipe()
+
+    def _drain_hotkey_pipe(self) -> None:
+        """Считать все доступные байты из pipe глобальных хоткеев и выполнить действия."""
+        if not self._running or self._hk_r is None:
+            return
+        try:
+            while True:
+                chunk = os.read(self._hk_r, 64)
+                if not chunk:
+                    break
+                for c in chunk:
+                    if c in (ord("t"), ord("c"), ord("v")):
+                        self._hotkey_pipe_got_byte = True
+                    if c == ord("t"):
+                        self._log("🔑 Глобальный хоткей → виджет", "🔑")
+                        self._toggle_ui()
+                    elif c == ord("c"):
+                        self._log("🔑 Глобальный хоткей → отправить буфер", "🔑")
+                        self._on_push()
+                    elif c == ord("v"):
+                        self._log("🔑 Глобальный хоткей → забрать буфер", "🔑")
+                        self._on_pull()
+        except BlockingIOError:
+            pass
+        except OSError:
+            pass
+
+    def _poll_hotkey_queue(self) -> None:
+        """Резерв: опрос pipe через after() (Windows нет pipe; macOS — если fileevent не встал)."""
+        if not self._running:
+            return
+        self._drain_hotkey_pipe()
         try:
             self.main_app.after(25, self._poll_hotkey_queue)
         except Exception:
             pass
-
-    def _poll_hotkey_queue(self) -> None:
-        """Главный поток Tk: читаем pipe от глобального NSEvent (только os.write в колбэке)."""
-        if not self._running:
-            return
-        if self._hk_r is not None:
-            try:
-                while True:
-                    chunk = os.read(self._hk_r, 64)
-                    if not chunk:
-                        break
-                    for c in chunk:
-                        if c in (ord("t"), ord("c"), ord("v")):
-                            self._hotkey_pipe_got_byte = True
-                        if c == ord("t"):
-                            self._log("Глобальный хоткей → виджет", "🔑")
-                            self._toggle_ui()
-                        elif c == ord("c"):
-                            self._log("Глобальный хоткей → отправить буфер", "🔑")
-                            self._on_push()
-                        elif c == ord("v"):
-                            self._log("Глобальный хоткей → забрать буфер", "🔑")
-                            self._on_pull()
-            except BlockingIOError:
-                pass
-            except OSError:
-                pass
-        self._schedule_hotkey_poll()
 
     def _hotkey_helper_healthcheck(self) -> None:
         """Один раз через ~3 с: если helper молчит или упал — подсказка в журнал."""

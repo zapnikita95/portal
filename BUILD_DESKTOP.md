@@ -16,6 +16,19 @@ open dist/Portal.app
 
 Готовое приложение: **`dist/Portal.app`**. Его можно перетащить в папку «Программы».
 
+**DMG одной командой** (рядом появятся `dist/Portal-macOS.zip` и `dist/Portal-macOS.dmg`):
+
+```bash
+chmod +x scripts/build_mac_dmg.sh
+./scripts/build_mac_dmg.sh
+```
+
+Проверка, что на macOS хоткеи не зависят от таймера `after()` при свёрнутом окне:
+
+```bash
+python3 scripts/test_mac_hotkey_fileevent.py
+```
+
 Флаг **`-y`** у PyInstaller автоматически подтверждает очистку старой **`dist/Portal`** — при пересборке это ожидаемо (иначе спрашивает `Continue? (y/N)` в терминале).
 
 Если macOS пишет, что файл из интернета и не открывается:
@@ -75,8 +88,8 @@ git reset --hard origin/main
 
 После того как файл **`portal-desktop-release.yml`** уже лежит в **`.github/workflows/`** (через веб или push с нужными правами):
 
-- **Вручную:** **Actions** → **Portal Desktop Build** → **Run workflow** → скачай артефакты `Portal-macOS` / `Portal-Windows`.
-- **Релиз:** `git tag v1.2.0 && git push origin v1.2.0` — к релизу прикрепятся оба ZIP.
+- **Вручную:** **Actions** → **Portal Desktop Build** → **Run workflow** → скачай артефакт `Portal-macOS` (внутри **ZIP + DMG**) и `Portal-Windows`.
+- **Релиз:** `git tag v1.2.0 && git push origin v1.2.0` — к релизу прикрепятся **Portal-macOS.zip**, **Portal-macOS.dmg** и **Portal-Windows.zip**.
 
 Шаблон для копирования: **`github-workflow-portal-desktop.yml`** в корне репозитория.
 
