@@ -1,9 +1,9 @@
-Медиа для шапки приложения (Kivy AsyncImage):
-  - portal_main.gif  (предпочтительно) или
-  - icon.png
+Медиа для шапки (слева вверху):
+  - icon.png — предпочтительно (та же картинка, что иконка лаунчера; статичный Image, без «круга из точек»).
+  - portal_main.gif — если нужен анимированный талисман (AsyncImage).
 
-Положи файлы сюда, в portal-android/assets/, перед buildozer.
-Иконки можно сгенерировать из репозитория: python3 scripts/generate_branding_icons.py
-(затем скопируй нужное в эту папку).
+Положи файлы в portal-android/assets/ перед buildozer.
+Сгенерировать: из корня репозитория `python3 scripts/generate_branding_icons.py`,
+затем `cp assets/branding/portal_icon.png portal-android/assets/icon.png`.
 
-Без этих файлов в APK в шапке будет пустой/белый квадрат — это не баг шрифта.
+Без icon.png / gif шапка подхватит ../assets/branding/portal_icon.png при dev-запуске с ПК.

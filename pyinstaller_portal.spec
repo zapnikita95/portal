@@ -64,6 +64,7 @@ hiddenimports = [
     "pynput.keyboard",
     "tkinterdnd2",
     "portal_mac_hotkey_helper",
+    "portal_mac_permissions",
 ]
 
 if sys.platform == "win32":
@@ -73,6 +74,7 @@ if sys.platform == "darwin":
     hiddenimports.extend(
         [
             "AppKit",
+            "ApplicationServices",
             "Foundation",
             "objc",
             "PyObjCTools",

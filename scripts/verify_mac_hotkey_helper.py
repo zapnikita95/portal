@@ -188,7 +188,7 @@ def main() -> int:
             "ИТОГ: OK — NSEvent global monitor поднят (глобальный слушатель клавиш работает на уровне ОС)."
         )
         print(
-            "      (Сообщение «CGEventTap не создан» в stderr при этом нормально — используется NSEvent.)"
+            "      (Сообщение «CGEventTap не создан» в stderr часто бывает даже при включённых правах — тогда используется NSEvent.)"
         )
         mode = "NSEvent"
     else:

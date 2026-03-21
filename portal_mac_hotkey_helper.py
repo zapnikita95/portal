@@ -109,6 +109,13 @@ def _check_nsevent(event) -> None:
         pass
 
 
+def _real_exe() -> str:
+    try:
+        return os.path.realpath(sys.executable)
+    except Exception:
+        return sys.executable
+
+
 def main_cg_event_tap() -> bool:
     """
     CGEventTap (listen-only) + CFRunLoop — надёжнее, чем ручной NSRunLoop.runUntilDate.
@@ -173,10 +180,13 @@ def main_cg_event_tap() -> bool:
     )
     if not tap:
         print(
-            "e CGEventTap не создан (часто: нет прав «Мониторинг ввода»).\n"
-            "  → Настройки → Конфиденциальность и безопасность → Мониторинг ввода → Portal.app\n"
-            "  → Там же «Универсальный доступ» при необходимости\n"
-            "  → Полностью закрой Portal и открой снова.",
+            "e CGEventTap не создан — это НЕ значит автоматически «ты не дал Мониторинг ввода». "
+            "На macOS tap иногда не создаётся при уже включённых переключателях: сменилась подпись/путь "
+            "после новой сборки .app, в списке TCC другой python3, «залипшая» запись. "
+            "Что сделать: выключи и снова включи переключатель у **этого** приложения "
+            "(или удали строку и добавь заново после запуска Portal). "
+            "Дальше helper поднимает **NSEvent** — глобальные хоткеи часто работают и без CGEventTap.\n"
+            f"  Бинарник этого процесса (сверь с «Мониторинг ввода»): {_real_exe()}",
             file=sys.stderr,
             flush=True,
         )
@@ -241,6 +251,12 @@ def main_nsevent() -> bool:
         return False
 
     print("i nsevent_monitor_ok", flush=True)
+    print(
+        "i Проверка глобальных хоткеев: переключись в другое приложение (Safari, Terminal), "
+        "нажми Cmd+Ctrl+P — в журнале Portal должна появиться строка «Глобальный хоткей». "
+        "Если только «Tk bind» при фокусе на Portal — монитор не получает события; проверь «Мониторинг ввода» для Python.",
+        flush=True,
+    )
 
     try:
         app.run()
@@ -293,6 +309,8 @@ def main_pynput() -> None:
 
 
 def main() -> None:
+    # В portal_hotkey_debug.log попадёт через stdout → out_reader родителя
+    print(f"i hotkey-helper exe {_real_exe()}", flush=True)
     if main_cg_event_tap():
         return
     if main_nsevent():

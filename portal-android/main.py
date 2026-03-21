@@ -21,7 +21,7 @@ from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.checkbox import CheckBox
-from kivy.uix.image import AsyncImage
+from kivy.uix.image import AsyncImage, Image
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
@@ -74,11 +74,16 @@ CONFIG_NAME = "portal_android_config.json"
 try:
     from android_folder_picker import (
         android_cache_dir,
+        bind_folder_picker,
         close_java,
         copy_path_to_java_stream,
         create_document_output_stream,
     )
 except ImportError:
+
+    def bind_folder_picker() -> None:
+        pass
+
     def android_cache_dir() -> str:
         return ""
 
@@ -181,20 +186,23 @@ def _default_receive_dir() -> str:
 
 
 def _mascot_image_source() -> tuple:
+    """
+    Шапка приложения: сначала статичная иконка как у лаунчера (PNG), не GIF —
+    иначе AsyncImage на первом кадре даёт «кружок из точек».
+    """
     here = Path(__file__).resolve().parent
+    for png in (
+        here / "assets" / "icon.png",
+        here.parent / "assets" / "branding" / "portal_icon.png",
+    ):
+        if png.is_file():
+            return (str(png.resolve()), False)
     gif_local = here / "assets" / "portal_main.gif"
-    png_local  = here / "assets" / "icon.png"
     if gif_local.is_file():
         return (str(gif_local.resolve()), True)
-    if png_local.is_file():
-        return (str(png_local.resolve()), False)
-    # Dev run from root
     dev_gif = here.parent / "assets" / "portal_main.gif"
     if dev_gif.is_file():
         return (str(dev_gif.resolve()), True)
-    dev_png = here.parent / "assets" / "branding" / "portal_icon.png"
-    if dev_png.is_file():
-        return (str(dev_png.resolve()), False)
     return (None, False)
 
 
@@ -667,7 +675,7 @@ class PortalAndroidApp(App):
         self._secret_field        = None
         self._receive_dir_field   = None
         self._test_text           = None
-        self._mascot: Optional[AsyncImage] = None
+        self._mascot = None  # Image или AsyncImage
         self._mascot_is_gif       = False
         self._conn_lbl            = None
         self._log_label           = None
@@ -693,6 +701,12 @@ class PortalAndroidApp(App):
         if kivy_platform == "android":
             try:
                 Window.softinput_mode = "resize"
+            except Exception:
+                pass
+            try:
+                from android_folder_picker import bind_folder_picker as _bind_tree_picker
+
+                _bind_tree_picker()
             except Exception:
                 pass
         if is_android_runtime():
@@ -751,21 +765,26 @@ class PortalAndroidApp(App):
 
         masc_src, masc_gif = _mascot_image_source()
         if masc_src:
-            # AsyncImage + абсолютный путь: на Android file:// часто даёт пустую текстуру (цветной квадрат)
+            # PNG: обычный Image — без «пустой» фазы AsyncImage. GIF: AsyncImage с анимацией.
             kw = dict(
                 source=masc_src,
                 size_hint=(None, None),
                 size=(dp(72), dp(72)),
                 allow_stretch=True,
                 keep_ratio=True,
-                mipmap=False,
-                nocache=True,
+                mipmap=True,
             )
             if masc_gif:
-                kw["anim_delay"] = _GIF_FRAME_DELAY
-                kw["anim_loop"] = 0
-            self._mascot = AsyncImage(**kw)
-            self._mascot_is_gif = masc_gif
+                self._mascot = AsyncImage(
+                    nocache=True,
+                    anim_delay=_GIF_FRAME_DELAY,
+                    anim_loop=0,
+                    **kw,
+                )
+                self._mascot_is_gif = True
+            else:
+                self._mascot = Image(**kw)
+                self._mascot_is_gif = False
             self._mascot.color = (1, 1, 1, 1)
             header.add_widget(self._mascot)
 
@@ -849,8 +868,21 @@ class PortalAndroidApp(App):
                 "Обновляется сразу после ввода - сохранять перед тестом не обязательно."
             )
         )
-        self._secret_field = _input("Пароль сети", password=False)
-        sec_card.add_widget(self._secret_field)
+        sec_row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(50),
+            spacing=dp(8),
+        )
+        self._secret_field = _input("Пароль сети", password=False, height=dp(50))
+        self._secret_field.size_hint_x = 1
+        sec_paste = _btn("Вставить", bg=(0.18, 0.22, 0.32, 1), height=dp(50), font_size=dp(12))
+        sec_paste.size_hint = (None, None)
+        sec_paste.width = dp(100)
+        sec_paste.bind(on_press=lambda *_: self._paste_clipboard_into(self._secret_field))
+        sec_row.add_widget(self._secret_field)
+        sec_row.add_widget(sec_paste)
+        sec_card.add_widget(sec_row)
         body.add_widget(sec_card)
 
         # ── Папка приёма ───────────────────────────────────────────────────
@@ -910,6 +942,21 @@ class PortalAndroidApp(App):
             padding=[dp(12), dp(10), dp(8), dp(8)],
         )
         test_card.add_widget(self._test_text)
+        test_paste_row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(40),
+            spacing=dp(8),
+        )
+        test_paste_btn = _btn(
+            "Вставить из буфера",
+            bg=(0.18, 0.22, 0.32, 1),
+            height=dp(40),
+            font_size=dp(12),
+        )
+        test_paste_btn.bind(on_press=lambda *_: self._paste_clipboard_into(self._test_text))
+        test_paste_row.add_widget(test_paste_btn)
+        test_card.add_widget(test_paste_row)
         send_txt_btn = _btn("Отправить текст ->", bg=C_ACCENT, height=dp(48))
         send_txt_btn.bind(on_press=lambda *_: self.send_test_text())
         test_card.add_widget(send_txt_btn)
@@ -1206,6 +1253,22 @@ class PortalAndroidApp(App):
         except Exception as e:
             self._set_status(f"Ошибка: {e}")
 
+    def _paste_clipboard_into(self, widget) -> None:
+        """Android: долгое нажатие в Kivy часто не открывает «Вставить» — явная кнопка."""
+        if widget is None:
+            return
+        try:
+            from kivy.core.clipboard import Clipboard
+
+            t = Clipboard.paste() or ""
+            if not str(t).strip():
+                toast("Буфер пустой", long=False)
+                return
+            widget.text = str(t)
+            toast("Вставлено из буфера", long=False)
+        except Exception as e:
+            toast(f"Вставка: {e}", long=True)
+
     def _pick_receive_folder(self) -> None:
         if kivy_platform != "android":
             self._set_status("Выбор папки только на Android.")
@@ -1215,6 +1278,7 @@ class PortalAndroidApp(App):
         except Exception as e:
             self._set_status(f"Проводник недоступен: {e}")
             return
+        toast("Открываю выбор папки…", long=False)
 
         def on_uri(uri: Optional[str]) -> None:
             def apply(*_a):

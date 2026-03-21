@@ -109,12 +109,12 @@ def pick_receive_folder(callback: Callable[[Optional[str]], None]) -> None:
                 )
                 act.startActivityForResult(i, REQ_OPEN_TREE)
             except Exception:
+                global _on_result
+                _on_result = None
                 try:
-                    if _on_result is callback:
-                        pass
+                    callback(None)
                 except Exception:
                     pass
-                callback(None)
 
         run_on_ui_thread(run)
     except Exception:

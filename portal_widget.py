@@ -19,6 +19,7 @@ from typing import Optional, Any, List
 
 import portal_config
 import portal_i18n as i18n
+import portal_mac_permissions
 
 try:
     from portal import PortalApp
@@ -69,9 +70,147 @@ def _mac_privacy_target_hint() -> str:
             "переключатель для Portal в списках (macOS привязывает права к идентичности приложения)."
         )
     return (
-        "тот интерпретатор, которым запускаешь Portal из исходников "
-        "(Python / Terminal.app / Cursor — как в списке «Мониторинг ввода»)"
+        "тот же **Python** (org.python.python), которым запускаешь `portal.py` из Terminal/Cursor — "
+        "им же стартует дочерний hotkey-helper; в «Мониторинг ввода» часто нужны и **Terminal** (или IDE), "
+        "и **Python** (как в crash report, если macOS предложит отдельную запись)."
     )
+
+
+def _portal_hotkey_tk_sequences() -> tuple[List[str], List[str], List[str]]:
+    """Последовательности Tk для toggle / push / pull (macOS legacy или нет, Windows/Linux)."""
+    is_mac = platform.system() == "Darwin"
+    if is_mac:
+        legacy = os.environ.get("PORTAL_MAC_HOTKEY_LEGACY", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if legacy:
+            toggle_seqs = [
+                "<Command-Option-p>",
+                "<Command-Alt-p>",
+                "<Meta-Option-p>",
+                "<Meta-Alt-p>",
+                "<Command-Option-P>",
+                "<Meta-Option-P>",
+            ]
+            push_seqs = [
+                "<Command-Shift-C>",
+                "<Command-Shift-c>",
+                "<Meta-Shift-C>",
+                "<Meta-Shift-c>",
+            ]
+            pull_seqs = [
+                "<Command-Shift-V>",
+                "<Command-Shift-v>",
+                "<Meta-Shift-V>",
+                "<Meta-Shift-v>",
+                "<Command-Option-v>",
+                "<Command-Option-V>",
+                "<Meta-Option-v>",
+                "<Meta-Option-V>",
+            ]
+            toggle_seqs += [
+                "<Command-Option-з>",
+                "<Command-Option-З>",
+                "<Meta-Option-з>",
+                "<Meta-Option-З>",
+            ]
+            push_seqs += [
+                "<Command-Shift-с>",
+                "<Command-Shift-С>",
+                "<Meta-Shift-с>",
+                "<Meta-Shift-С>",
+            ]
+            pull_seqs += [
+                "<Command-Shift-м>",
+                "<Command-Shift-М>",
+                "<Meta-Shift-м>",
+                "<Meta-Shift-М>",
+                "<Command-Option-м>",
+                "<Command-Option-М>",
+                "<Meta-Option-м>",
+                "<Meta-Option-М>",
+            ]
+        else:
+            toggle_seqs = [
+                "<Command-Control-p>",
+                "<Command-Control-P>",
+                "<Control-Command-p>",
+                "<Control-Command-P>",
+                "<Meta-Control-p>",
+                "<Meta-Control-P>",
+            ]
+            push_seqs = [
+                "<Command-Control-c>",
+                "<Command-Control-C>",
+                "<Control-Command-c>",
+                "<Control-Command-C>",
+            ]
+            pull_seqs = [
+                "<Command-Control-v>",
+                "<Command-Control-V>",
+                "<Control-Command-v>",
+                "<Control-Command-V>",
+            ]
+            toggle_seqs += [
+                "<Command-Control-з>",
+                "<Command-Control-З>",
+                "<Control-Command-з>",
+                "<Control-Command-З>",
+                "<Meta-Control-з>",
+                "<Meta-Control-З>",
+            ]
+            push_seqs += [
+                "<Command-Control-с>",
+                "<Command-Control-С>",
+                "<Control-Command-с>",
+                "<Control-Command-С>",
+            ]
+            pull_seqs += [
+                "<Command-Control-м>",
+                "<Command-Control-М>",
+                "<Control-Command-м>",
+                "<Control-Command-М>",
+            ]
+    else:
+        toggle_seqs = [
+            "<Control-Alt-p>",
+            "<Control-Alt-P>",
+            "<Alt-Control-p>",
+            "<Alt-Control-P>",
+            "<Control_L-Alt_L-p>",
+            "<Control_L-Alt_L-P>",
+        ]
+        push_seqs = [
+            "<Control-Alt-c>",
+            "<Control-Alt-C>",
+            "<Alt-Control-c>",
+        ]
+        pull_seqs = [
+            "<Control-Alt-v>",
+            "<Control-Alt-V>",
+            "<Alt-Control-v>",
+        ]
+        toggle_seqs += [
+            "<Control-Alt-з>",
+            "<Control-Alt-З>",
+            "<Alt-Control-з>",
+            "<Alt-Control-З>",
+        ]
+        push_seqs += [
+            "<Control-Alt-с>",
+            "<Control-Alt-С>",
+            "<Alt-Control-с>",
+            "<Alt-Control-С>",
+        ]
+        pull_seqs += [
+            "<Control-Alt-м>",
+            "<Control-Alt-М>",
+            "<Alt-Control-м>",
+            "<Alt-Control-М>",
+        ]
+    return toggle_seqs, push_seqs, pull_seqs
 
 
 # Хромакей: Windows — почти чёрный; macOS — магента (#FF00FF), чтобы не съесть тёмные края портала
@@ -1838,6 +1977,8 @@ class GlobalHotkeyManager:
         self._helper_global_listener_ok = False
         # macOS: чтение pipe через Tk fileevent — иначе after(25) замирает при свёрнутом окне
         self._mac_pipe_fileevent_installed = False
+        # Одноразовое окно «открыть Мониторинг ввода» (healthcheck / helper stderr)
+        self._mac_input_dialog_shown = False
 
     def _enqueue_toggle(self) -> None:
         q = getattr(self.main_app, "_ui_signal_queue", None)
@@ -1909,57 +2050,150 @@ class GlobalHotkeyManager:
                     "PORTAL_MAC_HOTKEY_LEGACY=1 — Cmd+Option+P, Cmd+Shift+C/V (NSEvent + Accessibility)"
                 )
             else:
-                # Python 3.13+: pynput в том же процессе, что и Tk → часто Trace/BPT (CGEventTap).
-                # Глобальные хоткеи — отдельный процесс portal_mac_hotkey_helper.py → тот же pipe, что у NSEvent.
+                # Python 3.13+: нельзя крутить NSRunLoop.runUntilDate из Tk after() — реентрантность
+                # Tcl ↔ AppKit даёт PyEval_RestoreThread / SIGABRT (см. crash: runUntilDate внутри draw).
+                # Нельзя NSEvent global в фоне — тот же GIL-крэш. Остаётся hotkey-helper subprocess + pipe.
                 self._hk_r = self._hk_w = None
+                try:
+                    import fcntl
+
+                    self._hk_r, self._hk_w = os.pipe()
+                    fcntl.fcntl(self._hk_r, fcntl.F_SETFL, os.O_NONBLOCK)
+                except Exception as e:
+                    self._log(f"⚠️ pipe хоткеев: {e}")
+                    self._hk_r = self._hk_w = None
+                self._schedule_hotkey_poll()
+
                 if os.environ.get("PORTAL_MAC_NO_HOTKEY_HELPER", "").strip() in (
                     "1",
                     "true",
                     "yes",
                 ):
                     self._log(
-                        "PORTAL_MAC_NO_HOTKEY_HELPER=1 — хоткеи только при фокусе (Tk: Cmd+Ctrl+P/C/V; "
-                        "на русской — з/с/м; LEGACY=1 — старые сочетания)"
+                        "PORTAL_MAC_NO_HOTKEY_HELPER=1 — глобальных хоткеев нет, только Tk при фокусе на Portal."
                     )
                 else:
-                    try:
-                        import fcntl
-
-                        self._hk_r, self._hk_w = os.pipe()
-                        fcntl.fcntl(self._hk_r, fcntl.F_SETFL, os.O_NONBLOCK)
-                    except Exception as e:
-                        self._log(f"⚠️ pipe хоткеев: {e}")
-                        self._hk_r = self._hk_w = None
-                    self._schedule_hotkey_poll()
                     threading.Thread(
                         target=self._run_mac_hotkey_helper_subprocess,
                         daemon=True,
                         name="portal-mac-hotkey-helper",
                     ).start()
-                    # NSEvent local monitor + Tk 3.13 давали SIGABRT (PyEval_RestoreThread) при хоткее.
-                    # Включай вручную, если bind_all в окне Portal совсем молчит: PORTAL_MAC_NSLOCAL_MONITOR=1
-                    if os.environ.get("PORTAL_MAC_NSLOCAL_MONITOR", "").strip().lower() in (
-                        "1",
-                        "true",
-                        "yes",
-                    ):
-                        try:
-                            self.main_app.after(350, self._setup_nslocal_monitor)
-                        except Exception as e:
-                            self._log(f"after(local monitor 3.13+): {e}")
                     try:
-                        self.main_app.after(2800, self._hotkey_helper_healthcheck)
+                        self.main_app.after(3500, self._hotkey_helper_healthcheck)
                     except Exception:
                         pass
-                    self._log(
-                        "⌛ macOS 3.13+: снаружи окна — helper (CGEventTap→NSEvent→pipe); "
-                        "внутри окна — Tk bind_all. Local NSEvent (если bind пустой): "
-                        "PORTAL_MAC_NSLOCAL_MONITOR=1. Права «Мониторинг ввода»: "
-                        + _mac_privacy_target_hint()
-                    )
+
+                if os.environ.get("PORTAL_MAC_NSLOCAL_MONITOR", "").strip().lower() in (
+                    "1",
+                    "true",
+                    "yes",
+                ):
+                    try:
+                        self.main_app.after(350, self._setup_nslocal_monitor)
+                    except Exception as e:
+                        self._log(f"after(local monitor 3.13+): {e}")
+
+                self._log(
+                    "⌛ macOS 3.13+: глобальные хоткеи — процесс hotkey-helper → pipe (без NSRunLoop в Tk). "
+                    "Права «Мониторинг ввода»: "
+                    + _mac_privacy_target_hint()
+                )
         else:
             t = threading.Thread(target=self._run_win, daemon=True, name="portal-hotkeys-win")
             t.start()
+
+        # Журнал: внутри CTkTextbox события обрабатывает класс Text раньше bind_all → хоткеи «молчат».
+        try:
+            lt = getattr(self.main_app, "log_text", None)
+            if lt is not None:
+                self.bind_inner_text_hotkeys(lt)
+        except Exception:
+            pass
+
+    def bind_inner_text_hotkeys(self, ctk_text_widget: Any) -> None:
+        """
+        CustomTkinter CTkTextbox: цепочка bindtags у внутреннего tk.Text обрабатывает клавиши до тега «all»,
+        поэтому bind_all не срабатывает при фокусе в журнале (и в других многострочных полях).
+        Дублируем сочетания на _textbox с add=True и return "break".
+        """
+        inner = getattr(ctk_text_widget, "_textbox", None)
+        if inner is None or not hasattr(inner, "bind"):
+            return
+
+        def _toggle(_e=None):
+            self._log("Tk bind (текстовое поле) → переключить виджет", "🔑")
+            self._toggle_ui()
+            return "break"
+
+        def _push(_e=None):
+            self._log("Tk bind (текстовое поле) → отправить буфер", "🔑")
+            self._on_push()
+            return "break"
+
+        def _pull(_e=None):
+            self._log("Tk bind (текстовое поле) → забрать буфер с удалённого ПК", "🔑")
+            self._on_pull()
+            return "break"
+
+        toggle_seqs, push_seqs, pull_seqs = _portal_hotkey_tk_sequences()
+        for seq in toggle_seqs:
+            try:
+                inner.bind(seq, _toggle, add=True)
+            except Exception:
+                pass
+        for seq in push_seqs:
+            try:
+                inner.bind(seq, _push, add=True)
+            except Exception:
+                pass
+        for seq in pull_seqs:
+            try:
+                inner.bind(seq, _pull, add=True)
+            except Exception:
+                pass
+
+    def _mac_keypress_cmd_ctrl_hotkey(self, event) -> Optional[str]:
+        """
+        Раскладка РУ: последовательности <Command-Control-p> часто не срабатывают в Tk.
+        Ловим те же физические keycode, что и portal_mac_hotkey_helper (35=P, 8=C, 9=V),
+        при зажатых Cmd+Ctrl. Для латинской раскладки не дублируем — там уже bind_all.
+        """
+        if not self._running or platform.system() != "Darwin":
+            return None
+        if os.environ.get("PORTAL_MAC_HOTKEY_LEGACY", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            return None
+        try:
+            kc = int(getattr(event, "keycode", 0) or 0)
+        except (TypeError, ValueError):
+            return None
+        if kc not in (35, 8, 9):
+            return None
+        ks = getattr(event, "keysym", "") or ""
+        if len(ks) == 1 and ks.isascii() and ks.lower() in "pcv":
+            return None
+        st = int(getattr(event, "state", 0) or 0)
+        if not (st & 0x0004):
+            return None
+        rem = st & ~(0x0004 | 0x0001 | 0x0002)
+        if rem == 0:
+            return None
+        if kc == 35:
+            self._log("Tk физ. клавиша (напр. РУ) → переключить виджет", "🔑")
+            self._toggle_ui()
+            return "break"
+        if kc == 8:
+            self._log("Tk физ. клавиша → отправить буфер", "🔑")
+            self._on_push()
+            return "break"
+        if kc == 9:
+            self._log("Tk физ. клавиша → забрать буфер", "🔑")
+            self._on_pull()
+            return "break"
+        return None
 
     # ── 1. Tk bind_all ─────────────────────────────────────────────────────────
 
@@ -2006,142 +2240,7 @@ class GlobalHotkeyManager:
             pass
 
         try:
-            if is_mac:
-                legacy = os.environ.get("PORTAL_MAC_HOTKEY_LEGACY", "").strip().lower() in (
-                    "1",
-                    "true",
-                    "yes",
-                )
-                if legacy:
-                    toggle_seqs = [
-                        "<Command-Option-p>",
-                        "<Command-Alt-p>",
-                        "<Meta-Option-p>",
-                        "<Meta-Alt-p>",
-                        "<Command-Option-P>",
-                        "<Meta-Option-P>",
-                    ]
-                    push_seqs = [
-                        "<Command-Shift-C>",
-                        "<Command-Shift-c>",
-                        "<Meta-Shift-C>",
-                        "<Meta-Shift-c>",
-                    ]
-                    pull_seqs = [
-                        "<Command-Shift-V>",
-                        "<Command-Shift-v>",
-                        "<Meta-Shift-V>",
-                        "<Meta-Shift-v>",
-                        "<Command-Option-v>",
-                        "<Command-Option-V>",
-                        "<Meta-Option-v>",
-                        "<Meta-Option-V>",
-                    ]
-                    # Legacy + русская раскладка (физические C→с, V→м, P→з)
-                    toggle_seqs += [
-                        "<Command-Option-з>",
-                        "<Command-Option-З>",
-                        "<Meta-Option-з>",
-                        "<Meta-Option-З>",
-                    ]
-                    push_seqs += [
-                        "<Command-Shift-с>",
-                        "<Command-Shift-С>",
-                        "<Meta-Shift-с>",
-                        "<Meta-Shift-С>",
-                    ]
-                    pull_seqs += [
-                        "<Command-Shift-м>",
-                        "<Command-Shift-М>",
-                        "<Meta-Shift-м>",
-                        "<Meta-Shift-М>",
-                        "<Command-Option-м>",
-                        "<Command-Option-М>",
-                        "<Meta-Option-м>",
-                        "<Meta-Option-М>",
-                    ]
-                else:
-                    # Только Cmd+Ctrl — без Cmd+Shift (часто занят Terminal / IDE)
-                    toggle_seqs = [
-                        "<Command-Control-p>",
-                        "<Command-Control-P>",
-                        "<Control-Command-p>",
-                        "<Control-Command-P>",
-                        "<Meta-Control-p>",
-                        "<Meta-Control-P>",
-                    ]
-                    push_seqs = [
-                        "<Command-Control-c>",
-                        "<Command-Control-C>",
-                        "<Control-Command-c>",
-                        "<Control-Command-C>",
-                    ]
-                    pull_seqs = [
-                        "<Command-Control-v>",
-                        "<Command-Control-V>",
-                        "<Control-Command-v>",
-                        "<Control-Command-V>",
-                    ]
-                    # ЙЦУКЕН: те же физические клавиши (P→з, C→с, V→м)
-                    toggle_seqs += [
-                        "<Command-Control-з>",
-                        "<Command-Control-З>",
-                        "<Control-Command-з>",
-                        "<Control-Command-З>",
-                        "<Meta-Control-з>",
-                        "<Meta-Control-З>",
-                    ]
-                    push_seqs += [
-                        "<Command-Control-с>",
-                        "<Command-Control-С>",
-                        "<Control-Command-с>",
-                        "<Control-Command-С>",
-                    ]
-                    pull_seqs += [
-                        "<Command-Control-м>",
-                        "<Command-Control-М>",
-                        "<Control-Command-м>",
-                        "<Control-Command-М>",
-                    ]
-            else:
-                # Несколько вариантов: раскладка/регистр, AltGr, порядок модификаторов
-                toggle_seqs = [
-                    "<Control-Alt-p>",
-                    "<Control-Alt-P>",
-                    "<Alt-Control-p>",
-                    "<Alt-Control-P>",
-                    "<Control_L-Alt_L-p>",
-                    "<Control_L-Alt_L-P>",
-                ]
-                push_seqs = [
-                    "<Control-Alt-c>",
-                    "<Control-Alt-C>",
-                    "<Alt-Control-c>",
-                ]
-                pull_seqs = [
-                    "<Control-Alt-v>",
-                    "<Control-Alt-V>",
-                    "<Alt-Control-v>",
-                ]
-                # Та же физическая клавиатура, русская раскладка (ЙЦУКЕН: P→з, C→с, V→м)
-                toggle_seqs += [
-                    "<Control-Alt-з>",
-                    "<Control-Alt-З>",
-                    "<Alt-Control-з>",
-                    "<Alt-Control-З>",
-                ]
-                push_seqs += [
-                    "<Control-Alt-с>",
-                    "<Control-Alt-С>",
-                    "<Alt-Control-с>",
-                    "<Alt-Control-С>",
-                ]
-                pull_seqs += [
-                    "<Control-Alt-м>",
-                    "<Control-Alt-М>",
-                    "<Alt-Control-м>",
-                    "<Alt-Control-М>",
-                ]
+            toggle_seqs, push_seqs, pull_seqs = _portal_hotkey_tk_sequences()
 
             # bind_all — на корневом Tk (и дублируем на main_app, если это другой объект — CTk/обёртки)
             primaries = []
@@ -2185,6 +2284,14 @@ class GlobalHotkeyManager:
                         pass
 
             if is_mac:
+                try:
+                    self.main_app.bind_all(
+                        "<KeyPress>",
+                        self._mac_keypress_cmd_ctrl_hotkey,
+                        add="+",
+                    )
+                except Exception:
+                    pass
                 self._log(
                     "Tk bind_all (macOS: по умолчанию Cmd+Ctrl+P/C/V; legacy: PORTAL_MAC_HOTKEY_LEGACY=1)"
                 )
@@ -2288,6 +2395,7 @@ class GlobalHotkeyManager:
                 + _mac_privacy_target_hint()
                 + " Полный выход из Portal (Cmd+Q) и запуск снова."
             )
+            self._maybe_prompt_input_monitoring_dialog()
             return
         # Процесс жив — монитор ещё не отрапортовал (нормально при медленной инициализации NSApp)
         self._log(
@@ -2296,6 +2404,7 @@ class GlobalHotkeyManager:
             "Внутри окна — Tk bind_all (local NSEvent: PORTAL_MAC_NSLOCAL_MONITOR=1, нестабильно на 3.13). Права TCC: "
             + _mac_privacy_target_hint()
         )
+        self._maybe_prompt_input_monitoring_dialog()
 
     def _setup_nslocal_monitor(self) -> None:
         """События внутри приложения Портал (global их не видит)."""
@@ -2380,7 +2489,22 @@ class GlobalHotkeyManager:
             pass
         return None
 
-    # ── 2. NSEvent global monitor (фоновый поток) ─────────────────────────────
+    def _maybe_prompt_input_monitoring_dialog(self) -> None:
+        """Один раз за сессию — кнопка открыть «Мониторинг ввода»."""
+        if self._mac_input_dialog_shown:
+            return
+        if portal_mac_permissions.skip_mac_permission_ui():
+            return
+        self._mac_input_dialog_shown = True
+        try:
+            self.main_app.after(
+                400,
+                lambda app=self.main_app: portal_mac_permissions.show_input_monitoring_dialog(app),
+            )
+        except Exception:
+            pass
+
+    # ── 2. NSEvent global monitor — фоновый поток (Python < 3.13) ───────────
 
     def _run_mac_global(self):
         """Фоновый поток с NSRunLoop. Ловит события когда ДРУГОЕ приложение в фокусе."""

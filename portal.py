@@ -22,6 +22,7 @@ if sys.version_info >= (3, 13) and not os.environ.get("_PORTAL_PY313_WARN_DONE")
     print("   Если видите ошибки, попробуйте: pyenv install 3.12.7 && pyenv local 3.12.7\n")
 
 import customtkinter as ctk
+import tkinter as tk
 import socket
 import threading
 import json
@@ -43,6 +44,17 @@ import portal_config
 import portal_i18n as i18n
 import portal_clipboard_rich as portal_clip_rich
 from portal_tk_compat import ensure_tkdnd_tk_misc_patch
+
+
+def _portal_widget_tk_alive(widget) -> bool:
+    """Окно виджета (Toplevel) ещё существует — иначе after() даёт TclError «bad window path»."""
+    try:
+        r = getattr(widget, "root", None)
+        if r is None:
+            return False
+        return bool(r.winfo_exists())
+    except tk.TclError:
+        return False
 
 
 def _portal_message_from_mobile(message: Optional[dict]) -> bool:
@@ -2803,6 +2815,8 @@ class PortalApp(ctk.CTk):
 
         def run() -> None:
             try:
+                if not _portal_widget_tk_alive(w):
+                    return
                 self._widget_pulse_generation += 1
                 gen = self._widget_pulse_generation
                 was_visible = False
@@ -2818,6 +2832,8 @@ class PortalApp(ctk.CTk):
                 def hide_later() -> None:
                     if self._widget_pulse_generation != gen:
                         return
+                    if not _portal_widget_tk_alive(w):
+                        return
                     try:
                         if hasattr(w, "clear_transient_portal_media"):
                             w.clear_transient_portal_media()
@@ -2827,10 +2843,14 @@ class PortalApp(ctk.CTk):
                                     w.hide()
                             except Exception:
                                 pass
+                    except tk.TclError:
+                        pass
                     except Exception:
                         pass
 
                 self.after(int(seconds * 1000), hide_later)
+            except tk.TclError as ex:
+                self.log(f"⚠️ Превью пресета: {ex}")
             except Exception as ex:
                 self.log(f"⚠️ Превью пресета: {ex}")
 
@@ -2886,6 +2906,8 @@ class PortalApp(ctk.CTk):
 
         def run() -> None:
             try:
+                if not _portal_widget_tk_alive(w):
+                    return
                 self._widget_pulse_generation += 1
                 gen = self._widget_pulse_generation
                 was_visible = False
@@ -2904,6 +2926,8 @@ class PortalApp(ctk.CTk):
                 def hide_later() -> None:
                     if self._widget_pulse_generation != gen:
                         return
+                    if not _portal_widget_tk_alive(w):
+                        return
                     try:
                         if hasattr(w, "clear_transient_portal_media"):
                             w.clear_transient_portal_media()
@@ -2913,10 +2937,17 @@ class PortalApp(ctk.CTk):
                                     w.hide()
                             except Exception:
                                 pass
+                    except tk.TclError:
+                        pass
                     except Exception:
                         pass
 
                 self.after(int(seconds * 1000), hide_later)
+            except tk.TclError as ex:
+                try:
+                    self.log(f"⚠️ Импульс виджета: {ex}")
+                except Exception:
+                    pass
             except Exception as ex:
                 try:
                     self.log(f"⚠️ Импульс виджета: {ex}")
@@ -4886,6 +4917,13 @@ if __name__ == "__main__":
             app._hotkey_mgr = hk
             hk.start()
             widget.root.withdraw()
+            if platform.system() == "Darwin":
+                try:
+                    from portal_mac_permissions import schedule_mac_permission_flow
+
+                    app.after(500, lambda: schedule_mac_permission_flow(app))
+                except Exception:
+                    pass
             app.log(
                 "✅ Виджет скрыт по умолчанию — Ctrl+Alt+P (Win) / Cmd+Ctrl+P (Mac; LEGACY: Cmd+Option+P) чтобы показать"
             )
