@@ -99,6 +99,23 @@ fi
 echo "✅ Синтаксис OK"
 echo ""
 
+# Быстрая проверка после merge (парс JSON, PortalApp). Пропуск: PORTAL_SKIP_SMOKE=1
+if [[ "${PORTAL_SKIP_SMOKE:-}" != "1" ]]; then
+    echo "🧪 Smoke: scripts/verify_portal_smoke.py…"
+    if ! python3 scripts/verify_portal_smoke.py; then
+        echo ""
+        echo "❌ Smoke не прошёл — Портал не запускаем. См. вывод выше (git pull / починка кода)."
+        echo "   Пропустить один раз: PORTAL_SKIP_SMOKE=1 $0"
+        read -p "Нажмите Enter для выхода..."
+        exit 1
+    fi
+    echo "✅ Smoke OK"
+    echo ""
+else
+    echo "⏭️  Smoke пропущен (PORTAL_SKIP_SMOKE=1)"
+    echo ""
+fi
+
 if [[ "$FOREGROUND" == "1" ]]; then
     echo "🚀 Запуск в переднем плане (это окно останется «хозяином» процесса)..."
     exec env PYTHONUNBUFFERED=1 python3 -u portal.py "$@"

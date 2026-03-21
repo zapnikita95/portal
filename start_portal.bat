@@ -86,6 +86,26 @@ if errorlevel 1 (
 echo ✅ Синтаксис OK
 echo.
 
+REM Smoke после merge / битого кода. Пропуск: set PORTAL_SKIP_SMOKE=1
+if /I "%PORTAL_SKIP_SMOKE%"=="1" (
+    echo ⏭️  Smoke пропущен ^(PORTAL_SKIP_SMOKE=1^)
+    echo.
+    goto after_smoke
+)
+echo 🧪 Проверка smoke ^(scripts\verify_portal_smoke.py^)...
+python scripts\verify_portal_smoke.py
+if errorlevel 1 (
+    echo.
+    echo ❌ Smoke не прошёл — Портал не запускаем. См. вывод выше ^(git pull^).
+    echo    Пропуск: set PORTAL_SKIP_SMOKE=1 и снова запусти этот bat
+    echo.
+    pause
+    exit /b 1
+)
+echo ✅ Smoke OK
+echo.
+:after_smoke
+
 REM Запуск БЕЗ --widget, т.к. теперь виджет запускается по умолчанию
 python portal.py
 

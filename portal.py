@@ -390,6 +390,8 @@ class PortalApp(ctk.CTk):
         # Один push буфера за раз (двойной хоткей / два источника событий)
         self._clipboard_push_lock = threading.Lock()
         self._clipboard_pull_lock = threading.Lock()
+        # После записи файлов в буфер pyperclip часто пустой — не дергать sync по ложному «изменению»
+        self._clipboard_ignore_until = 0.0
         # pynput / windnd — только put в очередь; разбор на главном потоке Tk
         self._ui_signal_queue: queue.SimpleQueue = queue.SimpleQueue()
         self.portal_widget_ref: Optional[Any] = None
@@ -1876,11 +1878,23 @@ class PortalApp(ctk.CTk):
             mode = portal_config.load_incoming_clipboard_files_mode()
             msg = ""
             if mode in ("clipboard", "both"):
-                msg = portal_clip_rich.apply_clipboard_payload(
-                    "files", file_paths=paths
-                )
+                # macOS: сначала NSPasteboard (NSURL) в процессе приложения — надёжнее для Finder, чем osascript
+                if platform.system() == "Darwin" and set_system_clipboard_file_paths(paths):
+                    msg = (
+                        f"файлы в буфере ({len(paths)} шт.) — в Finder: открой нужную папку, "
+                        "кликни в список файлов, Cmd+V. "
+                        "(Cmd+Shift+V у Портала = «забрать буфер с пира», не вставка.)"
+                    )
+                else:
+                    msg = portal_clip_rich.apply_clipboard_payload(
+                        "files", file_paths=paths
+                    )
                 try:
                     self.last_clipboard = "\n".join(paths)
+                except Exception:
+                    pass
+                try:
+                    self._clipboard_ignore_until = time.monotonic() + 5.0
                 except Exception:
                     pass
 
@@ -2758,6 +2772,11 @@ class PortalApp(ctk.CTk):
         """Один тик проверки буфера — вызывается на главном потоке"""
         try:
             if not self.is_receiving_clipboard:
+                if time.monotonic() < getattr(
+                    self, "_clipboard_ignore_until", 0.0
+                ):
+                    self.after(1000, self._clipboard_tick)
+                    return
                 current = pyperclip.paste()
                 if current != self.last_clipboard:
                     self.last_clipboard = current

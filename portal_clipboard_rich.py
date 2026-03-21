@@ -19,6 +19,77 @@ ClipKind = Literal["empty", "text", "image", "files"]
 _MAX_IMAGE_SEND_BYTES = 48 * 1024 * 1024  # 48 МБ сырого PNG
 
 
+def _darwin_clipboard_file_paths() -> List[str]:
+    """
+    Файлы, скопированные в Finder / Cmd+C (NSPasteboard).
+    Pillow ImageGrab и pyperclip на macOS их не видят — без этого push хоткей шлёт текст/пусто.
+    """
+    if platform.system() != "Darwin":
+        return []
+    try:
+        from AppKit import NSPasteboard
+        from Foundation import NSURL
+
+        pb = NSPasteboard.generalPasteboard()
+        if pb is None:
+            return []
+        urls = pb.readObjectsForClasses_options_([NSURL], None)
+        if urls:
+            out: List[str] = []
+            for u in urls:
+                try:
+                    if u.isFileURL():
+                        p = str(u.path())
+                        if p and os.path.isfile(p):
+                            out.append(p)
+                except Exception:
+                    continue
+            if out:
+                return out
+    except Exception:
+        pass
+    # Без PyObjC или нестандартный тип — пробуем AppleScript
+    scpt = r"""
+    try
+      set c to the clipboard
+      if c is {} then
+        return ""
+      else if (class of c) is list then
+        set out to ""
+        repeat with itm in c
+          try
+            set out to out & (POSIX path of itm) & linefeed
+          end try
+        end repeat
+        return out
+      else
+        try
+          return (POSIX path of c) & linefeed
+        on error
+          return ""
+        end try
+      end if
+    on error
+      return ""
+    end try
+    """
+    try:
+        r = subprocess.run(
+            ["osascript", "-e", scpt],
+            capture_output=True,
+            text=True,
+            timeout=12,
+        )
+        if r.returncode == 0 and (r.stdout or "").strip():
+            lines = [ln.strip() for ln in r.stdout.replace("\r", "").split("\n") if ln.strip()]
+            paths = [ln for ln in lines if os.path.isfile(ln)]
+            if paths:
+                return paths
+    except Exception:
+        pass
+    return []
+
+
 def clipboard_snapshot() -> Tuple[ClipKind, Dict[str, Any]]:
     """
     Снимок буфера для отправки (Ctrl+Alt+C).
@@ -34,6 +105,11 @@ def clipboard_snapshot() -> Tuple[ClipKind, Dict[str, Any]]:
         paths = [p for p in data if isinstance(p, str) and os.path.isfile(p)]
         if paths:
             return "files", {"paths": paths}
+
+    if platform.system() == "Darwin":
+        dpaths = _darwin_clipboard_file_paths()
+        if dpaths:
+            return "files", {"paths": dpaths}
 
     if data is not None and hasattr(data, "save"):
         try:
@@ -180,7 +256,8 @@ def apply_clipboard_payload(
             ok, err = _darwin_set_clipboard_files(existing)
             if ok:
                 return (
-                    f"файлы в буфере ({len(existing)} шт.) — Cmd+V в Finder или другое приложение"
+                    f"файлы в буфере ({len(existing)} шт.) — в Finder: открой папку, клик в окно, "
+                    "Cmd+V (вставка). Cmd+Shift+V у Портала = «забрать с другого ПК», не вставка."
                 )
             import pyperclip
 
