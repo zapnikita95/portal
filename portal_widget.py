@@ -729,50 +729,83 @@ class GlobalHotkeyManager:
         self._safe_log("Поток хоткеев: _run() начат")
         log_file = str(debug_log_path())
         self._safe_log(f"Файл отладки: {log_file}")
+        self._safe_log(f"Платформа: {platform.system()}")
 
         # Windows: сначала keyboard — у pynput часто Ctrl+Alt «молчит» (драйверы, AltGr, Intel и т.д.)
         if platform.system() == "win32":
+            self._safe_log("🔍 Windows обнаружен — пробую keyboard ПЕРВЫМ (надёжнее чем pynput для Ctrl+Alt)")
             if self._run_windows_keyboard_primary():
+                self._safe_log("✅ keyboard успешно запущен, поток заблокирован на kb.wait()")
                 return
+            self._safe_log("⚠️ keyboard не сработал, переключаюсь на pynput…")
 
         self._run_pynput()
 
     def _run_windows_keyboard_primary(self) -> bool:
         """True если keyboard запущен и держит поток (kb.wait)."""
+        self._safe_log("🔍 Windows: проверяю библиотеку keyboard…")
         try:
             import keyboard as kb  # type: ignore
+            self._safe_log("✅ keyboard импортирован успешно")
         except ImportError as e:
-            self._safe_log(f"keyboard не установлен ({e}), пробую pynput…")
+            self._safe_log(f"❌ keyboard не установлен ({e}), пробую pynput…")
             return False
+        except Exception as e:
+            self._safe_log(f"❌ Ошибка импорта keyboard: {e!r}")
+            import traceback
+            self._safe_log(traceback.format_exc())
+            return False
+
         try:
             self._safe_log(
-                "Windows: глобальные хоткеи через библиотеку keyboard "
+                "🔧 Windows: регистрирую хоткеи через keyboard "
                 "(Ctrl+Alt+P / C / V). Если не срабатывает — отключи оверлеи (GeForce/AMD) или смени раскладку."
             )
+            self._safe_log("  Регистрация Ctrl+Alt+P…")
             kb.add_hotkey("ctrl+alt+p", self.toggle_widget, suppress=False)
+            self._safe_log("  ✅ Ctrl+Alt+P зарегистрирован")
+            
+            self._safe_log("  Регистрация Ctrl+Alt+C…")
             kb.add_hotkey("ctrl+alt+c", self.push_clipboard, suppress=False)
+            self._safe_log("  ✅ Ctrl+Alt+C зарегистрирован")
+            
+            self._safe_log("  Регистрация Ctrl+Alt+V…")
             kb.add_hotkey("ctrl+alt+v", self.pull_clipboard, suppress=False)
+            self._safe_log("  ✅ Ctrl+Alt+V зарегистрирован")
+            
             # Запас: Win+Shift+P (редко перехватывают)
-            kb.add_hotkey("windows+shift+p", self.toggle_widget, suppress=False)
-            self._safe_log("Запасной хоткей: Win+Shift+P — показать/скрыть портал")
-            self._safe_log("keyboard: слушатель активен (kb.wait).")
-            kb.wait()
+            self._safe_log("  Регистрация Win+Shift+P (запасной)…")
+            try:
+                kb.add_hotkey("windows+shift+p", self.toggle_widget, suppress=False)
+                self._safe_log("  ✅ Win+Shift+P зарегистрирован")
+            except Exception as e2:
+                self._safe_log(f"  ⚠️ Win+Shift+P не удался: {e2} (не критично)")
+            
+            self._safe_log("🚀 keyboard: ВСЕ хоткеи зарегистрированы, слушатель активен (kb.wait блокирует поток)")
+            self._safe_log("💡 ЖМИ Ctrl+Alt+P — должен появиться лог «🔥🔥🔥 НАЖАТО сочетание портала»")
+            kb.wait()  # Блокирует поток навсегда
             return True
         except Exception as e:
             import traceback
 
-            self._safe_log(f"keyboard на Windows не удался: {e!r}")
+            self._safe_log(f"❌ keyboard на Windows упал при регистрации: {e!r}")
             self._safe_log(traceback.format_exc())
+            self._safe_log("⚠️ Переключаюсь на pynput…")
             return False
 
     def _run_pynput(self) -> None:
         """macOS / Linux / запас на Windows."""
+        self._safe_log("🔍 Пробую pynput (запасной вариант)…")
         try:
             from pynput import keyboard
+            self._safe_log("✅ pynput импортирован")
         except ImportError as e:
-            self._safe_log(f"pynput не установлен ({e}) — pip install pynput")
+            self._safe_log(f"❌ pynput не установлен ({e}) — pip install pynput")
             if platform.system() == "Darwin":
                 self._safe_log("На Mac без pynput хоткеев не будет.")
+            return
+        except Exception as e:
+            self._safe_log(f"❌ Ошибка импорта pynput: {e!r}")
             return
 
         is_mac = platform.system() == "Darwin"
@@ -789,23 +822,25 @@ class GlobalHotkeyManager:
             combo["<ctrl>+<alt>+p"] = self.toggle_widget
             combo["<ctrl>+<alt>+c"] = self.push_clipboard
             combo["<ctrl>+<alt>+v"] = self.pull_clipboard
-            self._safe_log("pynput: Ctrl+Alt+P/C/V")
+            self._safe_log("⚠️ pynput на Windows: Ctrl+Alt+P/C/V (может не работать из-за драйверов/AltGr)")
 
-        self._safe_log(f"pynput комбинации: {', '.join(combo.keys())}")
+        self._safe_log(f"🔧 Регистрирую pynput комбинации: {', '.join(combo.keys())}")
 
         try:
             with keyboard.GlobalHotKeys(combo) as h:
                 self._safe_log(
-                    f"pynput GlobalHotKeys запущен. Лог-файл: {debug_log_path()}"
+                    f"✅ pynput GlobalHotKeys запущен. Лог-файл: {debug_log_path()}"
                 )
+                self._safe_log("💡 ЖМИ Ctrl+Alt+P — должен появиться лог «🔥🔥🔥 НАЖАТО сочетание портала»")
                 h.join()
         except Exception as e:
             import traceback
 
-            self._safe_log(f"pynput GlobalHotKeys упал: {e!r}")
+            self._safe_log(f"❌ pynput GlobalHotKeys упал: {e!r}")
             self._safe_log(traceback.format_exc())
             if platform.system() == "win32":
-                self._safe_log("На Windows оба бэкенда не сработали — проверь антивирус и запуск от имени пользователя (не из песочницы).")
+                self._safe_log("❌ На Windows оба бэкенда (keyboard и pynput) не сработали.")
+                self._safe_log("💡 Проверь: антивирус, запуск от имени пользователя (не из песочницы), права доступа.")
 
     def toggle_widget(self):
         self._safe_log("🔥🔥🔥 НАЖАТО сочетание портала (Ctrl+Alt+P / Cmd+Option+P) → планирую переключение в GUI")
