@@ -76,8 +76,8 @@ class PortalApp(ctk.CTk):
         super().__init__()
         
         self.title("🌀 Портал")
-        self.geometry("800x600")
-        self.minsize(600, 400)
+        self.geometry("980x880")
+        self.minsize(820, 780)
         
         # Переменные
         self.server_socket: Optional[socket.socket] = None
@@ -164,222 +164,77 @@ class PortalApp(ctk.CTk):
             return None
     
     def create_ui(self):
-        """Создание интерфейса"""
-        # Главный контейнер
+        """Создание интерфейса — сетка: сверху компактные контролы, снизу журнал (всегда виден)."""
         main_frame = ctk.CTkFrame(self)
-        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        # Заголовок
-        title_label = ctk.CTkLabel(
-            main_frame,
-            text="🌀 ПОРТАЛ",
-            font=ctk.CTkFont(size=32, weight="bold")
-        )
-        title_label.pack(pady=(20, 10))
-        
-        subtitle = ctk.CTkLabel(
-            main_frame,
-            text="Передача файлов и синхронизация буфера обмена",
-            font=ctk.CTkFont(size=14),
-            text_color="gray"
-        )
-        subtitle.pack(pady=(0, 30))
-        
-        # Информация о подключении
-        info_frame = ctk.CTkFrame(main_frame)
-        info_frame.pack(fill="x", padx=20, pady=10)
-        
+        main_frame.pack(fill="both", expand=True, padx=16, pady=16)
+        main_frame.grid_columnconfigure(0, weight=1)
+        main_frame.grid_rowconfigure(1, weight=1)  # журнал тянется
+
+        # ─── Верхний блок (компактный) ─────────────────────────────────────────
+        top_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        top_frame.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
+        top_frame.grid_columnconfigure(0, weight=1)
+
+        row0 = ctk.CTkFrame(top_frame, fg_color="transparent")
+        row0.pack(fill="x", pady=(0, 6))
+        title = ctk.CTkLabel(row0, text="🌀 ПОРТАЛ", font=ctk.CTkFont(size=26, weight="bold"))
+        title.pack(side="left")
         if self.tailscale_ip:
-            if self.tailscale_ip.startswith("100."):
-                ip_label = ctk.CTkLabel(
-                    info_frame,
-                    text=f"📍 Tailscale IP: {self.tailscale_ip}",
-                    font=ctk.CTkFont(size=12)
-                )
-                ip_label.pack(pady=10)
-            else:
-                ip_label = ctk.CTkLabel(
-                    info_frame,
-                    text=f"📍 Локальный IP: {self.tailscale_ip} (Tailscale не обнаружен)",
-                    font=ctk.CTkFont(size=12),
-                    text_color="orange"
-                )
-                ip_label.pack(pady=10)
+            ip_txt = f"📍 {self.tailscale_ip}" + (" (Tailscale)" if self.tailscale_ip.startswith("100.") else "")
+            ip_color = "gray" if self.tailscale_ip.startswith("100.") else "orange"
+            ctk.CTkLabel(row0, text=ip_txt, font=ctk.CTkFont(size=12), text_color=ip_color).pack(side="left", padx=(16, 0))
         else:
-            warning_label = ctk.CTkLabel(
-                info_frame,
-                text="⚠️ IP адрес не определен",
-                font=ctk.CTkFont(size=12),
-                text_color="orange"
-            )
-            warning_label.pack(pady=10)
-        
-        # IP второго компьютера (сохраняется в %APPDATA%/Portal или ~/Library/...)
-        peer_frame = ctk.CTkFrame(main_frame)
-        peer_frame.pack(fill="x", padx=20, pady=(0, 10))
-        ctk.CTkLabel(
-            peer_frame,
-            text="🖥 IP второго компьютера (Tailscale / LAN) — указывается один раз:",
-            font=ctk.CTkFont(size=13, weight="bold"),
-        ).pack(anchor="w", padx=12, pady=(10, 4))
-        ctk.CTkLabel(
-            peer_frame,
-            text="Сохраняется на диск. Отправка файлов/буфера и виджет используют его без повторных вопросов.",
-            font=ctk.CTkFont(size=11),
-            text_color="gray",
-        ).pack(anchor="w", padx=12, pady=(0, 4))
-        ctk.CTkLabel(
-            peer_frame,
-            text=f"💡 Указывай только IP (например 100.65.63.84), порт :{PORTAL_PORT} добавляется автоматически.",
-            font=ctk.CTkFont(size=11),
-            text_color="gray70",
-        ).pack(anchor="w", padx=12, pady=(0, 8))
-        row = ctk.CTkFrame(peer_frame, fg_color="transparent")
-        row.pack(fill="x", padx=12, pady=(0, 12))
-        self.peer_ip_entry = ctk.CTkEntry(row, width=280, placeholder_text="например 100.65.63.84")
-        self.peer_ip_entry.pack(side="left", padx=(0, 10))
+            ctk.CTkLabel(row0, text="⚠️ IP не определён", font=ctk.CTkFont(size=12), text_color="orange").pack(side="left", padx=(16, 0))
+
+        # IP пары + кнопки в одну строку
+        row1 = ctk.CTkFrame(top_frame, fg_color="transparent")
+        row1.pack(fill="x", pady=(0, 4))
+        ctk.CTkLabel(row1, text="🖥 IP пары:", font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", padx=(0, 8))
+        self.peer_ip_entry = ctk.CTkEntry(row1, width=200, placeholder_text="100.65.63.84")
+        self.peer_ip_entry.pack(side="left", padx=(0, 8))
         if self.remote_peer_ip:
             self.peer_ip_entry.insert(0, self.remote_peer_ip)
         self.peer_ip_entry.bind("<KeyRelease>", self._on_peer_ip_edited)
-        ctk.CTkButton(
-            row,
-            text="Сохранить IP",
-            width=120,
-            command=self.save_peer_ip_from_ui,
-            font=ctk.CTkFont(size=13),
-        ).pack(side="left")
-        self.ip_saved_feedback = ctk.CTkLabel(
-            row,
-            text="",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            text_color="#3dd68c",
-        )
-        self.ip_saved_feedback.pack(side="left", padx=(10, 0))
+        ctk.CTkButton(row1, text="Сохранить IP", width=110, command=self.save_peer_ip_from_ui, font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 8))
+        self.ip_saved_feedback = ctk.CTkLabel(row1, text="", font=ctk.CTkFont(size=12, weight="bold"), text_color="#3dd68c")
+        self.ip_saved_feedback.pack(side="left")
 
-        # Подсказки по хоткеям (виджет + общий буфер)
-        hotkey_frame = ctk.CTkFrame(peer_frame, fg_color="transparent")
-        hotkey_frame.pack(fill="x", padx=12, pady=(0, 10))
-        if platform.system() == "Darwin":
-            hotkey_text = (
-                "🔑 Быстрые клавиши (запуск с «Виджет на рабочем столе» / --widget):\n"
-                "   Показать или скрыть портал — Cmd+Option+P\n"
-                "   Отправить буфер на другой ПК — Cmd+Shift+C\n"
-                "   Вставить буфер с другого ПК — Cmd+Shift+V"
-            )
-        else:
-            hotkey_text = (
-                "🔑 Быстрые клавиши:\n"
-                "   Показать или скрыть портал — Ctrl+Alt+P (запас: Win+Shift+P)\n"
-                "   Отправить буфер на другой ПК — Ctrl+Alt+C\n"
-                "   Вставить буфер с другого ПК — Ctrl+Alt+V"
-            )
-        ctk.CTkLabel(
-            hotkey_frame,
-            text=hotkey_text,
-            font=ctk.CTkFont(size=12),
-            text_color="gray",
-            justify="left",
-            anchor="w",
-        ).pack(anchor="w")
-
-        # Статус связи с парой (ping/pong к Порталу на другом ПК)
+        # Статус связи (одна строка)
         self._peer_poll_job = None
-        conn_frame = ctk.CTkFrame(peer_frame, fg_color="transparent")
-        conn_frame.pack(fill="x", padx=12, pady=(4, 10))
-        ctk.CTkLabel(
-            conn_frame,
-            text="📡 Статус связи",
-            font=ctk.CTkFont(size=13, weight="bold"),
-        ).pack(anchor="w", pady=(0, 4))
-        self.local_link_status_label = ctk.CTkLabel(
-            conn_frame,
-            text="⏸ Локальный приём: неизвестно",
-            font=ctk.CTkFont(size=12),
-            text_color="gray",
-            justify="left",
-            anchor="w",
-        )
-        self.local_link_status_label.pack(anchor="w")
-        self.peer_link_status_label = ctk.CTkLabel(
-            conn_frame,
-            text="⚪ Пара: укажи IP и нажми «Сохранить IP»",
-            font=ctk.CTkFont(size=12),
-            text_color="gray",
-            justify="left",
-            anchor="w",
-        )
-        self.peer_link_status_label.pack(anchor="w", pady=(2, 6))
-        probe_row = ctk.CTkFrame(conn_frame, fg_color="transparent")
-        probe_row.pack(anchor="w", fill="x")
-        ctk.CTkButton(
-            probe_row,
-            text="🔄 Проверить связь",
-            width=160,
-            command=lambda: self.check_peer_connection_async(silent=False),
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left")
-        ctk.CTkLabel(
-            probe_row,
-            text=f"авто каждые {PEER_STATUS_POLL_MS // 1000} с, если указан IP",
-            font=ctk.CTkFont(size=11),
-            text_color="gray",
-        ).pack(side="left", padx=(12, 0))
-        
-        # Кнопки управления
-        button_frame = ctk.CTkFrame(main_frame)
-        button_frame.pack(fill="x", padx=20, pady=20)
-        
-        self.start_button = ctk.CTkButton(
-            button_frame,
-            text="🚀 Запустить портал",
-            command=self.toggle_server,
-            font=ctk.CTkFont(size=14, weight="bold"),
-            height=40
-        )
-        self.start_button.pack(side="left", padx=10, pady=10, fill="x", expand=True)
-        
-        self.send_button = ctk.CTkButton(
-            button_frame,
-            text="📤 Отправить файл",
-            command=self.send_file_dialog,
-            font=ctk.CTkFont(size=14),
-            height=40,
-            state="disabled"
-        )
-        self.send_button.pack(side="left", padx=10, pady=10, fill="x", expand=True)
-        
-        self.clipboard_button = ctk.CTkButton(
-            button_frame,
-            text="📋 Отправить буфер",
-            command=self.send_clipboard_dialog,
-            font=ctk.CTkFont(size=14),
-            height=40,
-            state="disabled"
-        )
-        self.clipboard_button.pack(side="left", padx=10, pady=10, fill="x", expand=True)
-        
-        # Статус
-        self.status_label = ctk.CTkLabel(
-            main_frame,
-            text="⏸ Портал остановлен",
-            font=ctk.CTkFont(size=12),
-            text_color="gray"
-        )
-        self.status_label.pack(pady=10)
-        
-        # Лог активности
+        row2 = ctk.CTkFrame(top_frame, fg_color="transparent")
+        row2.pack(fill="x", pady=(0, 4))
+        self.local_link_status_label = ctk.CTkLabel(row2, text="⏸ Приём: выключен", font=ctk.CTkFont(size=11), text_color="gray")
+        self.local_link_status_label.pack(side="left", padx=(0, 16))
+        self.peer_link_status_label = ctk.CTkLabel(row2, text="⚪ Пара: укажи IP", font=ctk.CTkFont(size=11), text_color="gray")
+        self.peer_link_status_label.pack(side="left", padx=(0, 12))
+        ctk.CTkButton(row2, text="🔄 Проверить", width=100, command=lambda: self.check_peer_connection_async(silent=False), font=ctk.CTkFont(size=11)).pack(side="left")
+
+        # Хоткеи (одна строка)
+        row3 = ctk.CTkFrame(top_frame, fg_color="transparent")
+        row3.pack(fill="x", pady=(0, 6))
+        hk = "Ctrl+Alt+P показ | C/V буфер" if platform.system() != "Darwin" else "Cmd+Option+P | Cmd+Shift+C/V"
+        ctk.CTkLabel(row3, text=f"🔑 {hk}", font=ctk.CTkFont(size=11), text_color="gray70").pack(side="left")
+
+        # Кнопки
+        btn_row = ctk.CTkFrame(top_frame, fg_color="transparent")
+        btn_row.pack(fill="x", pady=(0, 4))
+        self.start_button = ctk.CTkButton(btn_row, text="🚀 Запустить портал", command=self.toggle_server, font=ctk.CTkFont(size=13, weight="bold"), height=36, width=180)
+        self.start_button.pack(side="left", padx=(0, 10))
+        self.send_button = ctk.CTkButton(btn_row, text="📤 Файл", command=self.send_file_dialog, font=ctk.CTkFont(size=13), height=36, width=120, state="disabled")
+        self.send_button.pack(side="left", padx=(0, 8))
+        self.clipboard_button = ctk.CTkButton(btn_row, text="📋 Буфер", command=self.send_clipboard_dialog, font=ctk.CTkFont(size=13), height=36, width=120, state="disabled")
+        self.clipboard_button.pack(side="left", padx=(0, 8))
+        self.status_label = ctk.CTkLabel(btn_row, text="⏸ Портал остановлен", font=ctk.CTkFont(size=11), text_color="gray")
+        self.status_label.pack(side="left", padx=(16, 0))
+
+        # ─── Журнал (всегда виден, занимает оставшееся место) ──────────────────
         log_frame = ctk.CTkFrame(main_frame)
-        log_frame.pack(fill="both", expand=True, padx=20, pady=10)
-        
-        log_title = ctk.CTkLabel(
-            log_frame,
-            text="📋 Журнал активности",
-            font=ctk.CTkFont(size=14, weight="bold")
-        )
-        log_title.pack(pady=(10, 5))
-        
-        self.log_text = ctk.CTkTextbox(log_frame, height=150)
-        self.log_text.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        log_frame.grid(row=1, column=0, sticky="nsew", padx=0, pady=(12, 0))
+        log_frame.grid_columnconfigure(0, weight=1)
+        log_frame.grid_rowconfigure(1, weight=1)
+        ctk.CTkLabel(log_frame, text="📋 Журнал активности", font=ctk.CTkFont(size=13, weight="bold")).grid(row=0, column=0, sticky="w", padx=10, pady=(8, 4))
+        self.log_text = ctk.CTkTextbox(log_frame, height=280, font=ctk.CTkFont(size=12))
+        self.log_text.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
         self.log_text.insert("1.0", "Готов к работе...\n")
         self.log_text.configure(state="disabled")
 
@@ -570,34 +425,22 @@ class PortalApp(ctk.CTk):
         return self.remote_peer_ip
 
     def _format_peer_probe_result(self, ip: str, ok: bool, code: str) -> tuple[str, str]:
-        """Текст и цвет для строки статуса пары."""
+        """Текст и цвет для строки статуса пары (короткий для компактного UI)."""
         if not ip:
-            return "⚪ Пара: укажи IP и «Сохранить IP»", "gray"
+            return "⚪ Пара: укажи IP", "gray"
         if ok:
-            return (
-                f"🟢 Пара ({ip}): Портал на :{PORTAL_PORT} отвечает",
-                "#3dd68c",
-            )
+            return f"🟢 Пара ({ip}): онлайн", "#3dd68c"
         if code == "refused":
-            return (
-                f"🔌 Пара ({ip}): порт {PORTAL_PORT} закрыт — на том ПК «Запустить портал»",
-                "#e74c3c",
-            )
+            return f"🔌 ({ip}): порт закрыт", "#e74c3c"
         if code == "timeout":
-            return (
-                f"⏱ Пара ({ip}): таймаут — Tailscale, IP или файрвол",
-                "#e67e22",
-            )
+            return f"⏱ ({ip}): таймаут", "#e67e22"
         if code == "dns":
-            return f"❓ Пара ({ip}): адрес не найден (DNS)", "#e74c3c"
+            return f"❓ ({ip}): DNS", "#e74c3c"
         if code == "bad_reply":
-            return (
-                f"⚠ Пара ({ip}): порт открыт, но ответ не Портал",
-                "#f39c12",
-            )
+            return f"⚠ ({ip}): не Портал", "#f39c12"
         if code == "no_host":
             return "⚪ Пара: укажи IP", "gray"
-        return f"❌ Пара ({ip}): ошибка ({code})", "#e74c3c"
+        return f"❌ ({ip}): {code}", "#e74c3c"
 
     def _refresh_local_link_status_label(self) -> None:
         if not hasattr(self, "local_link_status_label"):
@@ -605,18 +448,12 @@ class PortalApp(ctk.CTk):
         if self.is_server_running:
             ip = self.tailscale_ip or "?"
             self.local_link_status_label.configure(
-                text=(
-                    f"🟢 Этот ПК принимает: {ip}:{PORTAL_PORT} "
-                    "(второй комп шлёт сюда файлы/буфер)"
-                ),
+                text=f"🟢 Приём: {ip}:{PORTAL_PORT}",
                 text_color="#3dd68c",
             )
         else:
             self.local_link_status_label.configure(
-                text=(
-                    f"⏸ Этот ПК не принимает — нажми «Запустить портал» "
-                    f"(слушать :{PORTAL_PORT})"
-                ),
+                text=f"⏸ Приём: выключен (:{PORTAL_PORT})",
                 text_color="#95a5a6",
             )
 
