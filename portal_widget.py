@@ -36,6 +36,11 @@ def _hotkey_log_path() -> Path:
     return Path(base) / "portal_hotkey_debug.log"
 
 
+def debug_log_path() -> Path:
+    """Публичный алиас для импорта из portal.py"""
+    return _hotkey_log_path()
+
+
 def _log_to_file(line: str) -> None:
     try:
         p = _hotkey_log_path()
