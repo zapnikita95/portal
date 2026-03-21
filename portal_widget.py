@@ -740,13 +740,36 @@ class GlobalHotkeyManager:
         self._safe_log(f"Ключи pynput: {', '.join(combo.keys())}")
 
         try:
-            with keyboard.GlobalHotKeys(combo) as h:
+            # Тест: проверим что callback вызывается
+            test_called = {"value": False}
+
+            def test_callback():
+                test_called["value"] = True
+                self._safe_log("🧪 ТЕСТ: callback вызван! pynput работает.")
+
+            # Добавляем тестовый хоткей на 5 секунд
+            test_combo = {**combo}
+            test_combo["<ctrl>+<alt>+t"] = test_callback
+            self._safe_log("🧪 Тест: нажми Ctrl+Alt+T в течение 5 сек — должен появиться лог «ТЕСТ: callback вызван»")
+
+            with keyboard.GlobalHotKeys(test_combo) as h:
                 _started_msg = (
                     "pynput GlobalHotKeys запущен — жми сочетание. Полный лог: %TEMP%\\portal_hotkey_debug.log"
                     if platform.system() == "win32"
                     else "pynput GlobalHotKeys запущен — жми сочетание. Лог: /tmp/portal_hotkey_debug.log"
                 )
                 self._safe_log(_started_msg)
+                # Ждём 5 сек и проверяем тест
+                import time
+
+                time.sleep(5)
+                if not test_called["value"]:
+                    self._safe_log(
+                        "⚠️ ТЕСТ НЕ ПРОШЁЛ: Ctrl+Alt+T не сработал за 5 сек. "
+                        "Возможные причины: права доступа, другая программа перехватывает, антивирус блокирует."
+                    )
+                else:
+                    self._safe_log("✅ ТЕСТ ПРОШЁЛ: pynput работает, хоткеи должны срабатывать")
                 h.join()
         except Exception as e:
             import traceback
@@ -785,14 +808,19 @@ class GlobalHotkeyManager:
         )
 
     def toggle_widget(self):
-        self._safe_log("НАЖАТО сочетание портала (Ctrl+Alt+P / Cmd+Option+P) → планирую переключение в GUI")
+        self._safe_log("🔥🔥🔥 НАЖАТО сочетание портала (Ctrl+Alt+P / Cmd+Option+P) → планирую переключение в GUI")
         try:
             if self.main_app is not None and hasattr(self.main_app, "after"):
+                self._safe_log("  Использую main_app.after(0, _toggle_ui)")
                 self.main_app.after(0, self._toggle_ui)
             else:
+                self._safe_log("  Использую widget.root.after(0, _toggle_ui)")
                 self.widget.root.after(0, self._toggle_ui)
         except Exception as e:
-            self._safe_log(f"Ошибка main_app.after(0, toggle): {e!r}")
+            self._safe_log(f"❌ Ошибка main_app.after(0, toggle): {e!r}")
+            import traceback
+
+            self._safe_log(traceback.format_exc())
 
     def _toggle_ui(self):
         vis = False

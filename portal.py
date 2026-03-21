@@ -55,6 +55,9 @@ class PortalApp(ctk.CTk):
         # Создание UI
         self.create_ui()
         
+        # Drag & Drop в главном окне
+        self.setup_main_window_drag_drop()
+        
         # Запуск мониторинга буфера обмена
         self.start_clipboard_monitor()
         
@@ -290,6 +293,86 @@ class PortalApp(ctk.CTk):
         self.log_text.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self.log_text.insert("1.0", "Готов к работе...\n")
         self.log_text.configure(state="disabled")
+
+    def setup_main_window_drag_drop(self):
+        """Drag & Drop файлов в главное окно (не только в виджет)."""
+        if platform.system() == "Windows":
+            try:
+                import windnd
+
+                def on_drop(files):
+                    paths = []
+                    enc = sys.getfilesystemencoding() or "utf-8"
+                    for b in files:
+                        if isinstance(b, str):
+                            paths.append(b)
+                            continue
+                        try:
+                            paths.append(b.decode("utf-8"))
+                        except Exception:
+                            try:
+                                paths.append(b.decode(enc))
+                            except Exception:
+                                paths.append(b.decode("mbcs", errors="replace"))
+                    if paths:
+                        self.log(f"📥 Получено {len(paths)} файл(ов) через drag & drop в главное окно")
+                        for fp in paths:
+                            if os.path.exists(fp):
+                                self.log(f"   📄 {Path(fp).name}")
+                                if self.remote_peer_ip:
+                                    threading.Thread(
+                                        target=self.send_file,
+                                        args=(fp, self.remote_peer_ip),
+                                        daemon=True,
+                                    ).start()
+                                else:
+                                    self.log("⚠️ Сначала укажите IP выше и нажмите «Сохранить IP»")
+                                    self.send_file_to_dialog(fp)
+
+                # windnd работает на Tk окне (CTk наследует Tk)
+                windnd.hook_dropfiles(self, on_drop)
+                self.log("✅ Drag & Drop включён в главном окне (Windows)")
+            except Exception as e:
+                self.log(f"⚠️ Drag & Drop (Windows): {e}")
+        else:
+            try:
+                from tkinterdnd2 import TkinterDnD, DND_FILES
+
+                # CTk наследует Tk, можно использовать TkinterDnD
+                TkinterDnD._require(self)
+                self.drop_target_register(DND_FILES)
+                self.dnd_bind("<<Drop>>", self._on_main_window_drop)
+                self.log("✅ Drag & Drop включён в главном окне (macOS/Linux)")
+            except Exception as e:
+                self.log(f"⚠️ Drag & Drop (macOS/Linux): {e}")
+
+    def _on_main_window_drop(self, event):
+        """Обработка drop в главном окне (tkinterdnd2)."""
+        import re
+
+        data = event.data
+        files = []
+        if data.startswith("{") and data.endswith("}"):
+            files = re.findall(r"\{([^}]+)\}", data)
+        elif " " in data:
+            files = data.split()
+        else:
+            files = [data]
+        if files:
+            self.log(f"📥 Получено {len(files)} файл(ов) через drag & drop")
+            for fp in files:
+                fp = fp.strip()
+                if os.path.exists(fp):
+                    self.log(f"   📄 {Path(fp).name}")
+                    if self.remote_peer_ip:
+                        threading.Thread(
+                            target=self.send_file,
+                            args=(fp, self.remote_peer_ip),
+                            daemon=True,
+                        ).start()
+                    else:
+                        self.log("⚠️ Сначала укажите IP выше и нажмите «Сохранить IP»")
+                        self.send_file_to_dialog(fp)
 
     def _on_peer_ip_edited(self, _event=None):
         """Сбросить зелёную галочку, если пользователь снова правит IP."""
@@ -610,12 +693,16 @@ class PortalApp(ctk.CTk):
     def send_file_dialog(self):
         """Выбор файла; IP берётся из сохранённых настроек (без лишних окон)."""
         from tkinter import filedialog
+        self.log("📂 Открыт диалог выбора файла...")
         filepath = filedialog.askopenfilename(
             title="Выберите файл для отправки"
         )
         if not filepath:
+            self.log("❌ Файл не выбран (отменено)")
             return
+        self.log(f"✅ Файл выбран: {Path(filepath).name} ({Path(filepath).stat().st_size / 1024 / 1024:.2f} MB)")
         if self.remote_peer_ip:
+            self.log(f"📤 Отправка на {self.remote_peer_ip}...")
             threading.Thread(
                 target=self.send_file,
                 args=(filepath, self.remote_peer_ip),
