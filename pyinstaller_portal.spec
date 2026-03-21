@@ -52,6 +52,7 @@ hiddenimports = [
     "PIL.ImageSequence",
     "pyperclip",
     "portal_config",
+    "portal_i18n",
     "portal_clipboard_rich",
     "portal_widget",
     "portal_tk_compat",

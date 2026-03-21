@@ -40,6 +40,7 @@ import queue
 import webbrowser
 
 import portal_config
+import portal_i18n as i18n
 import portal_clipboard_rich as portal_clip_rich
 from portal_tk_compat import ensure_tkdnd_tk_misc_patch
 
@@ -511,26 +512,55 @@ def read_one_json_object_from_socket(
 
 def wire_ctk_entry_paste(entry: Any) -> None:
     """
-    Явная вставка из буфера (pyperclip) для CTkEntry.
-    На Windows/macOS Tk/CustomTkinter иногда не обрабатывают Ctrl+V, Cmd+V, Shift+Ins и «Вставить» из контекстного меню.
+    Явная вставка из буфера для CTkEntry.
+    - Русская раскладка: Tk часто НЕ шлёт <Control-v>, а даёт keysym «м» при той же физ. клавише — ловим <Control-KeyPress> + keycode 86.
+    - Буфер: сначала Tk clipboard (как в обычных полях), затем pyperclip.
     """
+    import tkinter as tk
+
     if entry is None:
         return
 
-    def _paste(event=None):
+    inner = getattr(entry, "_entry", None)
+
+    def _clipboard_read() -> str:
+        for w in (
+            entry,
+            inner,
+            getattr(entry, "master", None),
+        ):
+            if w is None:
+                continue
+            try:
+                top = w.winfo_toplevel()
+            except Exception:
+                top = None
+            for widget in (w, top):
+                if widget is None:
+                    continue
+                try:
+                    t = widget.clipboard_get()
+                    if t is not None and str(t) != "":
+                        return str(t)
+                except tk.TclError:
+                    pass
+                except Exception:
+                    pass
         try:
-            raw = pyperclip.paste()
+            t = pyperclip.paste()
+            return "" if t is None else str(t)
         except Exception:
-            raw = ""
-        if raw is None:
-            raw = ""
+            return ""
+
+    def _paste(event=None):
+        raw = _clipboard_read()
         s = str(raw).replace("\r\n", "\n")
         line = s.split("\n", 1)[0]
         if "\r" in line:
             line = line.split("\r", 1)[0]
         try:
-            inner = getattr(entry, "_entry", entry)
-            if inner.selection_present():
+            w = inner if inner is not None else entry
+            if hasattr(w, "selection_present") and w.selection_present():
                 entry.delete("sel.first", "sel.last")
         except Exception:
             try:
@@ -546,42 +576,87 @@ def wire_ctk_entry_paste(entry: Any) -> None:
                 pass
         return "break"
 
+    def _control_keypress_paste(event):
+        """Ctrl+физическая V (RU/EN): keycode 86 на Windows; плюс keysym v / м."""
+        if not (event.state & 0x0004):
+            return
+        ks = (event.keysym or "")
+        kc = int(getattr(event, "keycode", 0) or 0)
+        # keysym: EN «v» / RU «м» на той же клавише; keycode 86 — физ. V на Windows
+        if ks.lower() == "v" or ks in ("м", "М"):
+            return _paste(event)
+        if platform.system() == "win32" and kc == 86:
+            return _paste(event)
+        return None
+
+    # Только один виджет: CTkEntry.bind() уже проксирует на _entry — не дублировать.
+    bind_targets = [inner] if inner is not None else [entry]
+    for w in bind_targets:
+        try:
+            w.bind("<Control-KeyPress>", _control_keypress_paste, add=True)
+        except Exception:
+            pass
+
     for seq in (
         "<<Paste>>",
         "<Control-v>",
         "<Control-V>",
         "<Shift-Insert>",
     ):
-        try:
-            entry.bind(seq, _paste, add=True)
-        except Exception:
-            pass
-    if platform.system() == "Darwin":
-        for seq in ("<Command-v>", "<Command-V>", "<Meta-v>", "<Meta-V>"):
+        for w in bind_targets:
             try:
-                entry.bind(seq, _paste, add=True)
+                w.bind(seq, _paste, add=True)
             except Exception:
                 pass
+    if platform.system() == "Darwin":
+        for seq in ("<Command-v>", "<Command-V>", "<Meta-v>", "<Meta-V>"):
+            for w in bind_targets:
+                try:
+                    w.bind(seq, _paste, add=True)
+                except Exception:
+                    pass
 
 
 def wire_ctk_textbox_paste(tb: Any) -> None:
-    """Многострочная вставка для CTkTextbox (список IP и т.п.) — тот же обход глюков Tk."""
+    """Многострочная вставка для CTkTextbox (список IP и т.п.): RU-раскладка + Tk clipboard + pyperclip."""
     import tkinter as tk
 
     if tb is None:
         return
 
-    def _paste(event=None):
+    inner = getattr(tb, "_textbox", None)
+
+    def _clipboard_read() -> str:
+        for w in (tb, inner, getattr(tb, "master", None)):
+            if w is None:
+                continue
+            try:
+                top = w.winfo_toplevel()
+            except Exception:
+                top = None
+            for widget in (w, top):
+                if widget is None:
+                    continue
+                try:
+                    t = widget.clipboard_get()
+                    if t is not None and str(t) != "":
+                        return str(t)
+                except tk.TclError:
+                    pass
+                except Exception:
+                    pass
         try:
-            raw = pyperclip.paste()
+            t = pyperclip.paste()
+            return "" if t is None else str(t)
         except Exception:
-            raw = ""
-        if raw is None:
-            raw = ""
+            return ""
+
+    def _paste(event=None):
+        raw = _clipboard_read()
         s = str(raw).replace("\r\n", "\n").replace("\r", "\n")
         try:
-            inner = getattr(tb, "_textbox", tb)
-            if inner.tag_ranges(tk.SEL):
+            w = inner if inner is not None else tb
+            if hasattr(w, "tag_ranges") and w.tag_ranges(tk.SEL):
                 tb.delete("sel.first", "sel.last")
         except Exception:
             try:
@@ -597,29 +672,49 @@ def wire_ctk_textbox_paste(tb: Any) -> None:
                 pass
         return "break"
 
+    def _control_keypress_paste(event):
+        if not (event.state & 0x0004):
+            return
+        ks = (event.keysym or "")
+        kc = int(getattr(event, "keycode", 0) or 0)
+        if ks.lower() == "v" or ks in ("м", "М"):
+            return _paste(event)
+        if platform.system() == "win32" and kc == 86:
+            return _paste(event)
+        return None
+
+    bind_targets = [inner] if inner is not None else [tb]
+    for w in bind_targets:
+        try:
+            w.bind("<Control-KeyPress>", _control_keypress_paste, add=True)
+        except Exception:
+            pass
+
     for seq in (
         "<<Paste>>",
         "<Control-v>",
         "<Control-V>",
         "<Shift-Insert>",
     ):
-        try:
-            tb.bind(seq, _paste, add=True)
-        except Exception:
-            pass
-    if platform.system() == "Darwin":
-        for seq in ("<Command-v>", "<Command-V>", "<Meta-v>", "<Meta-V>"):
+        for w in bind_targets:
             try:
-                tb.bind(seq, _paste, add=True)
+                w.bind(seq, _paste, add=True)
             except Exception:
                 pass
+    if platform.system() == "Darwin":
+        for seq in ("<Command-v>", "<Command-V>", "<Meta-v>", "<Meta-V>"):
+            for w in bind_targets:
+                try:
+                    w.bind(seq, _paste, add=True)
+                except Exception:
+                    pass
 
 
 class PortalApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        self.title("🌀 Портал")
+        self.title(i18n.tr("app.title"))
         self.geometry("820x760")
         self.minsize(640, 520)
         
@@ -779,33 +874,33 @@ class PortalApp(ctk.CTk):
         toolbar.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 4))
         ctk.CTkLabel(
             toolbar,
-            text="🌀 Портал",
+            text=i18n.tr("app.title"),
             font=ctk.CTkFont(size=20, weight="bold"),
         ).pack(side="left", padx=(0, 14))
         ctk.CTkButton(
             toolbar,
-            text="⚙ Настройки",
+            text=i18n.tr("toolbar.settings"),
             width=118,
             command=self._open_settings_window,
             font=ctk.CTkFont(size=13),
         ).pack(side="left", padx=3)
         ctk.CTkButton(
             toolbar,
-            text="📥 APK",
+            text=i18n.tr("toolbar.apk"),
             width=82,
             command=self._open_apk_window,
             font=ctk.CTkFont(size=13),
         ).pack(side="left", padx=3)
         ctk.CTkButton(
             toolbar,
-            text="📋 Журнал",
+            text=i18n.tr("toolbar.log"),
             width=100,
             command=self._open_log_window,
             font=ctk.CTkFont(size=13),
         ).pack(side="left", padx=3)
         ctk.CTkButton(
             toolbar,
-            text="❓",
+            text=i18n.tr("toolbar.help"),
             width=40,
             command=self._open_help_window,
             font=ctk.CTkFont(size=14),
@@ -820,7 +915,7 @@ class PortalApp(ctk.CTk):
 
         ctk.CTkLabel(
             main_frame,
-            text="Передача файлов и общий буфер · пиры и папки — в ⚙ Настройки",
+            text=i18n.tr("main.subtitle"),
             font=ctk.CTkFont(size=13),
             text_color="gray",
         ).pack(pady=(10, 14))
@@ -833,14 +928,14 @@ class PortalApp(ctk.CTk):
             if self.tailscale_ip.startswith("100."):
                 ip_label = ctk.CTkLabel(
                     info_frame,
-                    text=f"📍 Tailscale IP: {self.tailscale_ip}",
+                    text=i18n.tr("main.ip_tailscale", ip=self.tailscale_ip),
                     font=ctk.CTkFont(size=12)
                 )
                 ip_label.pack(pady=10)
             else:
                 ip_label = ctk.CTkLabel(
                     info_frame,
-                    text=f"📍 Локальный IP: {self.tailscale_ip} (Tailscale не обнаружен)",
+                    text=i18n.tr("main.ip_local", ip=self.tailscale_ip),
                     font=ctk.CTkFont(size=12),
                     text_color="orange"
                 )
@@ -848,7 +943,7 @@ class PortalApp(ctk.CTk):
         else:
             warning_label = ctk.CTkLabel(
                 info_frame,
-                text="⚠️ IP адрес не определен",
+                text=i18n.tr("main.ip_unknown"),
                 font=ctk.CTkFont(size=12),
                 text_color="orange"
             )
@@ -862,44 +957,30 @@ class PortalApp(ctk.CTk):
             text="",
             font=ctk.CTkFont(size=13, weight="bold"),
         )
-        if platform.system() == "Darwin":
-            _hk = (
-                "Cmd+Shift+C"
-                if os.environ.get("PORTAL_MAC_HOTKEY_LEGACY", "").strip().lower()
-                in ("1", "true", "yes")
-                else "Cmd+Ctrl+C"
-            )
-        else:
-            _hk = "Ctrl+Alt+C"
-        self._peer_targets_heading.configure(
-            text=(
-                f"Кому отправлять ({_hk}, файлы и виджет). "
-                "Список IP редактируется в ⚙ Настройки → вкладка «Пиры»:"
-            )
-        )
+        self._refresh_peer_targets_heading()
         self._main_secret_frame = ctk.CTkFrame(peer_frame)
         ctk.CTkLabel(
             self._main_secret_frame,
-            text="Пароль сети (одинаковый на всех своих ПК):",
+            text=i18n.tr("main.network_password"),
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(anchor="w", padx=4, pady=(0, 4))
         _msr = ctk.CTkFrame(self._main_secret_frame, fg_color="transparent")
         _msr.pack(fill="x")
         self.main_secret_entry = ctk.CTkEntry(
-            _msr, width=240, placeholder_text="введи пароль и сохрани"
+            _msr, width=240, placeholder_text=i18n.tr("main.secret_placeholder")
         )
         self.main_secret_entry.pack(side="left", padx=(0, 8))
         wire_ctk_entry_paste(self.main_secret_entry)
         ctk.CTkButton(
             _msr,
-            text="Сохранить пароль",
+            text=i18n.tr("main.save_password"),
             width=130,
             command=self._save_main_secret_banner,
             font=ctk.CTkFont(size=12),
         ).pack(side="left")
         ctk.CTkLabel(
             self._main_secret_frame,
-            text="Когда пароль задан, менять его можно в ⚙ Настройки → «Пароль».",
+            text=i18n.tr("main.secret_hint"),
             font=ctk.CTkFont(size=10),
             text_color="gray",
         ).pack(anchor="w", padx=4, pady=(4, 0))
@@ -914,7 +995,7 @@ class PortalApp(ctk.CTk):
         self.rebuild_peer_checkboxes()
         ctk.CTkButton(
             peer_frame,
-            text="Сохранить выбор получателей",
+            text=i18n.tr("main.save_recipients"),
             width=210,
             command=self.save_peer_selection_from_ui,
             font=ctk.CTkFont(size=12),
@@ -934,12 +1015,12 @@ class PortalApp(ctk.CTk):
         conn_frame.pack(fill="x", padx=12, pady=(4, 10))
         ctk.CTkLabel(
             conn_frame,
-            text="📡 Статус связи",
+            text=i18n.tr("main.conn_title"),
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(anchor="w", pady=(0, 4))
         self.local_link_status_label = ctk.CTkLabel(
             conn_frame,
-            text="⏸ Локальный приём: неизвестно",
+            text=i18n.tr("main.local_recv_unknown"),
             font=ctk.CTkFont(size=12),
             text_color="gray",
             justify="left",
@@ -948,7 +1029,7 @@ class PortalApp(ctk.CTk):
         self.local_link_status_label.pack(anchor="w")
         self.peer_link_status_label = ctk.CTkLabel(
             conn_frame,
-            text="⚪ Пары: сохрани список IP и проверь связь",
+            text=i18n.tr("main.peers_idle"),
             font=ctk.CTkFont(size=12),
             text_color="gray",
             justify="left",
@@ -959,14 +1040,14 @@ class PortalApp(ctk.CTk):
         probe_row.pack(anchor="w", fill="x")
         ctk.CTkButton(
             probe_row,
-            text="🔄 Проверить связь",
+            text=i18n.tr("main.probe_btn"),
             width=160,
             command=lambda: self.check_peer_connection_async(silent=False),
             font=ctk.CTkFont(size=12),
         ).pack(side="left")
         ctk.CTkLabel(
             probe_row,
-            text=f"авто каждые {PEER_STATUS_POLL_MS // 1000} с, если есть IP",
+            text=i18n.tr("main.probe_auto", sec=PEER_STATUS_POLL_MS // 1000),
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(side="left", padx=(12, 0))
@@ -977,7 +1058,7 @@ class PortalApp(ctk.CTk):
         
         self.start_button = ctk.CTkButton(
             button_frame,
-            text="🚀 Запустить портал",
+            text=i18n.tr("btn.start"),
             command=self.toggle_server,
             font=ctk.CTkFont(size=14, weight="bold"),
             height=40
@@ -986,7 +1067,7 @@ class PortalApp(ctk.CTk):
         
         self.send_button = ctk.CTkButton(
             button_frame,
-            text="📤 Отправить файл",
+            text=i18n.tr("btn.send_file"),
             command=self.send_file_dialog,
             font=ctk.CTkFont(size=14),
             height=40,
@@ -996,7 +1077,7 @@ class PortalApp(ctk.CTk):
         
         self.clipboard_button = ctk.CTkButton(
             button_frame,
-            text="📋 Отправить буфер",
+            text=i18n.tr("btn.send_clipboard"),
             command=self.send_clipboard_dialog,
             font=ctk.CTkFont(size=14),
             height=40,
@@ -1007,7 +1088,7 @@ class PortalApp(ctk.CTk):
         # Статус
         self.status_label = ctk.CTkLabel(
             main_frame,
-            text="⏸ Портал остановлен",
+            text=i18n.tr("status.stopped"),
             font=ctk.CTkFont(size=12),
             text_color="gray"
         )
@@ -1022,12 +1103,38 @@ class PortalApp(ctk.CTk):
         self.after(
             200,
             lambda: self.log(
-                "📋 Журнал — кнопка «📋 Журнал» сверху. Файл: "
-                + str(portal_config.activity_log_path())
+                i18n.tr(
+                    "log.journal_hint",
+                    path=str(portal_config.activity_log_path()),
+                )
             ),
         )
         self.after(500, self._auto_start_portal_if_enabled)
 
+    def _refresh_peer_targets_heading(self) -> None:
+        if not hasattr(self, "_peer_targets_heading"):
+            return
+        if platform.system() == "Darwin":
+            _hk = (
+                "Cmd+Shift+C"
+                if os.environ.get("PORTAL_MAC_HOTKEY_LEGACY", "").strip().lower()
+                in ("1", "true", "yes")
+                else "Cmd+Ctrl+C"
+            )
+        else:
+            _hk = "Ctrl+Alt+C"
+        self._peer_targets_heading.configure(text=i18n.tr("main.peer_heading", hk=_hk))
+
+    def _save_ui_language_from_settings(self) -> None:
+        from tkinter import messagebox
+
+        label = self._ui_lang_menu.get()
+        lang = self._lang_display_to_code.get(label, "ru")
+        if portal_config.save_ui_language(lang):
+            messagebox.showinfo(
+                i18n.tr("lang.saved_title"),
+                i18n.tr("lang.restart_hint"),
+            )
 
     def _refresh_main_secret_banner_visibility(self) -> None:
         if not hasattr(self, "_main_secret_frame") or not hasattr(
@@ -1100,7 +1207,7 @@ class PortalApp(ctk.CTk):
             except Exception:
                 self._settings_win = None
         win = ctk.CTkToplevel(self)
-        win.title("Настройки · Портал")
+        win.title(i18n.tr("settings.title"))
         win.geometry("760x640")
         win.minsize(640, 520)
         try:
@@ -1128,20 +1235,53 @@ class PortalApp(ctk.CTk):
         tab = ctk.CTkTabview(win)
         tab.pack(fill="both", expand=True, padx=10, pady=10)
 
-        t_recv = tab.add("Папка и приём")
-        t_widget = tab.add("Виджет")
-        t_peers = tab.add("Пиры")
-        t_secret = tab.add("Пароль")
+        t_gen = tab.add(i18n.tr("settings.tab_general"))
+        ctk.CTkLabel(
+            t_gen,
+            text=i18n.tr("settings.ui_language"),
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=8, pady=(8, 4))
+        lang_row = ctk.CTkFrame(t_gen, fg_color="transparent")
+        lang_row.pack(fill="x", padx=8, pady=(0, 4))
+        self._lang_display_to_code = {"Русский": "ru", "English": "en"}
+        _cur_lang = portal_config.load_ui_language()
+        self._ui_lang_menu = ctk.CTkOptionMenu(
+            lang_row,
+            values=["Русский", "English"],
+            width=200,
+            font=ctk.CTkFont(size=13),
+        )
+        self._ui_lang_menu.set("English" if _cur_lang == "en" else "Русский")
+        self._ui_lang_menu.pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            lang_row,
+            text=i18n.tr("settings.save_language"),
+            width=170,
+            command=self._save_ui_language_from_settings,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left")
+        ctk.CTkLabel(
+            t_gen,
+            text=i18n.tr("settings.lang_note"),
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=680,
+            justify="left",
+        ).pack(anchor="w", padx=8, pady=(0, 12))
+
+        t_recv = tab.add(i18n.tr("settings.tab_recv"))
+        t_widget = tab.add(i18n.tr("settings.tab_widget"))
+        t_peers = tab.add(i18n.tr("settings.tab_peers"))
+        t_secret = tab.add(i18n.tr("settings.tab_secret"))
 
         ctk.CTkLabel(
             t_recv,
-            text="Папка для входящих файлов (по умолчанию — Рабочий стол):",
+            text=i18n.tr("recv.incoming_folder"),
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(anchor="w", padx=8, pady=(8, 4))
         ctk.CTkLabel(
             t_recv,
-            text="Общая папка; ниже можно задать свою для конкретного IP отправителя. "
-            "Режим «только в буфер» — файлы во временную папку (не по списку IP).",
+            text=i18n.tr("recv.incoming_hint"),
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(anchor="w", padx=8, pady=(0, 6))
@@ -1158,14 +1298,14 @@ class PortalApp(ctk.CTk):
         wire_ctk_entry_paste(self.receive_dir_entry)
         ctk.CTkButton(
             recv_row,
-            text="Обзор…",
+            text=i18n.tr("recv.browse"),
             width=88,
             command=self.choose_receive_dir,
             font=ctk.CTkFont(size=12),
         ).pack(side="left", padx=(0, 6))
         ctk.CTkButton(
             recv_row,
-            text="Сохранить папку",
+            text=i18n.tr("recv.save_folder"),
             width=130,
             command=self.save_receive_dir_from_ui,
             font=ctk.CTkFont(size=12),
@@ -1177,12 +1317,12 @@ class PortalApp(ctk.CTk):
 
         ctk.CTkLabel(
             t_recv,
-            text="Отдельная папка приёма по IP отправителя (необязательно):",
+            text=i18n.tr("recv.per_ip_title"),
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(anchor="w", padx=8, pady=(12, 4))
         ctk.CTkLabel(
             t_recv,
-            text="Строка: IP<TAB>путь или «IP пробел путь». IP как в логе при приёме (например 100.x.x.x).",
+            text=i18n.tr("recv.per_ip_hint"),
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(anchor="w", padx=8, pady=(0, 4))
@@ -1200,7 +1340,7 @@ class PortalApp(ctk.CTk):
         pr_btn_col.pack(side="left", fill="y")
         ctk.CTkButton(
             pr_btn_col,
-            text="Сохранить\nсписок IP",
+            text=i18n.tr("recv.save_ip_list"),
             width=130,
             command=self.save_peer_receive_dirs_from_ui,
             font=ctk.CTkFont(size=12),
@@ -1212,13 +1352,13 @@ class PortalApp(ctk.CTk):
 
         ctk.CTkLabel(
             t_recv,
-            text="Режим входящих файлов (не из «буферного» push с другого ПК):",
+            text=i18n.tr("recv.mode_title"),
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(anchor="w", padx=8, pady=(16, 4))
         self._receive_files_mode_labels = {
-            "both": "На диск и в буфер (Cmd+V)",
-            "disk_only": "Только в папку приёма",
-            "clipboard_only": "В буфер (+ файл в папке; без «Показать в Finder»)",
+            "both": i18n.tr("recv_mode.both"),
+            "disk_only": i18n.tr("recv_mode.disk_only"),
+            "clipboard_only": i18n.tr("recv_mode.clipboard_only"),
         }
         rm_row = ctk.CTkFrame(t_recv, fg_color="transparent")
         rm_row.pack(fill="x", padx=8, pady=(0, 10))
@@ -1239,7 +1379,7 @@ class PortalApp(ctk.CTk):
 
         ctk.CTkLabel(
             t_widget,
-            text="Медиа виджета на столе (GIF / PNG / JPEG / WebP):",
+            text=i18n.tr("widget.media_title"),
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(anchor="w", padx=8, pady=(8, 4))
         wm_row1 = ctk.CTkFrame(t_widget, fg_color="transparent")
@@ -1247,7 +1387,7 @@ class PortalApp(ctk.CTk):
         self.widget_media_entry = ctk.CTkEntry(
             wm_row1,
             width=360,
-            placeholder_text="стандарт: assets/portal_main.gif (подставляется автоматически)",
+            placeholder_text=i18n.tr("widget.media_placeholder"),
             font=ctk.CTkFont(size=12),
         )
         self.widget_media_entry.pack(side="left", padx=(0, 8))
@@ -1260,30 +1400,28 @@ class PortalApp(ctk.CTk):
         wire_ctk_entry_paste(self.widget_media_entry)
         ctk.CTkButton(
             wm_row1,
-            text="Обзор…",
+            text=i18n.tr("recv.browse"),
             width=88,
             command=self.choose_widget_media_file,
             font=ctk.CTkFont(size=12),
         ).pack(side="left", padx=(0, 6))
         ctk.CTkButton(
             wm_row1,
-            text="Видео → GIF",
+            text=i18n.tr("widget.video_gif"),
             width=100,
             command=self.choose_widget_video_convert_to_gif,
             font=ctk.CTkFont(size=12),
         ).pack(side="left", padx=(0, 6))
         ctk.CTkButton(
             wm_row1,
-            text="Сброс",
+            text=i18n.tr("widget.reset"),
             width=72,
             command=self.clear_widget_media_from_ui,
             font=ctk.CTkFont(size=12),
         ).pack(side="left")
         wm_row2 = ctk.CTkFrame(t_widget, fg_color="transparent")
         wm_row2.pack(fill="x", padx=8, pady=(0, 6))
-        self._widget_media_mode_labels_ru = dict(
-            portal_config.WIDGET_MEDIA_MODE_LABELS_RU
-        )
+        self._widget_media_mode_labels_ru = i18n.widget_media_mode_labels()
         self._widget_media_mode_rev = {
             v: k for k, v in self._widget_media_mode_labels_ru.items()
         }
@@ -1303,7 +1441,7 @@ class PortalApp(ctk.CTk):
         )
         ctk.CTkButton(
             wm_row2,
-            text="Сохранить внешний вид",
+            text=i18n.tr("widget.save_look"),
             width=168,
             command=self.save_widget_media_from_ui,
             font=ctk.CTkFont(size=12),
@@ -1311,7 +1449,7 @@ class PortalApp(ctk.CTk):
         wm_geo = ctk.CTkFrame(t_widget, fg_color="transparent")
         wm_geo.pack(fill="x", padx=8, pady=(10, 4))
         ctk.CTkLabel(
-            wm_geo, text="Размер (px):", font=ctk.CTkFont(size=12)
+            wm_geo, text=i18n.tr("widget.size_px"), font=ctk.CTkFont(size=12)
         ).pack(side="left", padx=(0, 6))
         self.widget_size_entry = ctk.CTkEntry(
             wm_geo, width=56, font=ctk.CTkFont(size=12)
@@ -1319,10 +1457,10 @@ class PortalApp(ctk.CTk):
         self.widget_size_entry.pack(side="left", padx=(0, 10))
         self.widget_size_entry.insert(0, str(portal_config.load_widget_size()))
         wire_ctk_entry_paste(self.widget_size_entry)
-        ctk.CTkLabel(wm_geo, text="Угол:", font=ctk.CTkFont(size=12)).pack(
+        ctk.CTkLabel(wm_geo, text=i18n.tr("widget.corner"), font=ctk.CTkFont(size=12)).pack(
             side="left", padx=(0, 6)
         )
-        self._widget_corner_labels_ru = dict(portal_config.WIDGET_CORNER_LABELS_RU)
+        self._widget_corner_labels_ru = i18n.widget_corner_labels()
         self._widget_corner_rev = {
             v: k for k, v in self._widget_corner_labels_ru.items()
         }
@@ -1339,7 +1477,7 @@ class PortalApp(ctk.CTk):
             self._widget_corner_labels_ru.get(_wc, self._widget_corner_labels_ru["br"])
         )
         ctk.CTkLabel(
-            wm_geo, text="Отступ X:", font=ctk.CTkFont(size=12)
+            wm_geo, text=i18n.tr("widget.margin_x"), font=ctk.CTkFont(size=12)
         ).pack(side="left", padx=(0, 4))
         self.widget_margin_x_entry = ctk.CTkEntry(
             wm_geo, width=44, font=ctk.CTkFont(size=12)
@@ -1347,7 +1485,7 @@ class PortalApp(ctk.CTk):
         self.widget_margin_x_entry.pack(side="left", padx=(0, 8))
         self.widget_margin_x_entry.insert(0, str(portal_config.load_widget_margin_x()))
         wire_ctk_entry_paste(self.widget_margin_x_entry)
-        ctk.CTkLabel(wm_geo, text="Y:", font=ctk.CTkFont(size=12)).pack(
+        ctk.CTkLabel(wm_geo, text=i18n.tr("widget.margin_y"), font=ctk.CTkFont(size=12)).pack(
             side="left", padx=(0, 4)
         )
         self.widget_margin_y_entry = ctk.CTkEntry(
@@ -1358,16 +1496,14 @@ class PortalApp(ctk.CTk):
         wire_ctk_entry_paste(self.widget_margin_y_entry)
         ctk.CTkButton(
             wm_geo,
-            text="Сохранить размер и угол",
+            text=i18n.tr("widget.save_geo"),
             width=178,
             command=self.save_widget_geometry_from_ui,
             font=ctk.CTkFont(size=12),
         ).pack(side="left", padx=(4, 0))
         ctk.CTkLabel(
             t_widget,
-            text=(
-                "Компактно: 120–160 px, угол снизу справа. Видео — «Видео→GIF» или Обзор→MP4."
-            ),
+            text=i18n.tr("widget.hint_geo"),
             font=ctk.CTkFont(size=11),
             text_color="gray",
             wraplength=680,
@@ -1376,17 +1512,12 @@ class PortalApp(ctk.CTk):
 
         ctk.CTkLabel(
             t_widget,
-            text="Импульс виджета: пресеты и правила (какая анимация при приёме / отправке):",
+            text=i18n.tr("widget.pulse_title"),
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(anchor="w", padx=8, pady=(16, 4))
         ctk.CTkLabel(
             t_widget,
-            text=(
-                "Пресет «Основное медиа виджета (main)» — то же изображение, что в поле «Медиа виджета на столе» "
-                "выше (по умолчанию там же assets/portal_main.gif). "
-                "Остальные пресеты — готовые файлы из assets/ и assets/presets/. "
-                "Выбери пресет и нажми «Показать превью в углу» (~4 с)."
-            ),
+            text=i18n.tr("widget.pulse_hint"),
             font=ctk.CTkFont(size=11),
             text_color="gray",
             wraplength=680,
@@ -1404,7 +1535,7 @@ class PortalApp(ctk.CTk):
         self._widget_preset_preview_combo.pack(side="left", padx=(0, 8))
         ctk.CTkButton(
             prev_row,
-            text="Показать превью в углу",
+            text=i18n.tr("widget.preview_btn"),
             width=200,
             command=self.preview_widget_preset_from_settings_ui,
             font=ctk.CTkFont(size=12),
@@ -1413,11 +1544,7 @@ class PortalApp(ctk.CTk):
 
         ctk.CTkLabel(
             t_widget,
-            text=(
-                "Правила: IP получателя или * → когда сработало → какой пресет. "
-                "Сначала совпадёт конкретный IP, потом *. Если для «Приём файла» нет строки — "
-                "используется правило для «Приём в буфер»."
-            ),
+            text=i18n.tr("widget.rules_hint"),
             font=ctk.CTkFont(size=11),
             text_color="gray",
             wraplength=680,
@@ -1431,14 +1558,14 @@ class PortalApp(ctk.CTk):
         wpr_row.pack(fill="x", padx=8, pady=(0, 8))
         ctk.CTkButton(
             wpr_row,
-            text="+ Строка правила",
+            text=i18n.tr("widget.add_rule"),
             width=150,
             command=self._widget_preset_add_rule_row,
             font=ctk.CTkFont(size=12),
         ).pack(side="left", padx=(0, 8))
         ctk.CTkButton(
             wpr_row,
-            text="Сохранить правила пресетов",
+            text=i18n.tr("widget.save_rules"),
             width=210,
             command=self.save_widget_preset_rules_from_ui,
             font=ctk.CTkFont(size=12),
@@ -1451,7 +1578,7 @@ class PortalApp(ctk.CTk):
 
         ctk.CTkLabel(
             t_peers,
-            text="Список пиров (один IP на строку или «IP Имя»):",
+            text=i18n.tr("peers.list_title"),
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(anchor="w", padx=8, pady=(8, 4))
         ip_edit_row = ctk.CTkFrame(t_peers, fg_color="transparent")
@@ -1467,7 +1594,7 @@ class PortalApp(ctk.CTk):
         btn_col.pack(side="left", fill="y")
         ctk.CTkButton(
             btn_col,
-            text="Сохранить\nсписок IP",
+            text=i18n.tr("peers.save_list"),
             width=130,
             command=self.save_peer_ips_from_ui,
             font=ctk.CTkFont(size=12),
@@ -1475,7 +1602,7 @@ class PortalApp(ctk.CTk):
 
         ctk.CTkLabel(
             t_secret,
-            text="Пароль сети (shared secret):",
+            text=i18n.tr("secret.title"),
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(anchor="w", padx=8, pady=(8, 4))
         secret_row = ctk.CTkFrame(t_secret, fg_color="transparent")
@@ -1483,7 +1610,7 @@ class PortalApp(ctk.CTk):
         self.shared_secret_entry = ctk.CTkEntry(
             secret_row,
             width=260,
-            placeholder_text="пусто = без пароля (как в старых версиях)",
+            placeholder_text=i18n.tr("secret.placeholder"),
         )
         self.shared_secret_entry.pack(side="left", padx=(0, 8))
         try:
@@ -1495,21 +1622,21 @@ class PortalApp(ctk.CTk):
         wire_ctk_entry_paste(self.shared_secret_entry)
         ctk.CTkButton(
             secret_row,
-            text="Подставить",
+            text=i18n.tr("secret.fill"),
             width=100,
             command=self._generate_shared_secret_ui,
             font=ctk.CTkFont(size=12),
         ).pack(side="left", padx=(0, 6))
         ctk.CTkButton(
             secret_row,
-            text="Сохранить",
+            text=i18n.tr("secret.save"),
             width=96,
             command=self._save_shared_secret_ui,
             font=ctk.CTkFont(size=12),
         ).pack(side="left", padx=(0, 6))
         ctk.CTkButton(
             secret_row,
-            text="Копировать",
+            text=i18n.tr("secret.copy"),
             width=96,
             command=self._copy_shared_secret_ui,
             font=ctk.CTkFont(size=12),
@@ -1518,26 +1645,21 @@ class PortalApp(ctk.CTk):
         sync_btns.pack(fill="x", padx=8, pady=(0, 6))
         ctk.CTkButton(
             sync_btns,
-            text="Сгенерировать и разослать по сети",
+            text=i18n.tr("secret.gen_push"),
             height=36,
             command=self._generate_and_sync_shared_secret_ui,
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(fill="x", pady=(0, 6))
         ctk.CTkButton(
             sync_btns,
-            text="Разослать пароль из поля (уже введённый)",
+            text=i18n.tr("secret.push_field"),
             height=32,
             command=self._push_shared_secret_from_field_ui,
             font=ctk.CTkFont(size=12),
         ).pack(fill="x")
         ctk.CTkLabel(
             t_secret,
-            text=(
-                "Разсылка идёт на все IP из вкладки «Пиры» (кроме этого ПК). "
-                "На удалённых машинах должен быть запущен приём Портала. "
-                "Нужен текущий общий пароль — сначала все в одной сети с одним паролем, или без пароля (режим как в старых версиях). "
-                "Отключить TCP-рассылку: PORTAL_NO_REMOTE_SECRET_SYNC=1."
-            ),
+            text=i18n.tr("secret.long_hint"),
             font=ctk.CTkFont(size=11),
             text_color="gray",
             wraplength=680,
@@ -1545,7 +1667,7 @@ class PortalApp(ctk.CTk):
         ).pack(anchor="w", padx=8, pady=(4, 8))
         ctk.CTkLabel(
             t_secret,
-            text="Пока пароль не задан, на главном экране показывается быстрый ввод.",
+            text=i18n.tr("secret.banner_hint2"),
             font=ctk.CTkFont(size=11),
             text_color="gray",
             wraplength=680,
@@ -1562,7 +1684,7 @@ class PortalApp(ctk.CTk):
             except Exception:
                 self._apk_win = None
         w = ctk.CTkToplevel(self)
-        w.title("Android APK")
+        w.title(i18n.tr("apk.title"))
         w.geometry("520x360")
         try:
             w.transient(self)
@@ -1571,15 +1693,12 @@ class PortalApp(ctk.CTk):
         self._apk_win = w
         ctk.CTkLabel(
             w,
-            text="Android · Share → Portal",
+            text=i18n.tr("apk.heading"),
             font=ctk.CTkFont(size=16, weight="bold"),
         ).pack(anchor="w", padx=14, pady=(14, 4))
         ctk.CTkLabel(
             w,
-            text=(
-                "Готовый APK лежит в GitHub Release (тег portal-android-latest). "
-                "Кнопка ниже качает его в папку «Загрузки»."
-            ),
+            text=i18n.tr("apk.blurb"),
             font=ctk.CTkFont(size=11),
             text_color="gray",
             wraplength=480,
@@ -1587,7 +1706,7 @@ class PortalApp(ctk.CTk):
         ).pack(anchor="w", padx=14, pady=(0, 12))
         ctk.CTkButton(
             w,
-            text="⬇ Скачать APK с GitHub",
+            text=i18n.tr("apk.download"),
             height=44,
             command=self.download_portal_apk_from_github,
             font=ctk.CTkFont(size=15, weight="bold"),
@@ -1596,21 +1715,21 @@ class PortalApp(ctk.CTk):
         row2.pack(fill="x", padx=14, pady=4)
         ctk.CTkButton(
             row2,
-            text="Открыть релиз в браузере",
+            text=i18n.tr("apk.open_release"),
             width=200,
             command=self.open_apk_release_page,
             font=ctk.CTkFont(size=12),
         ).pack(side="left", padx=(0, 8))
         ctk.CTkButton(
             row2,
-            text="Собрать на GitHub",
+            text=i18n.tr("apk.build_gh"),
             width=160,
             command=self.trigger_android_apk_workflow,
             font=ctk.CTkFont(size=12),
         ).pack(side="left")
         ctk.CTkLabel(
             w,
-            text="Другой репозиторий (редко нужно):",
+            text=i18n.tr("apk.repo_hint"),
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(anchor="w", padx=14, pady=(14, 4))
@@ -1627,18 +1746,14 @@ class PortalApp(ctk.CTk):
         wire_ctk_entry_paste(self.github_repo_entry)
         ctk.CTkButton(
             row,
-            text="Сохранить",
+            text=i18n.tr("apk.save"),
             width=100,
             command=self.save_github_repo_from_ui,
             font=ctk.CTkFont(size=12),
         ).pack(side="left")
         ctk.CTkLabel(
             w,
-            text=(
-                "Скачивание с GitHub для публичного репо идёт без токена (битый PAT в .env раньше ломал только его). "
-                "Сборка: без PORTAL_GITHUB_TOKEN откроется Actions — Run workflow; с токеном (repo + workflow) — запуск из приложения. "
-                "Приватный репо — нужен валидный токен и для скачивания."
-            ),
+            text=i18n.tr("apk.token_hint"),
             font=ctk.CTkFont(size=10),
             text_color="gray",
             wraplength=480,
@@ -1669,7 +1784,7 @@ class PortalApp(ctk.CTk):
             except Exception:
                 self._help_win = None
         h = ctk.CTkToplevel(self)
-        h.title("Справка · горячие клавиши")
+        h.title(i18n.tr("help.title"))
         h.geometry("620x480")
         try:
             h.transient(self)
@@ -1682,50 +1797,13 @@ class PortalApp(ctk.CTk):
         txt.configure(state="disabled")
 
     def _hotkey_help_text(self) -> str:
-        nl = chr(10)
-        if platform.system() == "Darwin":
-            _leg = os.environ.get("PORTAL_MAC_HOTKEY_LEGACY", "").strip().lower() in (
-                "1",
-                "true",
-                "yes",
-            )
-            if _leg:
-                lines = [
-                    "macOS (PORTAL_MAC_HOTKEY_LEGACY=1):",
-                    "  Портал — Cmd+Option+P",
-                    "  Отправить буфер — Cmd+Shift+C",
-                    "  Забрать буфер — Cmd+Shift+V",
-                    "  Русская раскладка — Cmd+Option+з, Cmd+Shift+с / м",
-                ]
-            else:
-                lines = [
-                    "macOS (по умолчанию, Cmd+Ctrl):",
-                    "  Показать/скрыть портал — Cmd+Ctrl+P",
-                    "  Отправить буфер — Cmd+Ctrl+C",
-                    "  Забрать буфер — Cmd+Ctrl+V",
-                    "  Русская раскладка — Cmd+Ctrl+з / с / м",
-                ]
-            extra = [
-                "",
-                "Забрать буфер — первый отмеченный IP на главном экране.",
-                "Старые сочетания: export PORTAL_MAC_HOTKEY_LEGACY=1",
-            ]
-            if sys.version_info >= (3, 13):
-                extra.append(
-                    "Python 3.13+: глобальные хоткеи — отдельный процесс (CGEventTap → NSEvent → pynput); "
-                    "обязательно «Мониторинг ввода» для **Portal.app** (сборка) или Python/Terminal (запуск из кода). "
-                    "После выдачи прав — полностью закрой Portal и открой снова. "
-                    "PORTAL_MAC_NO_HOTKEY_HELPER=1 — только при фокусе на окне Портала. "
-                    "Свёрнутое окно: байты из helper идут в Tk fileevent по pipe."
-                )
-            return nl.join(lines + extra)
-        lines = [
-            "Windows / Linux:",
-            "  Портал — Ctrl+Alt+P или Win+Shift+P",
-            "  Отправить буфер — Ctrl+Alt+C",
-            "  Забрать буфер — Ctrl+Alt+V",
-        ]
-        return nl.join(lines)
+        is_mac = platform.system() == "Darwin"
+        mac_legacy = os.environ.get("PORTAL_MAC_HOTKEY_LEGACY", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        return i18n.hotkey_help_text(is_mac, mac_legacy, sys.version_info >= (3, 13))
 
     def _setup_floating_log_window(self) -> None:
         if self._log_win is not None:
@@ -1735,7 +1813,7 @@ class PortalApp(ctk.CTk):
             except Exception:
                 pass
         self._log_win = ctk.CTkToplevel(self)
-        self._log_win.title("Журнал · Портал")
+        self._log_win.title(i18n.tr("logwin.title"))
         self._log_win.geometry("720x420")
         try:
             self._log_win.transient(self)
@@ -1747,33 +1825,35 @@ class PortalApp(ctk.CTk):
         log_title_row.pack(fill="x", padx=8, pady=(6, 4))
         ctk.CTkLabel(
             log_title_row,
-            text="📋 Журнал",
+            text=i18n.tr("logwin.heading"),
             font=ctk.CTkFont(size=14, weight="bold"),
         ).pack(side="left")
         ctk.CTkButton(
             log_title_row,
-            text="Копировать всё",
+            text=i18n.tr("logwin.copy_all"),
             width=120,
             command=self.copy_log_to_clipboard,
             font=ctk.CTkFont(size=12),
         ).pack(side="left", padx=(12, 6))
         ctk.CTkButton(
             log_title_row,
-            text="Копировать выделение",
+            text=i18n.tr("logwin.copy_sel"),
             width=150,
             command=self.copy_log_selection_to_clipboard,
             font=ctk.CTkFont(size=12),
         ).pack(side="left", padx=(0, 6))
         ctk.CTkButton(
             log_title_row,
-            text="Папка лога",
+            text=i18n.tr("logwin.open_folder"),
             width=110,
             command=self.open_log_folder,
             font=ctk.CTkFont(size=12),
         ).pack(side="left")
         self.log_hint_label = ctk.CTkLabel(
             log_frame,
-            text=f"Ctrl+C в журнале — копирование. Файл: {portal_config.activity_log_path()}",
+            text=i18n.tr(
+                "logwin.hint", path=str(portal_config.activity_log_path())
+            ),
             font=ctk.CTkFont(size=11),
             text_color="gray",
             wraplength=680,
@@ -2006,7 +2086,7 @@ class PortalApp(ctk.CTk):
         if not ips:
             ctk.CTkLabel(
                 self.peer_select_frame,
-                text="Добавь IP выше → «Сохранить список IP»",
+                text=i18n.tr("peer.add_ip_hint"),
                 font=ctk.CTkFont(size=11),
                 text_color="gray",
             ).pack(side="left", padx=4, pady=4)
@@ -2584,21 +2664,22 @@ class PortalApp(ctk.CTk):
         ip_e = ctk.CTkEntry(
             fr,
             width=128,
-            placeholder_text="* или IP",
+            placeholder_text=i18n.tr("widget.rule_ip_placeholder"),
             font=ctk.CTkFont(size=12),
         )
         ip_e.insert(0, peer)
         ip_e.pack(side="left", padx=(0, 6))
         wire_ctk_entry_paste(ip_e)
-        ev_labels = list(portal_config.WIDGET_PRESET_EVENT_LABELS_RU.values())
+        ev_map = i18n.widget_preset_event_labels()
+        ev_labels = list(ev_map.values())
         ev_m = ctk.CTkOptionMenu(
             fr,
             values=ev_labels,
             width=200,
             font=ctk.CTkFont(size=12),
         )
-        if event_key in portal_config.WIDGET_PRESET_EVENT_LABELS_RU:
-            ev_m.set(portal_config.WIDGET_PRESET_EVENT_LABELS_RU[event_key])
+        if event_key in ev_map:
+            ev_m.set(ev_map[event_key])
         else:
             ev_m.set(ev_labels[0])
         ev_m.pack(side="left", padx=(0, 6))
@@ -2652,9 +2733,7 @@ class PortalApp(ctk.CTk):
 
     def _collect_widget_preset_rules_from_table(self) -> List[Dict[str, str]]:
         rules: List[Dict[str, str]] = []
-        rev_ev = {
-            v: k for k, v in portal_config.WIDGET_PRESET_EVENT_LABELS_RU.items()
-        }
+        rev_ev = {v: k for k, v in i18n.widget_preset_event_labels().items()}
         for row in self._widget_preset_rule_rows:
             ip = (row["ip"].get() or "").strip() or "*"
             ev_ru = row["event_menu"].get()
@@ -2870,33 +2949,33 @@ class PortalApp(ctk.CTk):
     def _format_peer_probe_result(self, ip: str, ok: bool, code: str) -> tuple[str, str]:
         """Текст и цвет для строки статуса пары."""
         if not ip:
-            return "⚪ Пара: укажи IP и «Сохранить IP»", "gray"
+            return i18n.tr("peer.need_ip"), "gray"
         lbl = portal_config.peer_display_label(ip)
         if ok:
             return (
-                f"🟢 Пара ({lbl}): Портал на :{PORTAL_PORT} отвечает",
+                i18n.tr("peer.ok", lbl=lbl, port=PORTAL_PORT),
                 "#3dd68c",
             )
         if code == "refused":
             return (
-                f"🔌 Пара ({lbl}): порт {PORTAL_PORT} закрыт — на том ПК «Запустить портал»",
+                i18n.tr("peer.refused", lbl=lbl, port=PORTAL_PORT),
                 "#e74c3c",
             )
         if code == "timeout":
             return (
-                f"⏱ Пара ({lbl}): таймаут — Tailscale, IP или файрвол",
+                i18n.tr("peer.timeout", lbl=lbl),
                 "#e67e22",
             )
         if code == "dns":
-            return f"❓ Пара ({lbl}): адрес не найден (DNS)", "#e74c3c"
+            return i18n.tr("peer.dns", lbl=lbl), "#e74c3c"
         if code == "bad_reply":
             return (
-                f"⚠ Пара ({lbl}): порт открыт, но ответ не Портал",
+                i18n.tr("peer.bad_reply", lbl=lbl),
                 "#f39c12",
             )
         if code == "no_host":
-            return "⚪ Пара: укажи IP", "gray"
-        return f"❌ Пара ({lbl}): ошибка ({code})", "#e74c3c"
+            return i18n.tr("peer.no_host"), "gray"
+        return i18n.tr("peer.error", lbl=lbl, code=code), "#e74c3c"
 
     def _refresh_local_link_status_label(self) -> None:
         if not hasattr(self, "local_link_status_label"):
@@ -2904,18 +2983,12 @@ class PortalApp(ctk.CTk):
         if self.is_server_running:
             ip = self.tailscale_ip or "?"
             self.local_link_status_label.configure(
-                text=(
-                    f"🟢 Этот ПК принимает: {ip}:{PORTAL_PORT} "
-                    "(второй комп шлёт сюда файлы/буфер)"
-                ),
+                text=i18n.tr("local.recv_on", ip=ip, port=PORTAL_PORT),
                 text_color="#3dd68c",
             )
         else:
             self.local_link_status_label.configure(
-                text=(
-                    f"⏸ Этот ПК не принимает — нажми «Запустить портал» "
-                    f"(слушать :{PORTAL_PORT})"
-                ),
+                text=i18n.tr("local.recv_off", port=PORTAL_PORT),
                 text_color="#95a5a6",
             )
 
@@ -2947,7 +3020,7 @@ class PortalApp(ctk.CTk):
             self.after(
                 0,
                 lambda: self.peer_link_status_label.configure(
-                    text="⚪ Пары: добавь IP в список",
+                    text=i18n.tr("peer.probe_empty"),
                     text_color="gray",
                 ),
             )
@@ -2969,21 +3042,30 @@ class PortalApp(ctk.CTk):
                     oks = sum(1 for _, o, _ in results if o)
                     bad = [ip for ip, o, _ in results if not o]
                     if oks == len(results):
-                        msg_t = f"🟢 Все {len(results)} ПК отвечают на :{PORTAL_PORT}"
+                        msg_t = i18n.tr(
+                            "peer.all_ok", n=len(results), port=PORTAL_PORT
+                        )
                         msg_c = "#3dd68c"
                     elif oks:
-                        msg_t = f"⚠️ Онлайн {oks}/{len(results)} — нет: {', '.join(bad[:5])}"
+                        msg_t = i18n.tr(
+                            "peer.partial",
+                            ok=oks,
+                            total=len(results),
+                            bad=", ".join(bad[:5]),
+                        )
                         msg_c = "#e67e22"
                     else:
-                        msg_t = f"🔌 Ни один из {len(results)} ПК не отвечает ({bad[0]}…)"
+                        msg_t = i18n.tr(
+                            "peer.none_ok", n=len(results), first=bad[0]
+                        )
                         msg_c = "#e74c3c"
                 self.peer_link_status_label.configure(text=msg_t, text_color=msg_c)
                 if not silent:
                     for ip, ok, code in results:
                         if ok:
-                            self.log(f"📡 {ip}: OK (Портал)")
+                            self.log(i18n.tr("log.probe_ok", ip=ip))
                         else:
-                            self.log(f"📡 {ip}: нет связи ({code})")
+                            self.log(i18n.tr("log.probe_fail", ip=ip, code=code))
 
             try:
                 self.after(0, apply)
@@ -3010,7 +3092,7 @@ class PortalApp(ctk.CTk):
         except Exception:
             pass
         self.log_text.configure(state="normal")
-        self.log_text.insert("1.0", "Готов к работе...\n")
+        self.log_text.insert("1.0", i18n.tr("log.ready") + "\n")
         self.log_text.configure(state="disabled")
 
     def _setup_log_text_selectable(self) -> None:
@@ -3185,12 +3267,14 @@ class PortalApp(ctk.CTk):
             self.receive_thread = threading.Thread(target=self.server_loop, daemon=True)
             self.receive_thread.start()
             
-            self.start_button.configure(text="⏹ Остановить портал")
+            self.start_button.configure(text=i18n.tr("btn.stop"))
             self.send_button.configure(state="normal")
             self.clipboard_button.configure(state="normal")
-            shown = self.tailscale_ip or "все интерфейсы (0.0.0.0)"
+            shown = self.tailscale_ip or i18n.tr("status.all_interfaces")
             self.status_label.configure(
-                text=f"✅ Портал активен — {shown}:{PORTAL_PORT}",
+                text=i18n.tr(
+                    "status.active", shown=shown, port=PORTAL_PORT
+                ),
                 text_color="green",
             )
             self.log(f"✅ Портал запущен, приём на 0.0.0.0:{PORTAL_PORT} (для связи: {shown})")
@@ -3218,11 +3302,11 @@ class PortalApp(ctk.CTk):
             except:
                 pass
         
-        self.start_button.configure(text="🚀 Запустить портал")
+        self.start_button.configure(text=i18n.tr("btn.start"))
         self.send_button.configure(state="disabled")
         self.clipboard_button.configure(state="disabled")
         self.status_label.configure(
-            text="⏸ Портал остановлен",
+            text=i18n.tr("status.stopped"),
             text_color="gray"
         )
         self.log("⏸ Портал остановлен")

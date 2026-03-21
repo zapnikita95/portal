@@ -34,6 +34,24 @@ def activity_log_path() -> Path:
     return config_path().parent / "portal_activity.log"
 
 
+def load_ui_language() -> str:
+    """Язык UI: ru | en. Хранится в config.json."""
+    data = _load_all()
+    lang = str(data.get("ui_language") or "ru").strip().lower()
+    if lang not in ("ru", "en"):
+        return "ru"
+    return lang
+
+
+def save_ui_language(lang: str) -> bool:
+    lang = str(lang or "ru").strip().lower()
+    if lang not in ("ru", "en"):
+        return False
+    data = _load_all()
+    data["ui_language"] = lang
+    return _write_all(data)
+
+
 def _load_all() -> Dict[str, Any]:
     p = config_path()
     if not p.exists():

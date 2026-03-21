@@ -18,6 +18,7 @@ import subprocess
 from typing import Optional, Any, List
 
 import portal_config
+import portal_i18n as i18n
 
 try:
     from portal import PortalApp
@@ -275,7 +276,7 @@ class PortalWidget:
             self.root = tk.Tk()
 
         # Уникальный заголовок — по нему ищем NSWindow для настоящей прозрачности (macOS)
-        self.root.title("🌀 Портал · виджет")
+        self.root.title(i18n.tr("widget.desktop_title"))
 
         self.size = portal_config.load_widget_size()
         # Тёмная подложка режима «окошко» (macOS): GIF композится на неё, без дыры в стол через -transparentcolor
@@ -586,7 +587,6 @@ class PortalWidget:
             return
         self.root.update_idletasks()
         expected = self._mac_tk_rect_in_cocoa_space()
-        needle = "виджет"
         target = None
         best_score = float("inf")
         try:
@@ -609,6 +609,7 @@ class PortalWidget:
                     return None
                 title = str(win.title() or "")
                 tl = title.lower()
+                is_widget_title = "виджет" in tl or "widget" in tl
 
                 if expected is not None:
                     ex, ey, ew, eh = expected
@@ -622,7 +623,7 @@ class PortalWidget:
                     if dist > 48:
                         return None
                     score = dist
-                    if needle in tl:
+                    if is_widget_title:
                         score -= 18.0
                     if "портал" in tl or "portal" in tl:
                         score -= 8.0
@@ -634,11 +635,11 @@ class PortalWidget:
                 sz = float(self.size)
                 size_ok = abs(w0 - sz) <= 36 and abs(h0 - sz) <= 36
                 size_loose = abs(w0 - sz) <= 72 and abs(h0 - sz) <= 72
-                if needle in tl and size_ok:
+                if is_widget_title and size_ok:
                     return (-300.0, win)
-                if needle in tl and size_loose:
+                if is_widget_title and size_loose:
                     return (-200.0, win)
-                if needle in tl:
+                if is_widget_title:
                     return (-150.0, win)
                 if size_ok and ("портал" in tl or "portal" in tl):
                     return (-120.0, win)
@@ -1437,11 +1438,14 @@ class PortalWidget:
 
     def show_context_menu(self, event):
         menu = tk.Menu(self.root, tearoff=0)
+        clip_lbls = i18n.incoming_clipboard_files_mode_labels()
         menu.add_command(
-            label="IP удалённого ПК (или тройной клик по порталу)",
+            label=i18n.tr("widget.menu_remote_ip"),
             command=self.show_ip_dialog,
         )
-        menu.add_command(label="Выбрать файл (Ctrl+клик)", command=self.on_portal_click)
+        menu.add_command(
+            label=i18n.tr("widget.menu_pick_file"), command=self.on_portal_click
+        )
         cur = portal_config.load_incoming_clipboard_files_mode()
         clip_var = tk.StringVar(value=cur)
         clip_menu = tk.Menu(menu, tearoff=0)
@@ -1451,26 +1455,28 @@ class PortalWidget:
                 clip_var.set(mode_key)
                 if self.main_app and hasattr(self.main_app, "log"):
                     self.main_app.log(
-                        f"⚙️ Приём файлов из буфера: "
-                        f"{portal_config.INCOMING_CLIPBOARD_FILES_MODE_LABELS_RU.get(mode_key, mode_key)}"
+                        i18n.tr(
+                            "log.clipboard_recv_mode",
+                            label=clip_lbls.get(mode_key, mode_key),
+                        )
                     )
             else:
                 clip_var.set(portal_config.load_incoming_clipboard_files_mode())
 
         for key in ("both", "disk", "clipboard"):
             clip_menu.add_radiobutton(
-                label=portal_config.INCOMING_CLIPBOARD_FILES_MODE_LABELS_RU.get(key, key),
+                label=clip_lbls.get(key, key),
                 variable=clip_var,
                 value=key,
                 command=lambda k=key: _set_mode(k),
             )
         menu.add_cascade(
-            label="Приём файлов из буфера (папка / буфер / оба)…",
+            label=i18n.tr("widget.menu_clip_recv"),
             menu=clip_menu,
         )
-        menu.add_command(label="Скрыть", command=self.hide)
+        menu.add_command(label=i18n.tr("widget.menu_hide"), command=self.hide)
         menu.add_separator()
-        menu.add_command(label="Выход", command=self.destroy)
+        menu.add_command(label=i18n.tr("widget.menu_exit"), command=self.destroy)
         try:
             menu.tk_popup(event.x_root, event.y_root)
         finally:
@@ -1495,9 +1501,7 @@ class PortalWidget:
         im = grab_clipboard_image()
         if im is None:
             if self.main_app and hasattr(self.main_app, "log"):
-                self.main_app.log(
-                    "⚠️ В буфере нет картинки. Скопируй изображение (не только файл в Finder)."
-                )
+                self.main_app.log(i18n.tr("widget.no_clipboard_image"))
             return
 
         def send_with_ip(addr: str):
@@ -1524,20 +1528,28 @@ class PortalWidget:
         try:
             im.save(tmp, "PNG")
             if self.main_app and hasattr(self.main_app, "log"):
-                self.main_app.log(f"📋 Картинка из буфера → {tmp.name} → отправка на {ip}")
+                self.main_app.log(
+                    i18n.tr(
+                        "log.clipboard_image_send",
+                        path=tmp.name,
+                        ip=ip,
+                    )
+                )
             self.send_files([str(tmp)], portal_clipboard=True)
         except Exception as e:
             if self.main_app and hasattr(self.main_app, "log"):
-                self.main_app.log(f"❌ Не удалось сохранить картинку из буфера: {e}")
+                self.main_app.log(
+                    i18n.tr("log.clipboard_image_fail", err=e)
+                )
             print(f"[Portal] clipboard image: {e}")
 
     def show_ip_dialog(self):
         dialog = tk.Toplevel(self.root)
-        dialog.title("IP получателя")
+        dialog.title(i18n.tr("widget.ip_dialog_title"))
         dialog.geometry("320x160")
         dialog.attributes("-topmost", True)
 
-        tk.Label(dialog, text="IP второго компьютера:").pack(pady=10)
+        tk.Label(dialog, text=i18n.tr("widget.ip_label_simple")).pack(pady=10)
         ip_entry = tk.Entry(dialog, width=28)
         ip_entry.pack(pady=5)
         pref = self.target_ip or portal_config.load_remote_ip() or "100."
@@ -1553,16 +1565,18 @@ class PortalWidget:
                     portal_config.save_remote_ip(ip)
             dialog.destroy()
 
-        tk.Button(dialog, text="Сохранить", command=save_ip).pack(pady=10)
+        tk.Button(dialog, text=i18n.tr("secret.save"), command=save_ip).pack(
+            pady=10
+        )
 
     def show_ip_dialog_sync(self, callback):
         dialog = tk.Toplevel(self.root)
-        dialog.title("IP получателя")
+        dialog.title(i18n.tr("widget.ip_dialog_title"))
         dialog.geometry("320x160")
         dialog.attributes("-topmost", True)
         dialog.grab_set()
 
-        tk.Label(dialog, text="IP второго компьютера (Tailscale / LAN):").pack(pady=10)
+        tk.Label(dialog, text=i18n.tr("widget.ip_label_full")).pack(pady=10)
         ip_entry = tk.Entry(dialog, width=28)
         ip_entry.pack(pady=5)
         pref = self.target_ip or portal_config.load_remote_ip() or "100."
@@ -1582,7 +1596,9 @@ class PortalWidget:
 
     def on_portal_click(self):
         from tkinter import filedialog
-        files = filedialog.askopenfilenames(title="Выберите файлы для отправки")
+        files = filedialog.askopenfilenames(
+            title=i18n.tr("widget.file_pick_title")
+        )
         if files:
             self.send_files(list(files))
 
@@ -1598,7 +1614,12 @@ class PortalWidget:
         except Exception as e:
             if self.main_app and hasattr(self.main_app, "log"):
                 try:
-                    self.main_app.after(0, lambda m=str(e): self.main_app.log(f"⚠️ Буфер: {m}"))
+                    self.main_app.after(
+                        0,
+                        lambda m=str(e): self.main_app.log(
+                            i18n.tr("log.widget_clipboard_err", m=m)
+                        ),
+                    )
                 except Exception:
                     pass
             self.on_portal_click()
@@ -1614,7 +1635,12 @@ class PortalWidget:
             except Exception as e:
                 if self.main_app and hasattr(self.main_app, "log"):
                     try:
-                        self.main_app.after(0, lambda m=str(e): self.main_app.log(f"⚠️ Картинка: {m}"))
+                        self.main_app.after(
+                            0,
+                            lambda m=str(e): self.main_app.log(
+                                i18n.tr("log.widget_image_err", m=m)
+                            ),
+                        )
                     except Exception:
                         pass
                 self.on_portal_click()
@@ -1652,7 +1678,12 @@ class PortalWidget:
             ips = [ip]
         if self.main_app and hasattr(self.main_app, "log"):
             try:
-                self.main_app.after(0, lambda: self.main_app.log("📤 Картинка из буфера → отправка"))
+                self.main_app.after(
+                    0,
+                    lambda: self.main_app.log(
+                        i18n.tr("log.widget_send_clip_image")
+                    ),
+                )
             except Exception:
                 pass
         threading.Thread(target=self._send_file_to_ips_then_unlink, args=(path, ips), daemon=True).start()
@@ -1709,7 +1740,13 @@ class PortalWidget:
         for fp in files:
             if self.main_app and hasattr(self.main_app, "send_file"):
                 if hasattr(self.main_app, "log"):
-                    self.main_app.log(f"📤 Виджет: {Path(fp).name} → {len(targets)} ПК")
+                    self.main_app.log(
+                        i18n.tr(
+                            "log.widget_send_files",
+                            name=Path(fp).name,
+                            n=len(targets),
+                        )
+                    )
                 kw = {"portal_clipboard": True} if portal_clipboard else {}
                 for ip in targets:
                     threading.Thread(
