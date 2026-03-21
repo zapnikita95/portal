@@ -30,8 +30,8 @@ CHROMA_KEY = "#010101"
 
 def debug_log_path() -> Path:
     """Путь к файлу отладки хоткеев (один источник правды для UI и логов)."""
-    if platform.system() == "win32":
-        base = os.environ.get("TEMP") or os.environ.get("TMP") or str(Path.home())
+        if sys.platform == "win32":
+            base = os.environ.get("TEMP") or os.environ.get("TMP") or str(Path.home())
     else:
         base = os.environ.get("TMPDIR") or "/tmp"
     return Path(base) / "portal_hotkey_debug.log"
@@ -732,7 +732,7 @@ class GlobalHotkeyManager:
         self._safe_log(f"Платформа: {platform.system()}")
 
         # Windows: сначала keyboard — у pynput часто Ctrl+Alt «молчит» (драйверы, AltGr, Intel и т.д.)
-        if platform.system() == "win32":
+        if sys.platform == "win32":
             self._safe_log("🔍 Windows обнаружен — пробую keyboard ПЕРВЫМ (надёжнее чем pynput для Ctrl+Alt)")
             if self._run_windows_keyboard_primary():
                 self._safe_log("✅ keyboard успешно запущен, поток заблокирован на kb.wait()")
@@ -838,7 +838,7 @@ class GlobalHotkeyManager:
 
             self._safe_log(f"❌ pynput GlobalHotKeys упал: {e!r}")
             self._safe_log(traceback.format_exc())
-            if platform.system() == "win32":
+            if sys.platform == "win32":
                 self._safe_log("❌ На Windows оба бэкенда (keyboard и pynput) не сработали.")
                 self._safe_log("💡 Проверь: антивирус, запуск от имени пользователя (не из песочницы), права доступа.")
 
