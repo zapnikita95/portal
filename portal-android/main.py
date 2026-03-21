@@ -21,8 +21,7 @@ from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.checkbox import CheckBox
-from kivy.uix.floatlayout import FloatLayout
-from kivy.uix.image import Image
+from kivy.uix.image import AsyncImage
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
@@ -72,6 +71,27 @@ PORTAL_SOURCE_ANDROID = "android"
 PORTAL_PORT = 12345
 CONFIG_NAME = "portal_android_config.json"
 
+try:
+    from android_folder_picker import (
+        android_cache_dir,
+        close_java,
+        copy_path_to_java_stream,
+        create_document_output_stream,
+    )
+except ImportError:
+    def android_cache_dir() -> str:
+        return ""
+
+    def close_java(_o) -> None:
+        pass
+
+    def copy_path_to_java_stream(_path: str, _out) -> bool:
+        return False
+
+    def create_document_output_stream(_tree: str, _name: str):
+        return None, None
+
+
 # Тема
 C_BG     = (0.05, 0.06, 0.10, 1)
 C_PANEL  = (0.10, 0.12, 0.19, 1)
@@ -109,7 +129,7 @@ def load_cfg() -> dict:
             return json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             pass
-    return {"peers": [], "secret": "", "receive_dir": ""}
+    return {"peers": [], "secret": "", "receive_dir": "", "receive_saf_tree_uri": ""}
 
 
 def save_cfg(data: dict) -> None:
@@ -160,31 +180,21 @@ def _default_receive_dir() -> str:
     return str(Path.home() / "Downloads")
 
 
-def _kivy_image_uri(abs_path: str) -> str:
-    if not abs_path:
-        return abs_path
-    if abs_path.startswith("file://"):
-        return abs_path
-    if kivy_platform == "android":
-        return "file://" + abs_path
-    return abs_path
-
-
 def _mascot_image_source() -> tuple:
     here = Path(__file__).resolve().parent
     gif_local = here / "assets" / "portal_main.gif"
     png_local  = here / "assets" / "icon.png"
     if gif_local.is_file():
-        return (_kivy_image_uri(str(gif_local)), True)
+        return (str(gif_local.resolve()), True)
     if png_local.is_file():
-        return (_kivy_image_uri(str(png_local)), False)
+        return (str(png_local.resolve()), False)
     # Dev run from root
     dev_gif = here.parent / "assets" / "portal_main.gif"
     if dev_gif.is_file():
-        return (str(dev_gif), True)
+        return (str(dev_gif.resolve()), True)
     dev_png = here.parent / "assets" / "branding" / "portal_icon.png"
     if dev_png.is_file():
-        return (_kivy_image_uri(str(dev_png)), False)
+        return (str(dev_png.resolve()), False)
     return (None, False)
 
 
@@ -222,8 +232,15 @@ def _parse_json_header(data: bytes):
 class ReceiveServer:
     """TCP-сервер на порту 12345 — принимает файлы и текст от десктопного Portal."""
 
-    def __init__(self, receive_dir: str = "", secret: str = "", on_event=None):
+    def __init__(
+        self,
+        receive_dir: str = "",
+        secret: str = "",
+        on_event=None,
+        saf_tree_uri: str = "",
+    ):
         self.receive_dir = receive_dir or _default_receive_dir()
+        self.saf_tree_uri = (saf_tree_uri or "").strip()
         self.secret = secret
         self.on_event = on_event   # callback(kind, message) — вызывается через Clock
         self._running  = False
@@ -246,9 +263,12 @@ class ReceiveServer:
             except Exception:
                 pass
 
-    def update_config(self, receive_dir: str = "", secret: str = "") -> None:
+    def update_config(
+        self, receive_dir: str = "", secret: str = "", saf_tree_uri: str = ""
+    ) -> None:
         self.receive_dir = receive_dir or _default_receive_dir()
         self.secret = secret
+        self.saf_tree_uri = (saf_tree_uri or "").strip()
 
     def _emit(self, kind: str, msg: str) -> None:
         if self.on_event:
@@ -358,18 +378,66 @@ class ReceiveServer:
         already: bytes,
     ) -> None:
         safe = _safe_filename(filename)
-        save_dir = self.receive_dir or _default_receive_dir()
-        try:
-            os.makedirs(save_dir, exist_ok=True)
-        except Exception as e:
-            self._emit("error", f"Не могу создать папку {save_dir}: {e}")
-            conn.close()
-            return
-
         ts = int(time.time())
-        out_path = os.path.join(save_dir, f"{ts}_{safe}")
+        use_saf = bool(self.saf_tree_uri) and is_android_runtime() and kivy_platform == "android"
+        save_dir = self.receive_dir or _default_receive_dir()
+        tmp_path: Optional[str] = None
+        out_path: Optional[str] = None
         received = len(already)
+
         try:
+            if use_saf:
+                cache = android_cache_dir() or save_dir
+                try:
+                    os.makedirs(cache, exist_ok=True)
+                except Exception:
+                    pass
+                tmp_path = os.path.join(cache, f"_portal_in_{ts}_{safe}")
+                with open(tmp_path, "wb") as f:
+                    if already:
+                        f.write(already)
+                    while received < filesize:
+                        to_read = min(65536, filesize - received)
+                        chunk = conn.recv(to_read)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        received += len(chunk)
+                if received < filesize:
+                    self._emit("error", f"⚠️ Файл {safe}: получено {received}/{filesize} байт")
+                    return
+                out_java, _uri = create_document_output_stream(
+                    self.saf_tree_uri, f"{ts}_{safe}"
+                )
+                if out_java is None:
+                    self._emit(
+                        "error",
+                        f"⚠️ Не удалось создать файл в выбранной папке (проводник): {safe}",
+                    )
+                    return
+                try:
+                    if not copy_path_to_java_stream(tmp_path, out_java):
+                        self._emit("error", f"⚠️ Ошибка записи в папку проводника: {safe}")
+                        return
+                finally:
+                    close_java(out_java)
+                conn.sendall(b"OK")
+                kb = max(1, filesize // 1024)
+                self._emit(
+                    "receive_file",
+                    f"📥 Получен файл от {peer_ip}: {safe} ({kb} КБ) → папка (проводник)",
+                )
+                if is_android_runtime():
+                    toast(f"Файл получен: {safe}", long=False)
+                return
+
+            try:
+                os.makedirs(save_dir, exist_ok=True)
+            except Exception as e:
+                self._emit("error", f"Не могу создать папку {save_dir}: {e}")
+                return
+
+            out_path = os.path.join(save_dir, f"{ts}_{safe}")
             with open(out_path, "wb") as f:
                 if already:
                     f.write(already)
@@ -394,9 +462,14 @@ class ReceiveServer:
         except Exception as e:
             self._emit("error", f"⚠️ Ошибка записи {safe}: {e}")
         finally:
+            if tmp_path and os.path.isfile(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
             try:
                 conn.close()
-            except Exception:
+            except OSError:
                 pass
 
 
@@ -453,6 +526,9 @@ class Hint(Label):
 
 
 def _input(hint="", password=False, height=dp(48), **kwargs) -> TextInput:
+    # use_bubble: вставка из буфера долгим нажатием на Android
+    kwargs.setdefault("use_bubble", True)
+    kwargs.setdefault("use_handles", True)
     return TextInput(
         hint_text=hint,
         multiline=False,
@@ -524,6 +600,8 @@ class PeerRow(BoxLayout):
             text=ip,
             multiline=False,
             write_tab=False,
+            use_bubble=True,
+            use_handles=True,
             size_hint_x=1,
             background_color=C_INPUT,
             foreground_color=C_TEXT,
@@ -544,6 +622,8 @@ class PeerRow(BoxLayout):
             text=name,
             multiline=False,
             write_tab=False,
+            use_bubble=True,
+            use_handles=True,
             size_hint_x=1,
             background_color=C_INPUT,
             foreground_color=C_TEXT,
@@ -579,20 +659,23 @@ class PortalAndroidApp(App):
         super().__init__(**kwargs)
         self._share_boot          = False
         self._share_completed     = False
-        self._cold_share_started  = False
+        self._cold_share_started = False
+        self._cold_share_ui_mounted = False
         self._peer_rows: list     = []
         self._peers_box           = None
         self._status_lbl          = None
         self._secret_field        = None
         self._receive_dir_field   = None
         self._test_text           = None
-        self._mascot: Optional[Image] = None
+        self._mascot: Optional[AsyncImage] = None
         self._mascot_is_gif       = False
         self._conn_lbl            = None
         self._log_label           = None
         self._log_lines: list     = []
         self._ping_event          = None
         self._recv_server: Optional[ReceiveServer] = None
+        self._receive_saf_uri: str = ""
+        self._cold_share_container: Optional[BoxLayout] = None
 
     # ── конфиг ──────────────────────────────────────────────────────────────
 
@@ -617,7 +700,35 @@ class PortalAndroidApp(App):
             try:
                 if is_share_intent():
                     self._share_boot = True
-                    return FloatLayout()
+                    shell = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(10))
+                    shell.add_widget(
+                        Label(
+                            text="Portal",
+                            font_size=dp(22),
+                            bold=True,
+                            color=C_TEXT,
+                            size_hint_y=None,
+                            height=dp(36),
+                            halign="left",
+                        )
+                    )
+                    shell.add_widget(
+                        Label(
+                            text="Кому отправить файл или текст?",
+                            font_size=dp(13),
+                            color=C_MUTED,
+                            size_hint_y=None,
+                            height=dp(28),
+                            halign="left",
+                        )
+                    )
+                    self._cold_share_container = BoxLayout(
+                        orientation="vertical",
+                        spacing=dp(8),
+                        size_hint_y=1,
+                    )
+                    shell.add_widget(self._cold_share_container)
+                    return shell
             except Exception:
                 pass
         return self._build_ui()
@@ -640,19 +751,21 @@ class PortalAndroidApp(App):
 
         masc_src, masc_gif = _mascot_image_source()
         if masc_src:
+            # AsyncImage + абсолютный путь: на Android file:// часто даёт пустую текстуру (цветной квадрат)
             kw = dict(
                 source=masc_src,
                 size_hint=(None, None),
-                size=(dp(64), dp(64)),
+                size=(dp(72), dp(72)),
                 allow_stretch=True,
                 keep_ratio=True,
-                mipmap=True,
+                mipmap=False,
+                nocache=True,
             )
             if masc_gif:
                 kw["anim_delay"] = _GIF_FRAME_DELAY
-            self._mascot = Image(**kw)
+                kw["anim_loop"] = 0
+            self._mascot = AsyncImage(**kw)
             self._mascot_is_gif = masc_gif
-            # Полный цвет сразу — не серить до результата первого пинга
             self._mascot.color = (1, 1, 1, 1)
             header.add_widget(self._mascot)
 
@@ -745,15 +858,27 @@ class PortalAndroidApp(App):
         recv_card.add_widget(SectionTitle("Папка для входящих файлов"))
         recv_card.add_widget(
             Hint(
-                "Сюда сохраняются файлы, которые десктопный Portal отправляет НА телефон. "
-                "По умолчанию: папка Загрузки. Portal сам принимает файлы — "
-                "не нужен Share Sheet (файл прилетит в фоне)."
+                "Файлы с ПК сохраняются сюда. По умолчанию — системная папка «Загрузки». "
+                "Кнопка «Выбрать папку» открывает проводник Android (можно создать папку там же)."
             )
         )
         self._receive_dir_field = _input(
             hint=_default_receive_dir(),
         )
         recv_card.add_widget(self._receive_dir_field)
+        pick_row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(44),
+            spacing=dp(8),
+        )
+        pick_btn = _btn("📂 Выбрать папку", bg=C_BLUE, height=dp(44), font_size=dp(13))
+        pick_btn.bind(on_press=lambda *_: self._pick_receive_folder())
+        reset_btn = _btn("↺ Загрузки", bg=(0.18, 0.2, 0.28, 1), height=dp(44), font_size=dp(12))
+        reset_btn.bind(on_press=lambda *_: self._reset_receive_folder_default())
+        pick_row.add_widget(pick_btn)
+        pick_row.add_widget(reset_btn)
+        recv_card.add_widget(pick_row)
         body.add_widget(recv_card)
 
         # ── Кнопки сохранить/проверить связь ──────────────────────────────
@@ -775,6 +900,8 @@ class PortalAndroidApp(App):
             hint_text="Текст для проверки",
             multiline=True,
             write_tab=False,
+            use_bubble=True,
+            use_handles=True,
             size_hint_y=None,
             height=dp(80),
             background_color=C_INPUT,
@@ -841,9 +968,15 @@ class PortalAndroidApp(App):
         cfg = load_cfg()
         if self._secret_field:
             self._secret_field.text = cfg.get("secret", "") or ""
+        self._receive_saf_uri = (cfg.get("receive_saf_tree_uri") or "").strip()
         if self._receive_dir_field:
-            rdir = cfg.get("receive_dir", "") or ""
-            self._receive_dir_field.text = rdir
+            if self._receive_saf_uri:
+                self._receive_dir_field.text = (
+                    "📁 Папка выбрана в проводнике — нажми «💾 Сохранить»."
+                )
+            else:
+                rdir = cfg.get("receive_dir", "") or ""
+                self._receive_dir_field.text = rdir or _default_receive_dir()
         for pr in normalize_peers(cfg.get("peers")):
             self._add_peer_row(ip=pr["ip"], name=pr.get("name") or pr["ip"], send=pr.get("send", True))
         if not self._peer_rows:
@@ -854,11 +987,19 @@ class PortalAndroidApp(App):
     # ── on_start / on_stop ──────────────────────────────────────────────────
 
     def on_start(self):
+        # ВАЖНО: при старте из Share Sheet раньше не поднимали ReceiveServer — исправлено.
+        Clock.schedule_once(lambda _dt: self._start_receive_server(), 0.05)
+        if kivy_platform == "android":
+            try:
+                from android_folder_picker import bind_folder_picker
+
+                bind_folder_picker()
+            except Exception:
+                pass
         if self._share_boot:
-            Clock.schedule_once(lambda _dt: self._begin_share_cold(), 0.05)
-            return
-        Clock.schedule_once(lambda _dt: self._start_receive_server(), 0.1)
-        Clock.schedule_once(lambda _dt: self._start_ping_watch(), 0.5)
+            Clock.schedule_once(lambda _dt: self._mount_cold_share_ui(), 0.2)
+        else:
+            Clock.schedule_once(lambda _dt: self._start_ping_watch(), 0.5)
 
     def on_stop(self):
         if self._ping_event:
@@ -872,13 +1013,23 @@ class PortalAndroidApp(App):
     # ── Сервер приёма ────────────────────────────────────────────────────────
 
     def _start_receive_server(self):
+        if self._recv_server is not None:
+            try:
+                self._recv_server.stop()
+            except Exception:
+                pass
+            self._recv_server = None
         cfg = load_cfg()
-        secret   = cfg.get("secret", "") or ""
+        secret = cfg.get("secret", "") or ""
+        saf = (cfg.get("receive_saf_tree_uri") or "").strip()
         recv_dir = cfg.get("receive_dir", "") or _default_receive_dir()
+        if not saf:
+            recv_dir = recv_dir or _default_receive_dir()
         self._recv_server = ReceiveServer(
             receive_dir=recv_dir,
             secret=secret,
             on_event=self._on_server_event,
+            saf_tree_uri=saf,
         )
         self._recv_server.start()
 
@@ -1020,22 +1171,36 @@ class PortalAndroidApp(App):
                 self._set_status("Добавьте хотя бы один IP-адрес.")
                 return
 
-            secret   = self._secret_field.text.strip() if self._secret_field else ""
-            recv_dir = self._receive_dir_field.text.strip() if self._receive_dir_field else ""
+            secret = self._secret_field.text.strip() if self._secret_field else ""
+            recv_txt = (self._receive_dir_field.text or "").strip() if self._receive_dir_field else ""
+            saf = (self._receive_saf_uri or "").strip()
+            if saf:
+                recv_dir = _default_receive_dir()
+            else:
+                if recv_txt.startswith("📁"):
+                    recv_dir = _default_receive_dir()
+                else:
+                    recv_dir = recv_txt or _default_receive_dir()
 
-            cfg = {"peers": peers, "secret": secret, "receive_dir": recv_dir}
+            cfg = {
+                "peers": peers,
+                "secret": secret,
+                "receive_dir": recv_dir,
+                "receive_saf_tree_uri": saf,
+            }
             save_cfg(cfg)
 
             if self._recv_server:
                 self._recv_server.update_config(
                     receive_dir=recv_dir or _default_receive_dir(),
                     secret=secret,
+                    saf_tree_uri=saf,
                 )
 
             n_send = sum(1 for p in peers if p.get("send"))
+            dest_human = "папка из проводника" if saf else (recv_dir or _default_receive_dir())
             self._set_status(
-                f"Сохранено: {len(peers)} адрес(ов), отправка на {n_send}. "
-                f"Приём → {recv_dir or _default_receive_dir()}"
+                f"Сохранено: {len(peers)} адрес(ов), отправка на {n_send}. Приём → {dest_human}"
             )
             self._log(f"💾 Настройки сохранены ({len(peers)} адрес(ов), пароль: {'да' if secret else 'нет'})")
             if is_android_runtime():
@@ -1043,6 +1208,39 @@ class PortalAndroidApp(App):
             Clock.schedule_once(lambda _dt: self._ping_peers_bg(), 0.4)
         except Exception as e:
             self._set_status(f"Ошибка: {e}")
+
+    def _pick_receive_folder(self) -> None:
+        if kivy_platform != "android":
+            self._set_status("Выбор папки только на Android.")
+            return
+        try:
+            from android_folder_picker import pick_receive_folder
+        except Exception as e:
+            self._set_status(f"Проводник недоступен: {e}")
+            return
+
+        def on_uri(uri: Optional[str]) -> None:
+            def apply(*_a):
+                if not uri:
+                    toast("Папка не выбрана", long=False)
+                    return
+                self._receive_saf_uri = uri.strip()
+                if self._receive_dir_field:
+                    self._receive_dir_field.text = (
+                        "📁 Папка выбрана в проводнике — нажми «💾 Сохранить»."
+                    )
+                self._set_status("Папка выбрана. Нажми «💾 Сохранить».")
+            Clock.schedule_once(apply, 0)
+
+        pick_receive_folder(on_uri)
+
+    def _reset_receive_folder_default(self) -> None:
+        self._receive_saf_uri = ""
+        d = _default_receive_dir()
+        if self._receive_dir_field:
+            self._receive_dir_field.text = d
+        self._set_status(f"Сброс на Загрузки: {d}")
+        toast("Указана папка Загрузки — сохрани настройки", long=False)
 
     def _set_status(self, msg: str) -> None:
         if self._status_lbl:
@@ -1090,6 +1288,170 @@ class PortalAndroidApp(App):
 
     # ── Share Sheet ──────────────────────────────────────────────────────────
 
+    def _mount_cold_share_ui(self) -> None:
+        if self._cold_share_ui_mounted:
+            return
+        self._cold_share_ui_mounted = True
+        cont = self._cold_share_container
+        if cont is None:
+            toast("Portal: внутренняя ошибка Share", long=True)
+            finish_activity()
+            return
+        try:
+            payload = read_share_intent()
+        except Exception as ex:
+            toast(f"Portal: {ex}", long=True)
+            finish_activity()
+            return
+        if not self._payload_ok(payload):
+            toast("Portal: пустой «Поделиться»", long=True)
+            finish_activity()
+            return
+        cfg = load_cfg()
+        peers = normalize_peers(cfg.get("peers"))
+        targets = peers_marked_for_send(peers)
+        if not targets:
+            toast(
+                "Нет адресов ПК. Открой Portal из иконки, добавь IP и «💾 Сохранить», "
+                "затем снова «Поделиться» → Portal.",
+                long=True,
+            )
+            finish_activity()
+            return
+        secret = (cfg.get("secret") or "").strip()
+        cont.clear_widgets()
+        cont.add_widget(
+            self._build_share_destinations_panel(payload, targets, secret, popup=None)
+        )
+
+    def _payload_ok(self, payload) -> bool:
+        if not payload:
+            return False
+        return bool(payload.file_paths) or bool((payload.text or "").strip())
+
+    def _build_share_destinations_panel(
+        self,
+        payload,
+        targets: list,
+        secret: str,
+        *,
+        popup: Optional[Popup],
+    ):
+        """Галочки по ПК + «Подтвердить» / «Отмена». popup=None — холодный Share (полный экран)."""
+        cold_cancel = popup is None and self._share_boot
+        checks: list = []
+
+        root = BoxLayout(orientation="vertical", spacing=dp(12), padding=dp(6), size_hint_y=1)
+
+        nfiles = len(payload.file_paths)
+        if nfiles:
+            names = [os.path.basename(p) for p in payload.file_paths[:5]]
+            preview = "📎 " + ", ".join(names) + ("…" if nfiles > 5 else "")
+        else:
+            tx = (payload.text or "").strip()
+            preview = (
+                (f"📋 {tx[:220]}…" if len(tx) > 220 else f"📋 {tx}") if tx else "—"
+            )
+
+        prev_lbl = Label(
+            text=f"Отправить:\n{preview}",
+            font_size=dp(14),
+            color=C_TEXT,
+            size_hint_y=None,
+            halign="left",
+            valign="top",
+        )
+        prev_lbl.bind(
+            width=lambda inst, w: setattr(inst, "text_size", (max(w - dp(4), dp(80)), None))
+        )
+        prev_lbl.bind(
+            texture_size=lambda inst, ts: setattr(
+                inst, "height", max(ts[1] + dp(8), dp(44))
+            )
+        )
+        root.add_widget(prev_lbl)
+
+        root.add_widget(
+            Label(
+                text="Кому отправить (сними галочку, если не нужен):",
+                font_size=dp(12),
+                color=C_MUTED,
+                size_hint_y=None,
+                height=dp(30),
+                halign="left",
+            )
+        )
+
+        scroll = ScrollView(do_scroll_x=False, bar_width=dp(4), size_hint_y=1)
+        col = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None)
+        col.bind(minimum_height=col.setter("height"))
+        for p in targets:
+            row = BoxLayout(
+                orientation="horizontal",
+                size_hint_y=None,
+                height=dp(48),
+                spacing=dp(8),
+            )
+            cb = CheckBox(size_hint=(None, None), size=(dp(40), dp(40)), active=True)
+            cb.color = C_ACCENT
+            lbl = Label(
+                text=p.get("name") or p["ip"],
+                font_size=dp(14),
+                color=C_TEXT,
+                halign="left",
+                valign="middle",
+                size_hint_x=1,
+            )
+            lbl.bind(
+                size=lambda inst, sz: setattr(
+                    inst, "text_size", (max(sz[0] - 4, dp(60)), None)
+                )
+            )
+            row.add_widget(cb)
+            row.add_widget(lbl)
+            col.add_widget(row)
+            checks.append((cb, p))
+        scroll.add_widget(col)
+        root.add_widget(scroll)
+
+        btn_row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(54),
+            spacing=dp(10),
+        )
+
+        def confirm(*_a):
+            sel = [peer for cb, peer in checks if cb.active]
+            if not sel:
+                toast("Отметь хотя бы один ПК", long=False)
+                return
+            if popup is not None:
+                try:
+                    popup.dismiss()
+                except Exception:
+                    pass
+            self._share_completed = True
+            self._send_with_progress(payload, sel, secret)
+
+        def cancel(*_a):
+            if popup is not None:
+                try:
+                    popup.dismiss()
+                except Exception:
+                    pass
+            if cold_cancel:
+                finish_activity()
+
+        b_ok = _btn("Подтвердить отправку", bg=C_BLUE, height=dp(50), font_size=dp(14))
+        b_ok.bind(on_press=confirm)
+        b_cancel = _btn("Отмена", bg=(0.28, 0.30, 0.38, 1), height=dp(50), font_size=dp(13))
+        b_cancel.bind(on_press=cancel)
+        btn_row.add_widget(b_ok)
+        btn_row.add_widget(b_cancel)
+        root.add_widget(btn_row)
+        return root
+
     def _android_new_intent(self, intent) -> None:
         try:
             if not is_share_intent(intent=intent):
@@ -1100,99 +1462,40 @@ class PortalAndroidApp(App):
             toast(f"Portal: {ex}", long=True)
             finish_activity()
 
-    def _begin_share_cold(self) -> None:
-        if self._cold_share_started:
-            return
-        self._cold_share_started = True
-        try:
-            payload = read_share_intent()
-            self._run_share(payload)
-        except Exception as ex:
-            toast(f"Portal: {ex}", long=True)
-            finish_activity()
-
     def _run_share(self, payload) -> None:
         if send_file_to_peer is None or send_text_clipboard is None:
             toast("Portal: нет portal_protocol", long=True)
             finish_activity()
             return
-        if not payload:
-            toast("Portal: ничего не получено из «Поделиться»", long=True)
-            finish_activity()
-            return
-        has_files = bool(payload.file_paths)
-        has_text  = bool((payload.text or "").strip())
-        if not has_files and not has_text:
+        if not self._payload_ok(payload):
             toast("Portal: пустой share", long=True)
             finish_activity()
             return
 
-        cfg     = load_cfg()
-        peers   = normalize_peers(cfg.get("peers"))
-        secret  = (cfg.get("secret") or "").strip()
+        cfg = load_cfg()
+        peers = normalize_peers(cfg.get("peers"))
+        secret = (cfg.get("secret") or "").strip()
         targets = peers_marked_for_send(peers)
 
         if not targets:
             toast(
-                "Откройте Portal, добавьте IP компьютера и сохраните настройки.",
+                "Добавь IP компьютера в Portal и «💾 Сохранить», затем повтори «Поделиться».",
                 long=True,
             )
             finish_activity()
             return
 
-        if len(targets) == 1:
-            self._share_completed = True
-            self._send_with_progress(payload, targets, secret)
-        else:
-            self._open_peer_picker(payload, targets, secret)
-
-    def _open_peer_picker(self, payload, peers: list, secret: str) -> None:
         self._share_completed = False
-        layout = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(10))
-        layout.add_widget(
-            Label(
-                text="Кому отправить?",
-                size_hint_y=None,
-                height=dp(36),
-                color=C_TEXT,
-                font_size=dp(16),
-                bold=True,
-                halign="center",
-            )
+        popup = Popup(
+            title="Отправить через Portal",
+            size_hint=(0.92, 0.76),
+            auto_dismiss=False,
         )
-        col = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None)
-        col.bind(minimum_height=col.setter("height"))
-        pop = [None]
-
-        def make_handler(target_peers):
-            def on_press(_w):
-                self._share_completed = True
-                pop[0].dismiss()
-                self._send_with_progress(payload, target_peers, secret)
-            return on_press
-
-        for peer in peers:
-            label = peer.get("name") or peer["ip"]
-            b = _btn(label, bg=C_BLUE, height=dp(52))
-            b.bind(on_press=make_handler([peer]))
-            col.add_widget(b)
-
-        b_all = _btn("На все отмеченные", bg=C_ACCENT, height=dp(52))
-        b_all.bind(on_press=make_handler(list(peers)))
-        col.add_widget(b_all)
-
-        scr = ScrollView(size_hint=(1, 1), do_scroll_x=False)
-        scr.add_widget(col)
-        layout.add_widget(scr)
-
-        pop[0] = Popup(
-            title="Portal",
-            content=layout,
-            size_hint=(0.9, 0.65),
-            auto_dismiss=True,
+        panel = self._build_share_destinations_panel(
+            payload, targets, secret, popup=popup
         )
-        pop[0].bind(on_dismiss=lambda *_: (finish_activity() if not self._share_completed else None))
-        pop[0].open()
+        popup.content = panel
+        popup.open()
 
     def _send_with_progress(self, payload, targets: list, secret: str) -> None:
         """Показать попап прогресса, отправить в фоне, закрыть по завершении."""
@@ -1293,12 +1596,12 @@ class PortalAndroidApp(App):
             "Portal — передача файлов и текста между Android и компьютером в одной сети "
             "(локальная сеть или Tailscale VPN).\n\n"
             "Отправить с телефона на ПК\n"
-            "• Откройте любой файл на телефоне → «Поделиться» → Portal.\n"
-            "• Или используйте «Тест: отправить текст» в приложении.\n\n"
+            "• «Поделиться» → Portal → отметь галочками ПК → «Подтвердить отправку».\n"
+            "• Или «Тест: отправить текст» в приложении.\n\n"
             "Получить файл с ПК на телефон\n"
-            "• Убедитесь, что Portal запущен на телефоне (этот экран открыт).\n"
-            "• На компьютере в настольном Portal выберите файл и нажмите «Отправить».\n"
-            "• Файл сохранится в указанную папку (по умолчанию — Загрузки).\n\n"
+            "• Portal должен быть запущен (приём работает в фоне).\n"
+            "• Папка: по умолчанию «Загрузки»; кнопка «Выбрать папку» открывает проводник.\n"
+            "• После выбора папки нажми «💾 Сохранить».\n\n"
             "Адреса\n"
             "• IP-адрес ПК отображается в шапке настольного Portal (часто 100.… в Tailscale).\n"
             "• Галочка рядом с адресом = разрешена отправка на этот ПК.\n\n"
