@@ -36,23 +36,32 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 
-def probe_portal_peer(host: str, port: int = PORTAL_PORT, timeout: float = 3.0) -> tuple[bool, str]:
+# Таймаут проверки «пара онлайн» (медленный Tailscale / Wi‑Fi)
+PROBE_TIMEOUT_SEC = 10.0
+
+
+def probe_portal_peer(host: str, port: int = PORTAL_PORT, timeout: float = PROBE_TIMEOUT_SEC) -> tuple[bool, str]:
     """
-    Проверка, что на host действительно отвечает Портал (ping → pong).
-    Возвращает (успех, код): код — ok | refused | timeout | bad_reply | dns | error
+    Проверка Портала на host: TCP + ping → pong.
+    Возвращает (успех, код):
+      ok | refused | timeout | bad_reply | dns | error | legacy_port_open
+    legacy_port_open — порт слушает, но нет ответа pong (часто старая версия на паре).
     """
     host = (host or "").strip()
     if not host:
         return False, "no_host"
+    s = None
+    tcp_connected = False
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(timeout)
         s.connect((host, port))
+        tcp_connected = True
         s.sendall(json.dumps({"type": "ping"}, ensure_ascii=False).encode("utf-8"))
+        s.settimeout(min(5.0, timeout))
         data = s.recv(4096)
-        s.close()
         if not data:
-            return False, "bad_reply"
+            return False, "legacy_port_open"
         msg = json.loads(data.decode("utf-8", errors="replace"))
         if msg.get("type") == "pong":
             return True, "ok"
@@ -60,6 +69,8 @@ def probe_portal_peer(host: str, port: int = PORTAL_PORT, timeout: float = 3.0) 
     except ConnectionRefusedError:
         return False, "refused"
     except socket.timeout:
+        if tcp_connected:
+            return False, "legacy_port_open"
         return False, "timeout"
     except socket.gaierror:
         return False, "dns"
@@ -69,6 +80,12 @@ def probe_portal_peer(host: str, port: int = PORTAL_PORT, timeout: float = 3.0) 
         return False, "bad_reply"
     except Exception:
         return False, "error"
+    finally:
+        if s is not None:
+            try:
+                s.close()
+            except Exception:
+                pass
 
 
 class PortalApp(ctk.CTk):
@@ -232,15 +249,80 @@ class PortalApp(ctk.CTk):
         log_frame.grid(row=1, column=0, sticky="nsew", padx=0, pady=(12, 0))
         log_frame.grid_columnconfigure(0, weight=1)
         log_frame.grid_rowconfigure(1, weight=1)
-        ctk.CTkLabel(log_frame, text="📋 Журнал активности", font=ctk.CTkFont(size=13, weight="bold")).grid(row=0, column=0, sticky="w", padx=10, pady=(8, 4))
+        log_hdr = ctk.CTkFrame(log_frame, fg_color="transparent")
+        log_hdr.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 4))
+        log_hdr.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(log_hdr, text="📋 Журнал активности", font=ctk.CTkFont(size=13, weight="bold")).grid(row=0, column=0, sticky="w")
+        ctk.CTkButton(
+            log_hdr,
+            text="📋 Копировать всё",
+            width=130,
+            font=ctk.CTkFont(size=11),
+            command=self.copy_log_to_clipboard,
+        ).grid(row=0, column=1, sticky="e", padx=(8, 0))
         self.log_text = ctk.CTkTextbox(log_frame, height=280, font=ctk.CTkFont(size=12))
         self.log_text.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
         self.log_text.insert("1.0", "Готов к работе...\n")
-        self.log_text.configure(state="disabled")
+        self._setup_log_text_selectable_readonly()
 
         self._refresh_local_link_status_label()
         self.after(800, lambda: self.check_peer_connection_async(silent=True))
         self._arm_peer_poll()
+
+    def _log_inner_text_widget(self):
+        """Внутренний Tk Text у CTkTextbox — для bind клавиш."""
+        return getattr(self.log_text, "_textbox", self.log_text)
+
+    def _setup_log_text_selectable_readonly(self) -> None:
+        """
+        Без state=disabled — иначе в Windows нельзя выделить и Ctrl+C.
+        Режим только чтения: блокируем ввод, разрешаем копирование и навигацию.
+        """
+        self.log_text.configure(state="normal")
+        inner = self._log_inner_text_widget()
+        inner.bind("<Key>", self._on_log_key_readonly)
+        inner.bind("<<Paste>>", lambda _e: "break")
+        inner.bind("<<Cut>>", lambda _e: "break")
+        # Явно гасим вставку
+        for seq in ("<Control-v>", "<Control-V>", "<Shift-Insert>"):
+            try:
+                inner.bind(seq, lambda _e: "break")
+            except Exception:
+                pass
+
+    def _on_log_key_readonly(self, event):
+        keysym = event.keysym
+        # Ctrl+C, Ctrl+A, Ctrl+Insert (копирование)
+        if event.state & 0x4 and keysym.lower() in ("c", "a"):
+            return
+        if event.state & 0x4 and keysym == "Insert":
+            return
+        # Навигация и выделение
+        nav = ("Left", "Right", "Up", "Down", "Home", "End", "Next", "Prior")
+        if keysym == "Tab":
+            return "break"
+        if keysym in nav:
+            return
+        if event.state & 0x1 and keysym in nav:
+            return
+        # Не даём удалять/редактировать
+        if keysym in ("BackSpace", "Delete", "Return", "KP_Enter", "Linefeed"):
+            return "break"
+        if event.char and event.char.isprintable() and not (event.state & 0x4):
+            return "break"
+        return "break"
+
+    def copy_log_to_clipboard(self) -> None:
+        """Весь журнал в буфер (если мышью не копируется)."""
+        try:
+            txt = self.log_text.get("1.0", "end").strip()
+            if txt:
+                pyperclip.copy(txt)
+                self.log("📋 Весь журнал скопирован в буфер обмена (Ctrl+V)")
+            else:
+                self.log("⚠️ Журнал пуст")
+        except Exception as e:
+            self.log(f"❌ Не удалось скопировать журнал: {e}")
 
     def setup_main_window_drag_drop(self):
         """Drag & Drop файлов в главное окно (не только в виджет)."""
@@ -438,6 +520,8 @@ class PortalApp(ctk.CTk):
             return f"❓ ({ip}): DNS", "#e74c3c"
         if code == "bad_reply":
             return f"⚠ ({ip}): не Портал", "#f39c12"
+        if code == "legacy_port_open":
+            return f"🟠 ({ip}): порт открыт, нет pong — обнови Портал на паре", "#e67e22"
         if code == "no_host":
             return "⚪ Пара: укажи IP", "gray"
         return f"❌ ({ip}): {code}", "#e74c3c"
@@ -506,6 +590,19 @@ class PortalApp(ctk.CTk):
                         )
                     else:
                         self.log(f"📡 Связь с парой: нет — {ip} ({code})")
+                        if code == "legacy_port_open":
+                            self.log(
+                                "💡 На :"
+                                + str(PORTAL_PORT)
+                                + " кто-то слушает, но не ответил на ping — почти всегда "
+                                "старая сборка Портала на втором ПК. Сделай там git pull / скачай заново."
+                            )
+                            self.log("💡 Файлы при этом могут передаваться — индикатор «pong» появится после обновления пары.")
+                        elif code == "timeout":
+                            self.log(
+                                "💡 Полный таймаут (нет TCP): сеть, ACL Tailscale, неверный IP или "
+                                f"файрвол. Проверь: `tailscale ping {ip}` и что на паре «Запустить портал»."
+                            )
 
             try:
                 self.after(0, apply)
@@ -515,12 +612,11 @@ class PortalApp(ctk.CTk):
         threading.Thread(target=worker, daemon=True).start()
     
     def log(self, message: str):
-        """Добавление сообщения в лог"""
+        """Добавление сообщения в лог (поле остаётся копируемым — не disabled)."""
         self.log_text.configure(state="normal")
         timestamp = time.strftime("%H:%M:%S")
         self.log_text.insert("end", f"[{timestamp}] {message}\n")
         self.log_text.see("end")
-        self.log_text.configure(state="disabled")
     
     def toggle_server(self):
         """Запуск/остановка сервера"""
