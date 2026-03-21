@@ -77,10 +77,22 @@ def _try_imageio(input_path: Path, out_gif: Path, size: int, fps: float) -> bool
 
     frames_pil: list[Image.Image] = []
     try:
+        import numpy as np  # noqa: PLC0415
+
         for i, frame in enumerate(reader):
             if i % step != 0:
                 continue
             im = Image.fromarray(frame).convert("RGBA")
+
+            # Делаем чёрный/тёмный фон прозрачным
+            data = np.array(im)
+            r = data[:, :, 0].astype(int)
+            g = data[:, :, 1].astype(int)
+            b = data[:, :, 2].astype(int)
+            mask = (r + g + b) < 35
+            data[mask, 3] = 0
+            im = Image.fromarray(data, "RGBA")
+
             im.thumbnail((size, size), Image.Resampling.LANCZOS)
             canvas = Image.new("RGBA", (size, size), (1, 1, 1, 255))
             x = (size - im.width) // 2
