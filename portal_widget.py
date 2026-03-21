@@ -2058,7 +2058,7 @@ class GlobalHotkeyManager:
             self._log("pynput не установлен — pip install pynput; хоткеи отключены")
             return
         try:
-            with keyboard.GlobalHotKeys(combo, suppress=False) as h:
+            with pynkeyboard.GlobalHotKeys(combo, suppress=False) as h:
                 self._log(f"✅ pynput GlobalHotKeys: {label}")
                 h.join()
         except Exception as e:
@@ -2135,13 +2135,22 @@ class GlobalHotkeyManager:
         ).start()
 
     def _run_win(self) -> None:
+        # EN + русская раскладка (те же физические клавиши) + запасной toggle
+        combo = {
+            "<ctrl>+<alt>+p": self.toggle_widget,
+            "<ctrl>+<alt>+c": self.push_clipboard,
+            "<ctrl>+<alt>+v": self.pull_clipboard,
+            "<ctrl>+<alt>+з": self.toggle_widget,
+            "<ctrl>+<alt>+З": self.toggle_widget,
+            "<ctrl>+<alt>+с": self.push_clipboard,
+            "<ctrl>+<alt>+С": self.push_clipboard,
+            "<ctrl>+<alt>+м": self.pull_clipboard,
+            "<ctrl>+<alt>+М": self.pull_clipboard,
+            "<win>+<shift>+p": self.toggle_widget,
+        }
         self._run_pynput_hotkeys(
-            {
-                "<ctrl>+<alt>+p": self.toggle_widget,
-                "<ctrl>+<alt>+c": self.push_clipboard,
-                "<ctrl>+<alt>+v": self.pull_clipboard,
-            },
-            "Win Ctrl+Alt+P | C | V",
+            combo,
+            "Win Ctrl+Alt+P/З C/С V/М, Win+Shift+P",
         )
 
     # ── Общие обработчики ──────────────────────────────────────────────────────
