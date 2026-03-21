@@ -489,3 +489,93 @@ WIDGET_MEDIA_MODE_LABELS_RU: Dict[str, str] = {
     "animated": "Всегда как анимация (первый кадр WebP/APNG при многокадровости)",
     "static": "Всегда статика (один кадр, масштаб при открытии/закрытии)",
 }
+
+# Угол экрана для виджета-портала: br=bottom-right …
+WIDGET_CORNER_LABELS_RU: Dict[str, str] = {
+    "br": "Снизу справа",
+    "bl": "Снизу слева",
+    "tr": "Сверху справа",
+    "tl": "Сверху слева",
+}
+
+_VALID_WIDGET_CORNERS = frozenset(WIDGET_CORNER_LABELS_RU.keys())
+
+
+def load_widget_size() -> int:
+    """Сторона квадрата виджета (пиксели), 80…600."""
+    try:
+        n = int(_load_all().get("widget_size", 220))
+    except (TypeError, ValueError):
+        n = 220
+    return max(80, min(n, 600))
+
+
+def load_widget_corner() -> str:
+    c = str(_load_all().get("widget_corner", "br") or "br").strip().lower()
+    if c in _VALID_WIDGET_CORNERS:
+        return c
+    return "br"
+
+
+def load_widget_margin_x() -> int:
+    try:
+        return max(0, min(int(_load_all().get("widget_margin_x", 24)), 500))
+    except (TypeError, ValueError):
+        return 24
+
+
+def load_widget_margin_y() -> int:
+    try:
+        return max(0, min(int(_load_all().get("widget_margin_y", 96)), 500))
+    except (TypeError, ValueError):
+        return 96
+
+
+def widget_window_xy(
+    screen_w: int, screen_h: int, size: int, corner: str, margin_x: int, margin_y: int
+) -> Tuple[int, int]:
+    """
+    Левый верхний угол окна виджета.
+    margin_x / margin_y — отступ от ближайших рёбер экрана (как раньше: справа 24, снизу 96).
+    """
+    c = corner if corner in _VALID_WIDGET_CORNERS else "br"
+    mx = max(0, int(margin_x))
+    my = max(0, int(margin_y))
+    s = max(1, int(size))
+    if c == "br":
+        return screen_w - s - mx, screen_h - s - my
+    if c == "bl":
+        return mx, screen_h - s - my
+    if c == "tr":
+        return screen_w - s - mx, my
+    if c == "tl":
+        return mx, my
+    return screen_w - s - mx, screen_h - s - my
+
+
+def save_widget_geometry_settings(
+    *,
+    size: int,
+    corner_key: str,
+    margin_x: int,
+    margin_y: int,
+) -> bool:
+    data = _load_all()
+    try:
+        sz = int(size)
+    except (TypeError, ValueError):
+        sz = 220
+    data["widget_size"] = max(80, min(sz, 600))
+    ck = str(corner_key or "br").strip().lower()
+    if ck not in _VALID_WIDGET_CORNERS:
+        ck = "br"
+    data["widget_corner"] = ck
+    try:
+        data["widget_margin_x"] = max(0, min(int(margin_x), 500))
+    except (TypeError, ValueError):
+        data["widget_margin_x"] = 24
+    try:
+        data["widget_margin_y"] = max(0, min(int(margin_y), 500))
+    except (TypeError, ValueError):
+        data["widget_margin_y"] = 96
+    return _write_all(data)

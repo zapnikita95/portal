@@ -38,6 +38,11 @@ def main() -> int:
             "load_peer_aliases",
             "parse_peer_line",
             "peer_display_label",
+            "load_widget_size",
+            "load_widget_corner",
+            "widget_window_xy",
+            "save_widget_geometry_settings",
+            "WIDGET_CORNER_LABELS_RU",
         ]
         for name in need:
             if not hasattr(portal_config, name):

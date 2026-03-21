@@ -254,7 +254,7 @@ class PortalWidget:
         # Уникальный заголовок — по нему ищем NSWindow для настоящей прозрачности (macOS)
         self.root.title("🌀 Портал · виджет")
 
-        self.size = 220
+        self.size = portal_config.load_widget_size()
         # Тёмная подложка режима «окошко» (macOS): GIF композится на неё, без дыры в стол через -transparentcolor
         self._frame_panel_rgb = (42, 45, 53)  # #2a2d35
         self._mac_framed_window: bool = self._widget_framed_mode()
@@ -379,12 +379,44 @@ class PortalWidget:
 
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        x = sw - self.size - 24
-        y = sh - self.size - 96
+        x, y = portal_config.widget_window_xy(
+            sw,
+            sh,
+            self.size,
+            portal_config.load_widget_corner(),
+            portal_config.load_widget_margin_x(),
+            portal_config.load_widget_margin_y(),
+        )
         self.root.geometry(f"{self.size}x{self.size}+{x}+{y}")
 
         self.drag_start_x = 0
         self.drag_start_y = 0
+
+    def apply_widget_geometry(self) -> None:
+        """Размер и угол из config.json (после «Сохранить размер и угол» в главном окне)."""
+        try:
+            new_size = portal_config.load_widget_size()
+            corner = portal_config.load_widget_corner()
+            mx = portal_config.load_widget_margin_x()
+            my = portal_config.load_widget_margin_y()
+            sw = int(self.root.winfo_screenwidth())
+            sh = int(self.root.winfo_screenheight())
+            x, y = portal_config.widget_window_xy(sw, sh, new_size, corner, mx, my)
+            size_changed = new_size != self.size
+            self.size = new_size
+            try:
+                self.canvas.configure(width=self.size, height=self.size)
+            except tk.TclError:
+                pass
+            self.root.geometry(f"{self.size}x{self.size}+{x}+{y}")
+            if size_changed:
+                try:
+                    self.load_portal_gif()
+                except Exception as e:
+                    print(f"[Portal] apply_widget_geometry / load_portal_gif: {e}")
+            self.root.update_idletasks()
+        except Exception as e:
+            print(f"[Portal] apply_widget_geometry: {e}")
 
     def setup_transparency(self):
         """

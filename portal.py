@@ -777,6 +777,75 @@ class PortalApp(ctk.CTk):
             command=self.save_widget_media_from_ui,
             font=ctk.CTkFont(size=12),
         ).pack(side="left")
+        wm_geo = ctk.CTkFrame(peer_frame, fg_color="transparent")
+        wm_geo.pack(fill="x", padx=12, pady=(6, 4))
+        ctk.CTkLabel(
+            wm_geo,
+            text="Размер (квадрат, px):",
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 6))
+        self.widget_size_entry = ctk.CTkEntry(
+            wm_geo, width=56, font=ctk.CTkFont(size=12)
+        )
+        self.widget_size_entry.pack(side="left", padx=(0, 10))
+        self.widget_size_entry.insert(0, str(portal_config.load_widget_size()))
+        ctk.CTkLabel(
+            wm_geo,
+            text="Угол:",
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 6))
+        self._widget_corner_labels_ru = dict(portal_config.WIDGET_CORNER_LABELS_RU)
+        self._widget_corner_rev = {v: k for k, v in self._widget_corner_labels_ru.items()}
+        self.widget_corner_menu = ctk.CTkOptionMenu(
+            wm_geo,
+            values=list(self._widget_corner_labels_ru.values()),
+            command=lambda _c: None,
+            width=168,
+            font=ctk.CTkFont(size=12),
+        )
+        self.widget_corner_menu.pack(side="left", padx=(0, 10))
+        _wc = portal_config.load_widget_corner()
+        self.widget_corner_menu.set(
+            self._widget_corner_labels_ru.get(_wc, self._widget_corner_labels_ru["br"])
+        )
+        ctk.CTkLabel(
+            wm_geo,
+            text="Отступ X:",
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 4))
+        self.widget_margin_x_entry = ctk.CTkEntry(
+            wm_geo, width=44, font=ctk.CTkFont(size=12)
+        )
+        self.widget_margin_x_entry.pack(side="left", padx=(0, 8))
+        self.widget_margin_x_entry.insert(0, str(portal_config.load_widget_margin_x()))
+        ctk.CTkLabel(
+            wm_geo,
+            text="Y:",
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 4))
+        self.widget_margin_y_entry = ctk.CTkEntry(
+            wm_geo, width=44, font=ctk.CTkFont(size=12)
+        )
+        self.widget_margin_y_entry.pack(side="left", padx=(0, 8))
+        self.widget_margin_y_entry.insert(0, str(portal_config.load_widget_margin_y()))
+        ctk.CTkButton(
+            wm_geo,
+            text="Сохранить размер и угол",
+            width=178,
+            command=self.save_widget_geometry_from_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(4, 0))
+        ctk.CTkLabel(
+            peer_frame,
+            text=(
+                "Компактный виджет: например размер 120–160, угол «Снизу справа», отступы 16 / 72. "
+                "Перетаскивание (Alt+ЛКМ) по-прежнему работает."
+            ),
+            font=ctk.CTkFont(size=10),
+            text_color="gray",
+            wraplength=640,
+            justify="left",
+        ).pack(anchor="w", padx=12, pady=(0, 2))
         ctk.CTkLabel(
             peer_frame,
             text=(
@@ -1727,6 +1796,42 @@ class PortalApp(ctk.CTk):
             self.log(
                 "💡 Виджет ещё не создан — открой его хоткеем после запуска; "
                 "медиа подхватится при следующей загрузке."
+            )
+
+    def save_widget_geometry_from_ui(self) -> None:
+        if not hasattr(self, "widget_size_entry"):
+            return
+        try:
+            sz = int(self.widget_size_entry.get().strip())
+        except ValueError:
+            self.log("⚠️ Размер виджета — целое число (пиксели, 80…600)")
+            return
+        label = self.widget_corner_menu.get()
+        ck = getattr(self, "_widget_corner_rev", {}).get(label, "br")
+        try:
+            mx = int(self.widget_margin_x_entry.get().strip())
+            my = int(self.widget_margin_y_entry.get().strip())
+        except ValueError:
+            self.log("⚠️ Отступы X и Y — целые числа (пиксели от края экрана)")
+            return
+        if portal_config.save_widget_geometry_settings(
+            size=sz, corner_key=ck, margin_x=mx, margin_y=my
+        ):
+            self.log("✅ Размер и положение виджета сохранены")
+            self._apply_widget_geometry_live()
+        else:
+            self.log("⚠️ Не удалось записать настройки геометрии")
+
+    def _apply_widget_geometry_live(self) -> None:
+        w = getattr(self, "portal_widget_ref", None)
+        if w is not None and hasattr(w, "apply_widget_geometry"):
+            try:
+                self.after(0, w.apply_widget_geometry)
+            except Exception as e:
+                self.log(f"⚠️ Применение геометрии виджета: {e}")
+        else:
+            self.log(
+                "💡 Виджет ещё не создан — геометрия из config подхватится при следующем старте"
             )
 
     def _pulse_portal_widget(self, seconds: Optional[float] = None) -> None:
