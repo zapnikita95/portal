@@ -1,0 +1,104 @@
+# Скопируй в репозиторий как: .github/workflows/portal-desktop-release.yml
+# (шаблон в корне — чтобы push с PAT без scope `workflow` не блокировался.)
+#
+# Сборка Portal для macOS (.app) и Windows (.exe) через PyInstaller.
+# Артефакты: Portal-macOS.zip, Portal-Windows.zip
+# Релиз: push тега v* (например v1.2.0).
+# Ручной запуск: Actions → «Portal Desktop Build» → Run workflow.
+
+name: Portal Desktop Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Dependencies + PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller pillow
+
+      - name: Иконки (.icns / .ico / Android icon copy)
+        run: python3 scripts/generate_branding_icons.py
+
+      - name: PyInstaller (Portal.app)
+        run: pyinstaller pyinstaller_portal.spec
+
+      - name: ZIP для релиза
+        run: cd dist && ditto -c -k --sequesterRsrc --keepParent Portal.app Portal-macOS.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Portal-macOS
+          path: dist/Portal-macOS.zip
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Dependencies + PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller pillow pywin32
+
+      - name: Иконка .ico
+        run: python scripts/generate_branding_icons.py
+
+      - name: PyInstaller (Portal.exe + папка)
+        run: pyinstaller pyinstaller_portal.spec
+
+      - name: ZIP для релиза
+        shell: pwsh
+        run: Compress-Archive -Path dist/Portal -DestinationPath dist/Portal-Windows.zip -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Portal-Windows
+          path: dist/Portal-Windows.zip
+
+  release:
+    needs: [build-macos, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Portal-macOS
+          path: rel
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: Portal-Windows
+          path: rel
+
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Portal Desktop ${{ github.ref_name }}
+          files: |
+            rel/Portal-macOS.zip
+            rel/Portal-Windows.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
