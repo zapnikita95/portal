@@ -76,7 +76,30 @@
 
 **Как выложить APK на GitHub (один раз настроить CI):** в репо уже есть **[`.github/workflows/portal-android-apk.yml`](.github/workflows/portal-android-apk.yml)** — после push запусти workflow вручную (**Actions → Portal Android APK → Run workflow**) или дождись сборки по push в `portal-android/**`. Успешный run публикует **`Portal-Android.apk`** в релиз с тегом `portal-android-latest` (обновляется при каждой сборке). Дополнительно остаётся артефакт **portal-debug-apk**.
 
-Опционально **`PORTAL_GITHUB_TOKEN`** (PAT: **repo** + **workflow**) — тогда **«Собрать на GitHub»** в окне APK шлёт `workflow_dispatch` без браузера. **`PORTAL_GITHUB_REPO`**, **`PORTAL_GITHUB_BRANCH`** — если не хочешь менять `owner/repo` в настройках.
+Опционально **`PORTAL_GITHUB_TOKEN`** — тогда **«Собрать на GitHub»** в окне APK шлёт `workflow_dispatch` без браузера. **`PORTAL_GITHUB_REPO`**, **`PORTAL_GITHUB_BRANCH`** — если не хочешь менять `owner/repo` в настройках.
+
+### Где взять `PORTAL_GITHUB_TOKEN`
+
+1. Зайди на GitHub → **аватар (справа сверху) → Settings**.
+2. Внизу слева **Developer settings** → **Personal access tokens**.
+3. Удобнее всего **Tokens (classic)** → **Generate new token (classic)**.
+4. Включи галочки:
+   - **`repo`** (полный доступ к репо) — чтобы API видел релизы; для **приватного** репо обязательно.
+   - **`workflow`** — чтобы из Портала дергать «запусти сборку» и чтобы **git push** мог обновлять файлы в `.github/workflows/` (без `workflow` GitHub отклонит пуш workflow).
+5. Сгенерируй, **скопируй токен один раз** (потом его не покажут).
+
+**Как передать Порталу (macOS):** разово в терминале перед запуском:
+
+```bash
+export PORTAL_GITHUB_TOKEN="ghp_xxxxxxxx"
+./start_portal.command
+```
+
+Или добавь строку `export PORTAL_GITHUB_TOKEN=...` в `~/.zshrc` / `~/.bash_profile` (не коммить токен в репозиторий).
+
+**Если пушишь репо по HTTPS тем же токеном** — у PAT **обязательно** scope **`workflow`**, иначе ошибка вроде: *refusing to allow a Personal Access Token to create or update workflow … without `workflow` scope*. Либо пуш через **SSH** (`git@github.com:...`), тогда для workflow-файлов отдельный PAT не нужен.
+
+**Обход без токена в git:** открой на GitHub **Add file → Create new file**, путь `.github/workflows/portal-android-apk.yml`, вставь содержимое из репозитория и сохрани — workflow появится на сайте, остальной код можно пушить обычным PAT без `workflow`.
 
 Шаблон-копия workflow: **[`portal-android/github-workflow-portal-android-apk.yml`](portal-android/github-workflow-portal-android-apk.yml)**.
 
