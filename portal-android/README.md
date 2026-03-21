@@ -41,7 +41,7 @@ ls -la bin/*.apk
 - **Release** с тегом **`portal-android-latest`** и файлом **`Portal-Android.apk`** (удобно для кнопки «Скачать APK» в десктопе).
 - Артефакт **`portal-debug-apk`** (как запасной вариант).
 
-На runner **явно ставится JDK 17** (`setup-java`): иначе buildozer часто находит **Java 11** с образа и падает на Gradle. В CI по умолчанию собирается только **arm64-v8a** (меньше RAM/времени); в `buildozer.spec` по-прежнему можно **две ABI** для локальной/Docker-сборки.
+На runner **явно ставится JDK 17** (`setup-java` + фиксация `JAVA_HOME`): иначе buildozer часто находит **Java 11** с образа и падает на Gradle. **Cython** в CI пинится как **`>=0.29.36,<3.0`**: с Cython 3.x не собирается **PyJNIUS** (`long` в `jnius_utils.pxi`). В CI по умолчанию только **arm64-v8a**; в `buildozer.spec` можно оставить **две ABI** для локальной/Docker-сборки.
 
 Копия шаблона в этой папке: **`github-workflow-portal-android-apk.yml`**.
 

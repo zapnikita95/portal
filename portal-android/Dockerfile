@@ -12,7 +12,8 @@ RUN apt-get update && apt-get install -y \
     libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev \
     libltdl-dev \
   && rm -rf /var/lib/apt/lists/*
-RUN pip3 install --no-cache-dir buildozer cython
+# Cython 3 ломает сборку PyJNIUS (long в .pxi) — держим 0.29.x как в CI
+RUN pip3 install --no-cache-dir "cython>=0.29.36,<3.0" buildozer
 WORKDIR /home/user/host
 # По умолчанию — полная сборка (долго при первом запуске).
 CMD ["buildozer", "android", "debug"]

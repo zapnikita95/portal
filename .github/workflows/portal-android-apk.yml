@@ -33,6 +33,14 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
+      # Образ runner иногда оставляет JAVA_HOME на 11 — Gradle/p4a подхватывают его в дочерних процессах
+      - name: Зафиксировать JAVA_HOME = JDK 17
+        run: |
+          echo "JAVA_HOME=${JAVA_HOME}" >> "$GITHUB_ENV"
+          echo "${JAVA_HOME}/bin" >> "$GITHUB_PATH"
+          test -x "${JAVA_HOME}/bin/java"
+          "${JAVA_HOME}/bin/java" -version
+
       - name: APT deps (Buildozer / p4a)
         run: |
           sudo apt-get update
@@ -42,10 +50,12 @@ jobs:
             libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev \
             libltdl-dev
 
-      - name: Pip (buildozer, cython)
+      # PyJNIUS в p4a не собирается с Cython 3.x (long в .pxi) — нужна ветка 0.29.x
+      - name: Pip (buildozer, cython 0.29.x)
         run: |
           python3 -m pip install --upgrade pip
-          pip install "buildozer>=1.5.0" cython
+          pip install "buildozer>=1.5.0" "cython>=0.29.36,<3.0"
+          python3 -c "import Cython; print('Cython', Cython.__version__)"
 
       - name: Java sanity check
         run: |
@@ -65,13 +75,14 @@ jobs:
           path: |
             ~/.buildozer
             portal-android/.buildozer
-          key: buildozer-ci-v2-${{ runner.os }}-${{ hashFiles('portal-android/buildozer.spec', 'portal-android/**/*.py', '.github/workflows/portal-android-apk.yml') }}
+          key: buildozer-ci-v3-${{ runner.os }}-${{ hashFiles('portal-android/buildozer.spec', 'portal-android/**/*.py', '.github/workflows/portal-android-apk.yml') }}
           restore-keys: |
-            buildozer-ci-v2-${{ runner.os }}-
+            buildozer-ci-v3-${{ runner.os }}-
 
       - name: buildozer android debug
         working-directory: portal-android
         env:
+          JAVA_HOME: ${{ env.JAVA_HOME }}
           GRADLE_OPTS: "-Xmx3584m -Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2"
         run: buildozer android debug
 
