@@ -136,6 +136,7 @@ class PortalWidget:
         self.anim_state = self.ANIM_HIDDEN
         self.anim_frame_idx = 0
         self._anim_after_id = None
+        self._anim_master: Optional[tk.Misc] = None  # тот же виджет, что вызывал after (для after_cancel)
         self._anim_speed_ms = 42  # ~24fps
 
         # GIF-кадры (открытие/статика)
@@ -313,24 +314,51 @@ class PortalWidget:
 
     def _cancel_anim(self):
         if self._anim_after_id is not None:
-            for target in (getattr(self, "main_app", None), self.root):
-                if target is not None and hasattr(target, "after_cancel"):
+            target = getattr(self, "_anim_master", None)
+            if target is not None and hasattr(target, "after_cancel"):
+                try:
+                    target.after_cancel(self._anim_after_id)
+                except Exception:
+                    for t in (getattr(self, "main_app", None), self.root):
+                        if t is None:
+                            continue
+                        try:
+                            t.after_cancel(self._anim_after_id)
+                            break
+                        except Exception:
+                            continue
+            else:
+                for t in (getattr(self, "main_app", None), self.root):
+                    if t is None:
+                        continue
                     try:
-                        target.after_cancel(self._anim_after_id)
+                        t.after_cancel(self._anim_after_id)
                         break
                     except Exception:
                         continue
             self._anim_after_id = None
+            self._anim_master = None
 
     def _schedule_anim_ms(self, delay_ms: int, callback) -> None:
-        """Таймер анимации через главное окно — у скрытого Toplevel root.after часто не срабатывает."""
+        """
+        Таймер анимации на Toplevel (self.root): кадры рисуются на этом окне —
+        через main_app.after (CTk) на части систем колбэк срабатывал, а перерисовка портала не шла.
+        """
         delay_ms = max(1, int(delay_ms))
+        self._anim_master = self.root
+        try:
+            self._anim_after_id = self.root.after(delay_ms, callback)
+            return
+        except Exception:
+            self._anim_master = None
         try:
             if self.main_app is not None and hasattr(self.main_app, "after"):
+                self._anim_master = self.main_app
                 self._anim_after_id = self.main_app.after(delay_ms, callback)
                 return
         except Exception:
             pass
+        self._anim_master = self.root
         self._anim_after_id = self.root.after(delay_ms, callback)
 
     def _gif_delay_for_idx(self, idx: int) -> int:
@@ -349,15 +377,15 @@ class PortalWidget:
             self._last_photo = photo
             self.canvas.create_image(cx, cy, image=photo, anchor=tk.CENTER)
         else:
-            # Fallback: рисованный портал со scale-эффектом
+            # Fallback: рисованный портал со scale-эффектом (idx=0 → видимый радиус, не ноль)
             total = 20
-            scale = min(1.0, idx / max(1, total))
-            r = (self.size // 2 - 18) * scale
+            scale = min(1.0, (idx + 1) / max(1, total))
+            r = max(4.0, (self.size // 2 - 18) * scale)
             if r > 1:
                 self._draw_portal(cx, cy, r)
 
     def _animate_step(self):
-        """Один шаг анимации — планируется через main_app.after (надёжно при withdraw Toplevel)."""
+        """Один шаг анимации — планируется через self.root.after (перерисовка canvas Toplevel)."""
         if self.anim_state == self.ANIM_HIDDEN:
             return
 
@@ -447,10 +475,15 @@ class PortalWidget:
         self._cancel_anim()
         self.root.deiconify()
         self.root.lift()
-        self.root.update_idletasks()  # Убедиться что окно видимо перед анимацией
         self.anim_state = self.ANIM_OPENING
         self.anim_frame_idx = 0
-        self._animate_step()
+        self.root.update_idletasks()
+        try:
+            self.root.update()
+        except Exception:
+            pass
+        # Первый кадр после отрисовки окна (синхронный шаг часто попадает до первого paint)
+        self.root.after(1, self._animate_step)
 
     def is_visible(self) -> bool:
         try:
@@ -511,7 +544,28 @@ class PortalWidget:
                         except Exception:
                             paths.append(b.decode("mbcs", errors="replace"))
                 if paths:
-                    self.root.after(0, lambda p=list(paths): self.send_files(p))
+                    plist = list(paths)
+                    q = getattr(self.main_app, "_ui_signal_queue", None)
+                    if q is not None:
+                        try:
+                            q.put(("drop", plist))
+                            return
+                        except Exception:
+                            pass
+                    try:
+
+                        def _do_send():
+                            try:
+                                self.send_files(plist)
+                            except Exception as ex:
+                                print(f"[Portal] send_files после drop: {ex}")
+
+                        if self.main_app and hasattr(self.main_app, "after"):
+                            self.main_app.after(0, _do_send)
+                        else:
+                            self.root.after(0, _do_send)
+                    except Exception:
+                        pass
 
             windnd.hook_dropfiles(self.root, on_drop)
             self._windnd_ok = True
@@ -550,7 +604,25 @@ class PortalWidget:
             else:
                 files = list(self.root.tk.splitlist(raw))
             if files:
-                self.root.after(0, lambda f=list(files): self.send_files(f))
+                fl = list(files)
+                q = getattr(self.main_app, "_ui_signal_queue", None)
+                if q is not None and platform.system() == "Windows":
+                    try:
+                        q.put(("drop", fl))
+                    except Exception:
+                        pass
+                    return
+
+                def _do():
+                    try:
+                        self.send_files(fl)
+                    except Exception as ex:
+                        print(f"[Portal] Ошибка send_files после Drop: {ex}")
+
+                if self.main_app and hasattr(self.main_app, "after"):
+                    self.main_app.after(0, _do)
+                else:
+                    self.root.after(0, _do)
         except Exception as ex:
             print(f"[Portal] Ошибка Drop: {ex}")
 
@@ -559,6 +631,10 @@ class PortalWidget:
     def show_context_menu(self, event):
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label="IP удалённого ПК", command=self.show_ip_dialog)
+        menu.add_command(
+            label="Приём файлов из буфера (папка / буфер / оба)…",
+            command=self.show_incoming_files_mode_dialog,
+        )
         menu.add_command(label="Выбрать файл (Ctrl+клик)", command=self.on_portal_click)
         menu.add_command(label="Картинка из буфера (двойной клик)", command=self.on_double_click_portal)
         menu.add_command(label="Скрыть", command=self.hide)
@@ -573,6 +649,63 @@ class PortalWidget:
 
     def show_settings(self, event=None):
         self.show_ip_dialog()
+
+    def show_incoming_files_mode_dialog(self):
+        """То же, что выпадающий список в главном окне Портала — для тех, кто пользуется только виджетом."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Входящие файлы из буфера")
+        dialog.geometry("520x240")
+        dialog.attributes("-topmost", True)
+        tk.Label(
+            dialog,
+            text="После прихода файлов с другого ПК (отправка буфера или «забрать буфер»):",
+            wraplength=480,
+            justify="left",
+        ).pack(pady=(12, 6), padx=12, anchor="w")
+        rev = {
+            v: k
+            for k, v in portal_config.INCOMING_CLIPBOARD_FILES_MODE_LABELS_RU.items()
+        }
+        cur = portal_config.load_incoming_clipboard_files_mode()
+        if cur not in portal_config.INCOMING_CLIPBOARD_FILES_MODE_LABELS_RU:
+            cur = "both"
+        var = tk.StringVar(
+            value=portal_config.INCOMING_CLIPBOARD_FILES_MODE_LABELS_RU[cur]
+        )
+        for key in ("both", "disk", "clipboard"):
+            label = portal_config.INCOMING_CLIPBOARD_FILES_MODE_LABELS_RU[key]
+            tk.Radiobutton(
+                dialog,
+                text=label,
+                variable=var,
+                value=label,
+                anchor="w",
+            ).pack(fill="x", padx=16, pady=2)
+
+        def save_mode():
+            mode = rev.get(var.get(), "both")
+            portal_config.save_incoming_clipboard_files_mode(mode)
+            ma = self.main_app
+            if ma is not None and hasattr(ma, "incoming_files_mode_var"):
+                try:
+                    ma.incoming_files_mode_var.set(
+                        portal_config.INCOMING_CLIPBOARD_FILES_MODE_LABELS_RU[mode]
+                    )
+                except Exception:
+                    pass
+            if ma is not None and hasattr(ma, "log"):
+                try:
+                    ma.after(
+                        0,
+                        lambda m=mode: ma.log(
+                            f"💾 Режим входящих файлов из буфера сохранён: {m}"
+                        ),
+                    )
+                except Exception:
+                    pass
+            dialog.destroy()
+
+        tk.Button(dialog, text="Сохранить", command=save_mode).pack(pady=16)
 
     def show_ip_dialog(self):
         dialog = tk.Toplevel(self.root)
@@ -672,8 +805,8 @@ class PortalWidget:
         self.on_portal_click()
 
     def _send_clipboard_image_path(self, path: str) -> None:
-        ip = self._resolve_peer_ip()
-        if not ip:
+        ips = self._resolve_peer_ips()
+        if not ips:
             result: List[str] = []
 
             def cb(addr: str):
@@ -692,17 +825,19 @@ class PortalWidget:
                 self.main_app.set_remote_peer_ip(ip)
             else:
                 portal_config.save_remote_ip(ip)
+            ips = [ip]
         if self.main_app and hasattr(self.main_app, "log"):
             try:
                 self.main_app.after(0, lambda: self.main_app.log("📤 Картинка из буфера → отправка"))
             except Exception:
                 pass
-        threading.Thread(target=self._send_file_then_unlink, args=(path, ip), daemon=True).start()
+        threading.Thread(target=self._send_file_to_ips_then_unlink, args=(path, ips), daemon=True).start()
 
-    def _send_file_then_unlink(self, path: str, ip: str) -> None:
+    def _send_file_to_ips_then_unlink(self, path: str, ips: List[str]) -> None:
         try:
-            if self.main_app and hasattr(self.main_app, "send_file"):
-                self.main_app.send_file(path, ip)
+            for ip in ips:
+                if self.main_app and hasattr(self.main_app, "send_file"):
+                    self.main_app.send_file(path, ip)
         finally:
             try:
                 os.unlink(path)
@@ -717,9 +852,18 @@ class PortalWidget:
             ip = portal_config.load_remote_ip()
         return ip
 
+    def _resolve_peer_ips(self) -> List[str]:
+        """Список IP для отправки (все сохранённые или один из диалога)."""
+        if self.main_app and hasattr(self.main_app, "get_target_ips"):
+            ips = self.main_app.get_target_ips()
+            if ips:
+                return ips
+        one = self._resolve_peer_ip()
+        return [one] if one else []
+
     def send_files(self, files: List[str]):
-        ip = self._resolve_peer_ip()
-        if not ip:
+        ips = self._resolve_peer_ips()
+        if not ips:
             result: List[str] = []
 
             def cb(addr: str):
@@ -734,18 +878,18 @@ class PortalWidget:
                 self.main_app.set_remote_peer_ip(ip)
             else:
                 portal_config.save_remote_ip(ip)
-        else:
-            self.target_ip = ip
+            ips = [ip]
 
         for fp in files:
-            if self.main_app and hasattr(self.main_app, "send_file"):
-                if hasattr(self.main_app, "log"):
-                    self.main_app.log(f"📤 Виджет: {Path(fp).name}")
-                threading.Thread(
-                    target=self.main_app.send_file,
-                    args=(fp, ip),
-                    daemon=True,
-                ).start()
+            for ip in ips:
+                if self.main_app and hasattr(self.main_app, "send_file"):
+                    if hasattr(self.main_app, "log"):
+                        self.main_app.log(f"📤 Виджет: {Path(fp).name} → {ip}")
+                    threading.Thread(
+                        target=self.main_app.send_file,
+                        args=(fp, ip),
+                        daemon=True,
+                    ).start()
 
 
 # ─────────────────────────── ГОРЯЧИЕ КЛАВИШИ ────────────────────────────────
@@ -754,7 +898,7 @@ class GlobalHotkeyManager:
     """
     macOS: NSEvent global monitor → очередь → poll на главном потоке (без GIL crash);
            плюс Tk bind_all когда окно Портала в фокусе (Apple не шлёт global в своё приложение).
-    Windows: pynput GlobalHotKeys.
+    Windows: pynput — только put в main_app._ui_signal_queue; разбор в PortalApp._drain_ui_signal_queue (главный поток).
     """
 
     # macOS virtual keycodes (US layout, layout-independent)
@@ -779,6 +923,39 @@ class GlobalHotkeyManager:
         self._hk_r: Optional[int] = None
         self._hk_w: Optional[int] = None
         self._last_toggle_debounce = 0.0
+
+    def _enqueue_toggle(self) -> None:
+        q = getattr(self.main_app, "_ui_signal_queue", None)
+        if q is not None:
+            try:
+                q.put("toggle")
+                return
+            except Exception:
+                pass
+        try:
+            self.main_app.after(0, self._toggle_ui)
+        except Exception:
+            pass
+
+    def _enqueue_push(self) -> None:
+        q = getattr(self.main_app, "_ui_signal_queue", None)
+        if q is not None:
+            try:
+                q.put("push")
+                return
+            except Exception:
+                pass
+        self._on_push()
+
+    def _enqueue_pull(self) -> None:
+        q = getattr(self.main_app, "_ui_signal_queue", None)
+        if q is not None:
+            try:
+                q.put("pull")
+                return
+            except Exception:
+                pass
+        self._on_pull()
 
     def _log(self, msg: str, prefix: str = "⌨️") -> None:
         portal_thread_log(self.main_app, msg, prefix)
@@ -810,8 +987,8 @@ class GlobalHotkeyManager:
             except Exception as e:
                 self._log(f"after(local monitor): {e}")
             self._log(
-                "✅ Хоткеи: Cmd+Option+P / Cmd+Shift+C/V — из других приложений (Accessibility→Терминал или Python) "
-                "и из окна Портала"
+                "✅ Хоткеи: Cmd+Option+P / Cmd+Shift+C / Cmd+Shift+V или Cmd+Option+V — из других приложений "
+                "(Accessibility→Терминал или Python) и из окна Портала"
             )
         else:
             t = threading.Thread(target=self._run_win, daemon=True, name="portal-hotkeys-win")
@@ -843,7 +1020,9 @@ class GlobalHotkeyManager:
 
         def _pull(e=None):
             if platform.system() == "Darwin":
-                self._log("🔑 Tk bind: Cmd+Shift+V → получить буфер", "🔑")
+                self._log(
+                    "🔑 Tk bind: Cmd+Shift+V или Cmd+Option+V → получить буфер", "🔑"
+                )
             else:
                 self._log("🔑 Tk bind: Ctrl+Alt+V → получить буфер", "🔑")
             self._on_pull()
@@ -882,11 +1061,50 @@ class GlobalHotkeyManager:
                 pull_seqs = [
                     "<Command-Shift-V>", "<Command-Shift-v>",
                     "<Meta-Shift-V>", "<Meta-Shift-v>",
+                    "<Command-Option-V>", "<Command-Option-v>",
+                    "<Meta-Option-V>", "<Meta-Option-v>",
+                    "<Command-Alt-V>", "<Command-Alt-v>",
+                    "<Meta-Alt-V>", "<Meta-Alt-v>",
                 ]
             else:
-                toggle_seqs = ["<Control-Alt-p>"]
-                push_seqs   = ["<Control-Alt-c>"]
-                pull_seqs   = ["<Control-Alt-v>"]
+                # Несколько вариантов: раскладка/регистр, AltGr, порядок модификаторов
+                toggle_seqs = [
+                    "<Control-Alt-p>",
+                    "<Control-Alt-P>",
+                    "<Alt-Control-p>",
+                    "<Alt-Control-P>",
+                    "<Control_L-Alt_L-p>",
+                    "<Control_L-Alt_L-P>",
+                ]
+                push_seqs = [
+                    "<Control-Alt-c>",
+                    "<Control-Alt-C>",
+                    "<Alt-Control-c>",
+                ]
+                pull_seqs = [
+                    "<Control-Alt-v>",
+                    "<Control-Alt-V>",
+                    "<Alt-Control-v>",
+                ]
+                # Та же физическая клавиатура, русская раскладка (ЙЦУКЕН: P→з, C→с, V→м)
+                toggle_seqs += [
+                    "<Control-Alt-з>",
+                    "<Control-Alt-З>",
+                    "<Alt-Control-з>",
+                    "<Alt-Control-З>",
+                ]
+                push_seqs += [
+                    "<Control-Alt-с>",
+                    "<Control-Alt-С>",
+                    "<Alt-Control-с>",
+                    "<Alt-Control-С>",
+                ]
+                pull_seqs += [
+                    "<Control-Alt-м>",
+                    "<Control-Alt-М>",
+                    "<Alt-Control-м>",
+                    "<Alt-Control-М>",
+                ]
 
             # bind_all — один раз на весь процесс (иначе дубли)
             primary = roots[0] if roots else self.main_app
@@ -951,7 +1169,10 @@ class GlobalHotkeyManager:
                             self._log("🔑 Глобальный хоткей: Cmd+Shift+C → буфер", "🔑")
                             self._on_push()
                         elif c == ord("v"):
-                            self._log("🔑 Глобальный хоткей: Cmd+Shift+V → буфер", "🔑")
+                            self._log(
+                                "🔑 Глобальный хоткей: Cmd+Shift+V / Cmd+Option+V → буфер",
+                                "🔑",
+                            )
                             self._on_pull()
             except BlockingIOError:
                 pass
@@ -994,7 +1215,7 @@ class GlobalHotkeyManager:
             self._log("🔑 Local: Cmd+Shift+C", "🔑")
             self._on_push()
         elif cmd == "v":
-            self._log("🔑 Local: Cmd+Shift+V", "🔑")
+            self._log("🔑 Local: Cmd+Shift+V / Cmd+Option+V", "🔑")
             self._on_pull()
 
     def _nsevent_match_command(self, event) -> Optional[str]:
@@ -1014,6 +1235,9 @@ class GlobalHotkeyManager:
                 return "t"
             if keycode == self._KEY_C and (f & CMD) and (f & SHIFT) and not (f & ALT):
                 return "c"
+            # Забрать буфер: Cmd+Shift+V или Cmd+Option+V (как «вставка с другого ПК»)
+            if keycode == self._KEY_V and (f & CMD) and (f & ALT) and not (f & SHIFT):
+                return "v"
             if keycode == self._KEY_V and (f & CMD) and (f & SHIFT) and not (f & ALT):
                 return "v"
         except Exception:
@@ -1082,23 +1306,96 @@ class GlobalHotkeyManager:
     # ── Windows ────────────────────────────────────────────────────────────────
 
     def _run_win(self):
+        """
+        Глобальные хоткеи на Windows.
+
+        По умолчанию только **pynput**: с Tkinter + Python 3.12 пакет `keyboard` + kb.wait()
+        даёт краш GIL (PyEval_RestoreThread) при drop/хуках — см. issue при перетаскивании в портал.
+
+        Опционально `keyboard`: только если явно PORTAL_HOTKEY_BACKEND=keyboard (на свой риск).
+        """
+        use_keyboard = os.environ.get("PORTAL_HOTKEY_BACKEND", "").strip().lower() == "keyboard"
+
+        if use_keyboard:
+            self._log(
+                "⚠️ PORTAL_HOTKEY_BACKEND=keyboard — может падать с Tk/Python 3.12; рекомендуется pynput"
+            )
+            try:
+                import keyboard as kb
+
+                registered = 0
+                for desc, target in (
+                    ("ctrl+alt+p", self._enqueue_toggle),
+                    ("ctrl+alt+з", self._enqueue_toggle),
+                    ("win+shift+p", self._enqueue_toggle),
+                    ("windows+shift+p", self._enqueue_toggle),
+                    ("ctrl+shift+alt+p", self._enqueue_toggle),
+                    ("ctrl+alt+c", self._enqueue_push),
+                    ("ctrl+alt+с", self._enqueue_push),
+                    ("ctrl+alt+v", self._enqueue_pull),
+                    ("ctrl+alt+м", self._enqueue_pull),
+                ):
+                    try:
+                        kb.add_hotkey(desc, target, suppress=False)
+                        registered += 1
+                    except Exception as e:
+                        self._log(f"⚠️ keyboard.add_hotkey {desc}: {e}")
+
+                if registered == 0:
+                    raise RuntimeError("keyboard: ни один хоткей не зарегистрирован")
+
+                self._log("✅ Глобальные хоткеи (keyboard) — экспериментальный режим")
+                kb.wait()
+                return
+            except ImportError:
+                self._log("⚠️ keyboard не установлен — переключаемся на pynput")
+            except Exception as e:
+                self._log(f"⚠️ keyboard: {e} — переключаемся на pynput")
+
         try:
-            from pynput import keyboard
+            from pynput import keyboard as pynkeyboard
         except ImportError:
-            self._log("pynput не установлен — хоткеи отключены")
+            self._log("❌ pynput не установлен — глобальных хоткеев нет. pip install pynput")
             return
 
-        combo = {
-            "<ctrl>+<alt>+p": self.toggle_widget,
-            "<ctrl>+<alt>+c": self.push_clipboard,
-            "<ctrl>+<alt>+v": self.pull_clipboard,
+        combo_latin = {
+            "<ctrl>+<alt>+p": self._enqueue_toggle,
+            "<ctrl>+<alt>+c": self._enqueue_push,
+            "<ctrl>+<alt>+v": self._enqueue_pull,
         }
-        try:
-            with keyboard.GlobalHotKeys(combo) as h:
-                self._log("✅ pynput GlobalHotKeys активен: Ctrl+Alt+P | C | V")
-                h.join()
-        except Exception as e:
-            self._log(f"pynput GlobalHotKeys: {e}")
+        combo_ru = dict(combo_latin)
+        combo_ru.update(
+            {
+                "<ctrl>+<alt>+з": self._enqueue_toggle,
+                "<ctrl>+<alt>+З": self._enqueue_toggle,
+                "<ctrl>+<alt>+с": self._enqueue_push,
+                "<ctrl>+<alt>+С": self._enqueue_push,
+                "<ctrl>+<alt>+м": self._enqueue_pull,
+                "<ctrl>+<alt>+М": self._enqueue_pull,
+            }
+        )
+
+        for base_name, base_combo in (("RU+EN", combo_ru), ("EN", combo_latin)):
+            for extra in ("<cmd>+<shift>+p", "<win>+<shift>+p", None):
+                combo_try = dict(base_combo)
+                if extra:
+                    combo_try[extra] = self._enqueue_toggle
+                try:
+                    with pynkeyboard.GlobalHotKeys(combo_try) as h:
+                        if extra:
+                            self._log(
+                                f"✅ pynput ({base_name}): Ctrl+Alt+P/З, C/С, V/М и {extra}"
+                            )
+                        else:
+                            self._log(
+                                f"✅ pynput ({base_name}): Ctrl+Alt+P/З, C/С, V/М (без Win+Shift+P)"
+                            )
+                        h.join()
+                    return
+                except Exception:
+                    continue
+        self._log("❌ pynput GlobalHotKeys: не удалось зарегистрировать хоткеи")
+        self._log("💡 python portal.py --show-portal  или  PORTAL_SHOW_ON_START=1")
 
     # ── Общие обработчики ──────────────────────────────────────────────────────
 
@@ -1115,10 +1412,8 @@ class GlobalHotkeyManager:
             self.widget.show()
 
     def toggle_widget(self):
-        try:
-            self.main_app.after(0, self._toggle_ui)
-        except Exception:
-            pass
+        """Из чужого потока — только в очередь → PortalApp._drain_ui_signal_queue."""
+        self._enqueue_toggle()
 
     def _on_toggle(self):
         self.toggle_widget()
@@ -1126,22 +1421,22 @@ class GlobalHotkeyManager:
     def _on_push(self):
         if self.main_app and hasattr(self.main_app, "push_shared_clipboard_hotkey"):
             try:
-                self.main_app.after(0, self.main_app.push_shared_clipboard_hotkey)
+                self.main_app.push_shared_clipboard_hotkey()
             except Exception:
                 pass
 
     def _on_pull(self):
         if self.main_app and hasattr(self.main_app, "pull_shared_clipboard_hotkey"):
             try:
-                self.main_app.after(0, self.main_app.pull_shared_clipboard_hotkey)
+                self.main_app.pull_shared_clipboard_hotkey()
             except Exception:
                 pass
 
     def push_clipboard(self):
-        self._on_push()
+        self._enqueue_push()
 
     def pull_clipboard(self):
-        self._on_pull()
+        self._enqueue_pull()
 
 
 if __name__ == "__main__":

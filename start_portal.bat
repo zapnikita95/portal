@@ -38,14 +38,13 @@ if errorlevel 1 (
 echo ✅ Зависимости готовы
 echo.
 
-REM Быстрый тест keyboard (для хоткеев)
-echo 🔍 Тест библиотеки keyboard для хоткеев...
-python -c "import keyboard; print('✅ keyboard работает')" 2>nul
+REM Глобальные хоткеи — pynput (стабильно с Tk); keyboard только по PORTAL_HOTKEY_BACKEND=keyboard
+echo 🔍 Проверка pynput ^(глобальные хоткеи^)...
+python -c "import pynput; print('✅ pynput OK')" 2>nul
 if errorlevel 1 (
-    echo ⚠️  keyboard не работает — хоткеи могут не сработать
-    echo    Установи: pip install keyboard
+    echo ⚠️  pynput не найден — установи: pip install pynput
 ) else (
-    echo ✅ keyboard готов
+    echo ✅ pynput готов ^(Ctrl+Alt+P / Win+Shift+P через pynput^)
 )
 echo.
 

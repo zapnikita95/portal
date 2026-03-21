@@ -7,8 +7,20 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Literal, Optional
+
+IncomingClipboardFilesMode = Literal["disk", "clipboard", "both"]
+
+INCOMING_CLIPBOARD_FILES_MODES: tuple[str, ...] = ("disk", "clipboard", "both")
+
+# Подписи для UI (главное окно + контекстное меню виджета)
+INCOMING_CLIPBOARD_FILES_MODE_LABELS_RU: Dict[str, str] = {
+    "both": "Папка приёма + буфер (вставка файлов)",
+    "disk": "Только папка приёма (без буфера)",
+    "clipboard": "Только буфер (временная папка)",
+}
 
 
 def config_path() -> Path:
@@ -21,6 +33,11 @@ def config_path() -> Path:
         d = Path.home() / ".config" / "portal"
     d.mkdir(parents=True, exist_ok=True)
     return d / "config.json"
+
+
+def activity_log_path() -> Path:
+    """Файл журнала (дублирует UI, можно открыть и скопировать вручную)."""
+    return config_path().parent / "portal_activity.log"
 
 
 def _load_all() -> Dict[str, Any]:
@@ -74,6 +91,42 @@ def load_receive_dir() -> Path:
     return default_receive_dir()
 
 
+def load_incoming_clipboard_files_mode() -> IncomingClipboardFilesMode:
+    """
+    Как обрабатывать файлы, пришедшие из буфера другого ПК (clipboard_files):
+    disk — только сохранить в папку приёма; clipboard — только в системный буфер
+    (файлы пишутся во временную папку); both — и папка, и буфер.
+    """
+    data = _load_all()
+    m = data.get("incoming_clipboard_files_mode", "both")
+    if m in INCOMING_CLIPBOARD_FILES_MODES:
+        return m  # type: ignore[return-value]
+    return "both"
+
+
+def save_incoming_clipboard_files_mode(mode: str) -> bool:
+    if mode not in INCOMING_CLIPBOARD_FILES_MODES:
+        return False
+    try:
+        data = _load_all()
+        data["incoming_clipboard_files_mode"] = mode
+        p = config_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
+def incoming_clipboard_files_save_dir() -> Path:
+    """Куда сохранять байты при приёме clipboard_files (зависит от режима)."""
+    if load_incoming_clipboard_files_mode() == "clipboard":
+        d = Path(tempfile.gettempdir()) / "PortalIncoming"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+    return load_receive_dir()
+
+
 def save_receive_dir(path: Path) -> bool:
     try:
         p = Path(path).expanduser()
@@ -94,37 +147,72 @@ def save_receive_dir(path: Path) -> bool:
 
 
 def load_remote_ip() -> Optional[str]:
-    ip = _load_all().get("remote_ip")
-    if not ip or not str(ip).strip():
-        return None
-    return str(ip).strip()
+    """Один IP (для обратной совместимости) — первый из списка."""
+    ips = load_remote_ips()
+    return ips[0] if ips else _load_all().get("remote_ip") or None
+
+
+def load_remote_ips() -> List[str]:
+    """Список IP для отправки (множественные получатели)."""
+    data = _load_all()
+    raw = data.get("remote_ips")
+    if isinstance(raw, list) and raw:
+        out = []
+        for x in raw:
+            s = str(x).strip()
+            if s and s not in out:
+                out.append(s)
+        return out
+    # Обратная совместимость
+    one = data.get("remote_ip")
+    if one and str(one).strip():
+        return [str(one).strip()]
+    return []
+
+
+def save_remote_ips(ips: List[str]) -> bool:
+    """Сохранить список IP."""
+    try:
+        clean = []
+        for ip in ips:
+            s = str(ip).strip()
+            if s and s not in clean:
+                clean.append(s)
+        data = _load_all()
+        data["remote_ips"] = clean
+        if clean:
+            data["remote_ip"] = clean[0]
+        else:
+            data.pop("remote_ips", None)
+            data.pop("remote_ip", None)
+        p = config_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        return True
+    except Exception as e:
+        print(f"[Portal] Ошибка сохранения IP: {e}")
+        return False
+
+
+def load_auto_clipboard_enabled() -> bool:
+    """Включена ли авто-отправка буфера при копировании."""
+    return bool(_load_all().get("auto_clipboard_enabled", False))
+
+
+def save_auto_clipboard_enabled(enabled: bool) -> bool:
+    try:
+        data = _load_all()
+        data["auto_clipboard_enabled"] = enabled
+        p = config_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        return True
+    except Exception:
+        return False
 
 
 def save_remote_ip(ip: Optional[str]) -> bool:
-    """Сохранить IP в файл. Возвращает True если успешно."""
-    try:
-        ip_clean = str(ip).strip() if ip and str(ip).strip() else None
-        data = _load_all()
-        if ip_clean:
-            data["remote_ip"] = ip_clean
-        else:
-            data.pop("remote_ip", None)
-        p = config_path()
-        # Убеждаемся что папка существует
-        p.parent.mkdir(parents=True, exist_ok=True)
-        # Записываем файл
-        p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        # Проверяем что записалось (читаем сразу после записи)
-        if ip_clean:
-            saved = load_remote_ip()
-            if saved != ip_clean:
-                print(f"[Portal] ВНИМАНИЕ: IP не сохранился! Введено: {ip_clean}, прочитано: {saved}")
-                print(f"[Portal] Файл: {p}")
-                print(f"[Portal] Содержимое файла: {p.read_text(encoding='utf-8') if p.exists() else 'не существует'}")
-                return False
-        return True
-    except Exception as e:
-        import traceback
-        print(f"[Portal] Ошибка сохранения IP: {e}")
-        print(f"[Portal] Traceback: {traceback.format_exc()}")
-        return False
+    """Сохранить один IP (для обратной совместимости — перезаписывает список)."""
+    if ip and str(ip).strip():
+        return save_remote_ips([ip.strip()])
+    return save_remote_ips([])
