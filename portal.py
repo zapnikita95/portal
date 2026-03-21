@@ -390,6 +390,10 @@ class PortalApp(ctk.CTk):
         # Один push буфера за раз (двойной хоткей / два источника событий)
         self._clipboard_push_lock = threading.Lock()
         self._clipboard_pull_lock = threading.Lock()
+        # pynput / windnd — только put в очередь; разбор на главном потоке Tk
+        self._ui_signal_queue: queue.SimpleQueue = queue.SimpleQueue()
+        self.portal_widget_ref: Optional[Any] = None
+        self._hotkey_mgr: Optional[Any] = None
 
         # Создание UI
         self.create_ui()
@@ -603,6 +607,13 @@ class PortalApp(ctk.CTk):
             pass
         ctk.CTkButton(
             recv_row,
+            text="Обзор…",
+            width=88,
+            command=self.choose_receive_dir,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            recv_row,
             text="Сохранить папку",
             width=130,
             command=self.save_receive_dir_from_ui,
@@ -776,61 +787,6 @@ class PortalApp(ctk.CTk):
             text_color="gray",
         ).pack(side="left", padx=(12, 0))
 
-        recv_block = ctk.CTkFrame(peer_frame, fg_color="transparent")
-        recv_block.pack(fill="x", padx=12, pady=(0, 10))
-        ctk.CTkLabel(
-            recv_block,
-            text="📁 Куда сохранять входящие файлы на ЭТОМ ПК:",
-            font=ctk.CTkFont(size=12, weight="bold"),
-        ).pack(anchor="w", pady=(0, 4))
-        recv_row = ctk.CTkFrame(recv_block, fg_color="transparent")
-        recv_row.pack(fill="x")
-        self.receive_dir_entry = ctk.CTkEntry(recv_row, width=420, font=ctk.CTkFont(size=11))
-        self.receive_dir_entry.pack(side="left", padx=(0, 8), fill="x", expand=True)
-        try:
-            self.receive_dir_entry.insert(0, str(portal_config.load_receive_dir()))
-        except Exception:
-            self.receive_dir_entry.insert(0, str(Path.home() / "Desktop"))
-        ctk.CTkButton(
-            recv_row,
-            text="Обзор…",
-            width=72,
-            command=self.choose_receive_dir,
-            font=ctk.CTkFont(size=11),
-        ).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(
-            recv_row,
-            text="Сохранить папку",
-            width=120,
-            command=self.save_receive_dir_from_ui,
-            font=ctk.CTkFont(size=11),
-        ).pack(side="left")
-
-        mode_row = ctk.CTkFrame(recv_block, fg_color="transparent")
-        mode_row.pack(fill="x", pady=(8, 0))
-        ctk.CTkLabel(
-            mode_row,
-            text="Файлы из буфера другого ПК:",
-            font=ctk.CTkFont(size=11),
-        ).pack(side="left", padx=(0, 8))
-        self._incoming_files_mode_labels = dict(
-            portal_config.INCOMING_CLIPBOARD_FILES_MODE_LABELS_RU
-        )
-        _mcur = portal_config.load_incoming_clipboard_files_mode()
-        if _mcur not in self._incoming_files_mode_labels:
-            _mcur = "both"
-        self.incoming_files_mode_var = ctk.StringVar(
-            value=self._incoming_files_mode_labels[_mcur]
-        )
-        ctk.CTkOptionMenu(
-            mode_row,
-            variable=self.incoming_files_mode_var,
-            values=list(self._incoming_files_mode_labels.values()),
-            command=self._on_incoming_clipboard_files_mode_changed,
-            width=340,
-            font=ctk.CTkFont(size=11),
-        ).pack(side="left", fill="x", expand=True)
-
         # Кнопки управления
         button_frame = ctk.CTkFrame(main_frame)
         button_frame.pack(fill="x", padx=20, pady=20)
@@ -914,7 +870,7 @@ class PortalApp(ctk.CTk):
             justify="left",
             anchor="w",
         )
-        log_title.pack(pady=(10, 5))
+        self.log_hint_label.pack(fill="x", padx=10, pady=(0, 4))
 
         log_btn_row = ctk.CTkFrame(log_frame, fg_color="transparent")
         log_btn_row.pack(fill="x", padx=10, pady=(0, 4))
@@ -1159,6 +1115,19 @@ class PortalApp(ctk.CTk):
             self.log(f"💾 Входящие файлы: {choice}")
         else:
             self.log("⚠️ Не удалось сохранить режим приёма")
+
+    def choose_receive_dir(self) -> None:
+        """Диалог выбора папки приёма (кнопка «Обзор…»)."""
+        from tkinter import filedialog
+
+        if not hasattr(self, "receive_dir_entry"):
+            return
+        cur = self.receive_dir_entry.get().strip()
+        initial = cur if cur and os.path.isdir(cur) else str(portal_config.receive_dir_path())
+        d = filedialog.askdirectory(title="Папка для входящих файлов", initialdir=initial)
+        if d:
+            self.receive_dir_entry.delete(0, "end")
+            self.receive_dir_entry.insert(0, d)
 
     def save_receive_dir_from_ui(self):
         """Сохранить папку для входящих файлов (пусто = только рабочий стол по умолчанию)."""
