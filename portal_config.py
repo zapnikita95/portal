@@ -1,5 +1,5 @@
 """
-Постоянные настройки (IP второго ПК) — один раз указал, больше не спрашиваем.
+Постоянные настройки (IP пиров, папка приёма) — config.json
 """
 
 from __future__ import annotations
@@ -9,18 +9,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
-
-IncomingClipboardFilesMode = Literal["disk", "clipboard", "both"]
-
-INCOMING_CLIPBOARD_FILES_MODES: tuple[str, ...] = ("disk", "clipboard", "both")
-
-# Подписи для UI (главное окно + контекстное меню виджета)
-INCOMING_CLIPBOARD_FILES_MODE_LABELS_RU: Dict[str, str] = {
-    "both": "Папка приёма + буфер (вставка файлов)",
-    "disk": "Только папка приёма (без буфера)",
-    "clipboard": "Только буфер (временная папка)",
-}
+from typing import Any, Dict, List, Optional
 
 
 def config_path() -> Path:
@@ -36,7 +25,7 @@ def config_path() -> Path:
 
 
 def activity_log_path() -> Path:
-    """Файл журнала (дублирует UI, можно открыть и скопировать вручную)."""
+    """Копия журнала из UI (удобно открыть / grep). Рядом с config.json."""
     return config_path().parent / "portal_activity.log"
 
 
@@ -50,169 +39,210 @@ def _load_all() -> Dict[str, Any]:
         return {}
 
 
-def default_receive_dir() -> Path:
-    """
-    Папка «Рабочий стол» по умолчанию.
-    На Windows часто Desktop в OneDrive — C:\\Users\\...\\Desktop может не существовать.
-    """
-    home = Path.home()
-    if sys.platform == "win32":
-        prof = Path(os.environ.get("USERPROFILE", str(home)))
-        candidates = [
-            prof / "OneDrive" / "Desktop",
-            prof / "OneDriveDesktop",  # редкий вариант
-            prof / "Desktop",
-            home / "Desktop",
-        ]
-        for p in candidates:
-            try:
-                if p.exists() and p.is_dir():
-                    return p
-            except OSError:
-                continue
-        # Создаём наиболее вероятный путь
-        target = prof / "Desktop"
-        target.mkdir(parents=True, exist_ok=True)
-        return target
-    d = home / "Desktop"
+def _write_all(data: Dict[str, Any]) -> bool:
     try:
-        d.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
-    return d
+        p = config_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        return True
+    except Exception:
+        return False
 
 
-def load_receive_dir() -> Path:
+def receive_dir_path() -> Path:
+    """Куда сохранять входящие файлы. По умолчанию — рабочий стол."""
     data = _load_all()
     raw = data.get("receive_dir")
     if raw and str(raw).strip():
         p = Path(str(raw).strip()).expanduser()
-        return p
-    return default_receive_dir()
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        if p.is_dir():
+            return p.resolve()
+    return (Path.home() / "Desktop").resolve()
 
 
-def load_incoming_clipboard_files_mode() -> IncomingClipboardFilesMode:
+def save_receive_dir(path_str: Optional[str]) -> bool:
+    """Пустая строка — сброс на рабочий стол по умолчанию."""
+    try:
+        p = (path_str or "").strip()
+        data = _load_all()
+        if not p:
+            data.pop("receive_dir", None)
+        else:
+            path = Path(p).expanduser()
+            path.mkdir(parents=True, exist_ok=True)
+            if not path.is_dir():
+                return False
+            data["receive_dir"] = str(path.resolve())
+        return _write_all(data)
+    except Exception:
+        return False
+
+
+def receive_files_mode() -> str:
     """
-    Как обрабатывать файлы, пришедшие из буфера другого ПК (clipboard_files):
-    disk — только сохранить в папку приёма; clipboard — только в системный буфер
-    (файлы пишутся во временную папку); both — и папка, и буфер.
+    Как обрабатывать входящие файлы (обычная отправка и файл, забранный Cmd+Ctrl+V):
+    both — папка приёма + буфер ОС; disk_only — только папка; clipboard_only — в буфер (+ файл в папке).
+    Отправка «как из буфера» (portal_clipboard) по-прежнему всегда кладёт в буфер на приёме.
     """
     data = _load_all()
-    m = data.get("incoming_clipboard_files_mode", "both")
-    if m in INCOMING_CLIPBOARD_FILES_MODES:
-        return m  # type: ignore[return-value]
+    v = data.get("receive_files_mode")
+    if v in ("both", "disk_only", "clipboard_only"):
+        return str(v)
+    if data.get("receive_copy_to_clipboard") is False:
+        return "disk_only"
     return "both"
 
 
-def save_incoming_clipboard_files_mode(mode: str) -> bool:
-    if mode not in INCOMING_CLIPBOARD_FILES_MODES:
+def save_receive_files_mode(mode: str) -> bool:
+    if mode not in ("both", "disk_only", "clipboard_only"):
         return False
-    try:
-        data = _load_all()
-        data["incoming_clipboard_files_mode"] = mode
-        p = config_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        return True
-    except Exception:
-        return False
+    data = _load_all()
+    data["receive_files_mode"] = mode
+    data["receive_copy_to_clipboard"] = mode != "disk_only"
+    return _write_all(data)
+
+
+def receive_copy_to_clipboard_enabled() -> bool:
+    """Совместимость: True, если нужно класть обычный приём в буфер."""
+    return receive_files_mode() in ("both", "clipboard_only")
+
+
+def save_receive_copy_to_clipboard(enabled: bool) -> bool:
+    """Совместимость со старым чекбоксом."""
+    return save_receive_files_mode("both" if enabled else "disk_only")
+
+
+# ── Совместимость с portal_clipboard_rich / Windows-веткой ──────────
 
 
 def incoming_clipboard_files_save_dir() -> Path:
-    """Куда сохранять байты при приёме clipboard_files (зависит от режима)."""
-    if load_incoming_clipboard_files_mode() == "clipboard":
+    """Куда писать поток clipboard_files; при «только буфер» — temp (как на Win)."""
+    import tempfile
+
+    if receive_files_mode() == "clipboard_only":
         d = Path(tempfile.gettempdir()) / "PortalIncoming"
         d.mkdir(parents=True, exist_ok=True)
         return d
-    return load_receive_dir()
+    return receive_dir_path()
 
 
-def save_receive_dir(path: Path) -> bool:
-    try:
-        p = Path(path).expanduser()
-        p.mkdir(parents=True, exist_ok=True)
-        try:
-            p = p.resolve()
-        except OSError:
-            pass
-        data = _load_all()
-        data["receive_dir"] = str(p)
-        cp = config_path()
-        cp.parent.mkdir(parents=True, exist_ok=True)
-        cp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        return True
-    except Exception as e:
-        print(f"[Portal] Ошибка сохранения receive_dir: {e}")
+def load_incoming_clipboard_files_mode() -> str:
+    """disk | clipboard | both — внутри portal_clipboard_rich / приём push."""
+    m = receive_files_mode()
+    return {"disk_only": "disk", "clipboard_only": "clipboard", "both": "both"}[m]
+
+
+def save_incoming_clipboard_files_mode(mode: str) -> bool:
+    rev = {"disk": "disk_only", "clipboard": "clipboard_only", "both": "both"}
+    key = rev.get(mode)
+    if not key:
         return False
+    return save_receive_files_mode(key)
 
 
-def load_remote_ip() -> Optional[str]:
-    """Один IP (для обратной совместимости) — первый из списка."""
-    ips = load_remote_ips()
-    return ips[0] if ips else _load_all().get("remote_ip") or None
+INCOMING_CLIPBOARD_FILES_MODE_LABELS_RU: Dict[str, str] = {
+    "both": "Папка приёма + буфер",
+    "disk": "Только папка",
+    "clipboard": "Только буфер (временная папка)",
+}
 
 
-def load_remote_ips() -> List[str]:
-    """Список IP для отправки (множественные получатели)."""
+# ── Несколько IP ───────────────────────────────────────────────
+
+
+def load_peer_ips() -> List[str]:
+    """Все сохранённые IP (порядок сохраняется, дубликаты убираем)."""
     data = _load_all()
-    raw = data.get("remote_ips")
-    if isinstance(raw, list) and raw:
-        out = []
+    raw = data.get("peer_ips")
+    out: List[str] = []
+    seen = set()
+    if isinstance(raw, list):
         for x in raw:
             s = str(x).strip()
-            if s and s not in out:
+            if s and s not in seen:
+                seen.add(s)
                 out.append(s)
+    if out:
         return out
-    # Обратная совместимость
-    one = data.get("remote_ip")
-    if one and str(one).strip():
-        return [str(one).strip()]
+    legacy = data.get("remote_ip")
+    if legacy and str(legacy).strip():
+        return [str(legacy).strip()]
     return []
 
 
-def save_remote_ips(ips: List[str]) -> bool:
-    """Сохранить список IP."""
-    try:
-        clean = []
-        for ip in ips:
-            s = str(ip).strip()
-            if s and s not in clean:
-                clean.append(s)
-        data = _load_all()
-        data["remote_ips"] = clean
-        if clean:
-            data["remote_ip"] = clean[0]
-        else:
-            data.pop("remote_ips", None)
-            data.pop("remote_ip", None)
-        p = config_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        return True
-    except Exception as e:
-        print(f"[Portal] Ошибка сохранения IP: {e}")
-        return False
+def save_peer_ips(ips: List[str]) -> bool:
+    seen = set()
+    clean: List[str] = []
+    for x in ips:
+        s = str(x).strip()
+        if s and s not in seen:
+            seen.add(s)
+            clean.append(s)
+    data = _load_all()
+    data["peer_ips"] = clean
+    if clean:
+        data["remote_ip"] = clean[0]
+    else:
+        data.pop("remote_ip", None)
+        data.pop("peer_send_targets", None)
+    return _write_all(data)
 
 
-def load_auto_clipboard_enabled() -> bool:
-    """Включена ли авто-отправка буфера при копировании."""
-    return bool(_load_all().get("auto_clipboard_enabled", False))
+def load_peer_send_targets() -> List[str]:
+    """
+    IP, на которые идёт одновременная отправка.
+    Пустой список в конфиге или все невалидны → все из peer_ips.
+    """
+    all_ips = load_peer_ips()
+    if not all_ips:
+        return []
+    data = _load_all()
+    sel = data.get("peer_send_targets")
+    if not isinstance(sel, list) or not sel:
+        return list(all_ips)
+    allowed = set(all_ips)
+    seen = set()
+    out: List[str] = []
+    for x in sel:
+        s = str(x).strip()
+        if s in allowed and s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out if out else list(all_ips)
 
 
-def save_auto_clipboard_enabled(enabled: bool) -> bool:
-    try:
-        data = _load_all()
-        data["auto_clipboard_enabled"] = enabled
-        p = config_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        return True
-    except Exception:
-        return False
+def save_peer_send_targets(targets: List[str]) -> bool:
+    all_ips = load_peer_ips()
+    allowed = set(all_ips)
+    clean = [str(x).strip() for x in targets if str(x).strip() in allowed]
+    data = _load_all()
+    if not clean or set(clean) == allowed:
+        data.pop("peer_send_targets", None)
+    else:
+        data["peer_send_targets"] = clean
+    return _write_all(data)
+
+
+# Совместимость со старым кодом (один IP)
+
+
+def load_remote_ip() -> Optional[str]:
+    ips = load_peer_ips()
+    return ips[0] if ips else None
 
 
 def save_remote_ip(ip: Optional[str]) -> bool:
-    """Сохранить один IP (для обратной совместимости — перезаписывает список)."""
-    if ip and str(ip).strip():
-        return save_remote_ips([ip.strip()])
-    return save_remote_ips([])
+    """Один IP: добавить в список, если ещё нет; иначе очистить."""
+    ip_clean = str(ip).strip() if ip and str(ip).strip() else None
+    if not ip_clean:
+        return save_peer_ips([])
+    ips = load_peer_ips()
+    if ip_clean not in ips:
+        ips.append(ip_clean)
+    else:
+        ips = [ip_clean] + [x for x in ips if x != ip_clean]
+    return save_peer_ips(ips)
