@@ -285,6 +285,9 @@ class PortalWidget:
         if not self.target_ip:
             self.target_ip = portal_config.load_remote_ip()
 
+        # Антидребезг: двойной клик в Tk может вызвать обработчик дважды (canvas + toplevel в bindtags)
+        self._last_double_clipboard_send_mono: float = 0.0
+
         self.setup_window()
 
         _cbg = (
@@ -1089,8 +1092,8 @@ class PortalWidget:
         bind_drag(self.root)
         bind_drag(self.canvas)
 
+        # Только canvas: привязка на root дублирует событие (toplevel входит в bindtags canvas → два файла)
         self.canvas.bind("<Double-Button-1>", self.on_double_click_clipboard_image)
-        self.root.bind("<Double-Button-1>", self.on_double_click_clipboard_image)
         self.canvas.bind("<Triple-Button-1>", lambda e: self.show_settings())
         self.canvas.bind("<Control-Button-1>", lambda e: self.on_portal_click())
         self.root.bind("<Button-3>", self.show_context_menu)
@@ -1263,8 +1266,14 @@ class PortalWidget:
     def on_double_click_clipboard_image(self, event=None):
         """Двойной клик: картинка из буфера → временный файл → отправка на второй ПК."""
         self.root.after(10, self._double_click_clipboard_worker)
+        return "break"
 
     def _double_click_clipboard_worker(self):
+        now = time.monotonic()
+        if now - self._last_double_clipboard_send_mono < 0.45:
+            return
+        self._last_double_clipboard_send_mono = now
+
         im = grab_clipboard_image()
         if im is None:
             if self.main_app and hasattr(self.main_app, "log"):
