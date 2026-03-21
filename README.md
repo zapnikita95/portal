@@ -28,6 +28,27 @@
 - Windows 10/11, macOS, или Linux
 - Tailscale (опционально, для работы через VPN) или локальная сеть
 
+## 🔄 Обновление (на **каждом** компьютере отдельно)
+
+Папка с проектом на **Windows** и папка на **Mac** — это две копии. После правок на GitHub на **каждой** машине:
+
+**Windows** (в папке `Portal`):
+```bat
+cd /d "C:\путь\к\Portal"
+git pull
+start_portal.bat
+```
+
+**macOS** (в папке `portal`):
+```bash
+cd ~/путь/к/portal
+git pull
+chmod +x Portal.command start_portal.command
+./Portal.command
+```
+
+Если не используешь git — скачай заново ZIP с GitHub и замени папку.
+
 ## 🚀 Быстрая установка
 
 ### Windows:
@@ -43,7 +64,7 @@ chmod +x Portal.command fix.sh
 # если ошибка _tkinter:
 ./fix.sh
 # запуск двойным кликом по Portal.command или:
-python3 portal.py --widget
+python3 portal.py
 ```
 Виджет **по умолчанию скрыт** — `Cmd+Option+P` чтобы показать/скрыть.  
 **Горячие клавиши:** в настройках macOS нет «pynput» — см. **[MAC_ACCESSIBILITY.md](MAC_ACCESSIBILITY.md)** (добавь **Терминал** или **Cursor** в «Универсальный доступ»).
@@ -55,12 +76,12 @@ python3 portal.py --widget
    chmod +x fix.sh
    ./fix.sh
    ```
-3. Запустите: `python3 portal.py --widget` или **`Portal.command`**
+3. Запустите: `python3 portal.py` или **`Portal.command`** (виджет по умолчанию; отключить: `--no-widget`)
 
 ### Linux:
 ```bash
 pip install -r requirements.txt
-python3 portal.py --widget
+python3 portal.py
 ```
 
 ## 📖 Использование
@@ -73,10 +94,11 @@ python3 portal.py --widget
 
 ### Использование виджета-портала
 
-1. Запустите приложение с флагом `--widget`:
+1. Запустите приложение (виджет **включён по умолчанию**):
    ```bash
-   python portal.py --widget
+   python portal.py
    ```
+   Чтобы без виджета: `python portal.py --no-widget`
 
 2. На рабочем столе появится анимированный портал (правый нижний угол)
 

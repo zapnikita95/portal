@@ -47,8 +47,25 @@ echo "💡 Виджет: Cmd+Option+P | Буфер: Cmd+Shift+C отправит
 echo "💡 Окно: Alt+тащить | Файл: Ctrl+клик по порталу | IP: двойной клик"
 echo ""
 
-# Запуск приложения
-python3 portal.py --widget
+# Очистка кеша (на случай старого .pyc)
+if [ -d "__pycache__" ]; then
+    echo "🧹 Очистка __pycache__..."
+    rm -rf __pycache__
+fi
+
+echo "🔎 Проверка синтаксиса portal_widget.py..."
+if ! python3 -m py_compile portal_widget.py 2>/dev/null; then
+    echo ""
+    echo "❌ Ошибка в portal_widget.py. Обнови папку: git pull"
+    python3 -m py_compile portal_widget.py
+    read -p "Нажмите Enter для выхода..."
+    exit 1
+fi
+echo "✅ Синтаксис OK"
+echo ""
+
+# Виджет включается по умолчанию (как на Windows); --no-widget чтобы отключить
+python3 portal.py
 
 if [ $? -ne 0 ]; then
     echo ""
