@@ -30,8 +30,8 @@ CHROMA_KEY = "#010101"
 
 def debug_log_path() -> Path:
     """Путь к файлу отладки хоткеев (один источник правды для UI и логов)."""
-        if sys.platform == "win32":
-            base = os.environ.get("TEMP") or os.environ.get("TMP") or str(Path.home())
+    if sys.platform == "win32":
+        base = os.environ.get("TEMP") or os.environ.get("TMP") or str(Path.home())
     else:
         base = os.environ.get("TMPDIR") or "/tmp"
     return Path(base) / "portal_hotkey_debug.log"
