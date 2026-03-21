@@ -548,6 +548,12 @@ class PortalApp(ctk.CTk):
         self._apk_win: Optional[ctk.CTkToplevel] = None
         self._help_win: Optional[ctk.CTkToplevel] = None
 
+        # Стандартное медиа из assets → сразу в config, чтобы поле «Медиа» не было пустым
+        try:
+            portal_config.ensure_widget_media_path_persisted()
+        except Exception:
+            pass
+
         # Создание UI
         self.create_ui()
         
@@ -1133,12 +1139,12 @@ class PortalApp(ctk.CTk):
         self.widget_media_entry = ctk.CTkEntry(
             wm_row1,
             width=360,
-            placeholder_text="пусто = только папка assets/ в проекте",
+            placeholder_text="стандарт: assets/portal_main.gif (подставляется автоматически)",
             font=ctk.CTkFont(size=12),
         )
         self.widget_media_entry.pack(side="left", padx=(0, 8))
         try:
-            _wmp = portal_config.load_widget_media_path()
+            _wmp = portal_config.effective_widget_media_path()
             if _wmp:
                 self.widget_media_entry.insert(0, _wmp)
         except Exception:
@@ -1264,9 +1270,9 @@ class PortalApp(ctk.CTk):
         ctk.CTkLabel(
             t_widget,
             text=(
-                "Пресет «Основное медиа виджета (main)» — это то же изображение, что в поле «Медиа виджета на столе» "
-                "выше; если поле пустое, подставляется файл по умолчанию из assets (например portal_main.gif). "
-                "Остальные пресеты — готовые файлы из assets/presets/. "
+                "Пресет «Основное медиа виджета (main)» — то же изображение, что в поле «Медиа виджета на столе» "
+                "выше (по умолчанию там же assets/portal_main.gif). "
+                "Остальные пресеты — готовые файлы из assets/ и assets/presets/. "
                 "Выбери пресет и нажми «Показать превью в углу» (~4 с)."
             ),
             font=ctk.CTkFont(size=11),
@@ -2332,7 +2338,15 @@ class PortalApp(ctk.CTk):
                 self.log("⚠️ Не удалось сохранить путь к медиа")
                 return
         else:
-            portal_config.save_widget_media_path(None)
+            fb = portal_config.default_widget_media_fallback_path()
+            if fb:
+                if not portal_config.save_widget_media_path(fb):
+                    self.log("⚠️ Не удалось сохранить стандартное медиа")
+                    return
+                self.log("✅ Пустое поле — сохранено стандартное медиа из assets")
+            else:
+                portal_config.save_widget_media_path(None)
+                self.log("⚠️ В assets нет portal_main.gif — укажи файл вручную")
         label = self.widget_media_mode_menu.get()
         mode_key = getattr(self, "_widget_media_mode_rev", {}).get(label, "auto")
         if not portal_config.save_widget_media_mode(mode_key):
@@ -2342,10 +2356,18 @@ class PortalApp(ctk.CTk):
         self.apply_widget_media_reload()
 
     def clear_widget_media_from_ui(self) -> None:
-        portal_config.save_widget_media_path(None)
-        if hasattr(self, "widget_media_entry"):
-            self.widget_media_entry.delete(0, "end")
-        self.log("✅ Путь сброшен — снова используется assets/ в папке проекта")
+        fb = portal_config.default_widget_media_fallback_path()
+        if fb:
+            portal_config.save_widget_media_path(fb)
+            if hasattr(self, "widget_media_entry"):
+                self.widget_media_entry.delete(0, "end")
+                self.widget_media_entry.insert(0, fb)
+            self.log("✅ Сброшено на стандартное медиа (portal_main.gif в assets)")
+        else:
+            portal_config.save_widget_media_path(None)
+            if hasattr(self, "widget_media_entry"):
+                self.widget_media_entry.delete(0, "end")
+            self.log("⚠️ Нет стандартного файла в assets — поле очищено")
         self.apply_widget_media_reload()
 
     def apply_widget_media_reload(self) -> None:
@@ -2576,8 +2598,7 @@ class PortalApp(ctk.CTk):
         if not media_path:
             self.log(
                 f"⚠️ Нет файла для пресета «{pid}». "
-                "Для «main»: поле «Медиа» или assets/portal_main.gif. "
-                "Для «Синий стандарт»: assets/presets/blue_standard.webp (или .gif)."
+                "Проверь путь в «Медиа» (по умолчанию assets/portal_main.gif) и файлы в assets/presets/."
             )
             return
         seconds = 4.0

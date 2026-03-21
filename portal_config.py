@@ -522,7 +522,7 @@ def save_github_repo(repo: Optional[str]) -> bool:
 
 
 def load_widget_media_path() -> Optional[str]:
-    """Пользовательский файл анимации/картинки; None = только папка assets/."""
+    """Путь к файлу анимации/картинки из config; None — в конфиге не задан (см. effective_widget_media_path)."""
     data = _load_all()
     raw = data.get("widget_media_path")
     if not raw or not str(raw).strip():
@@ -686,7 +686,7 @@ DEFAULT_WIDGET_PRESETS_CATALOG: List[Dict[str, Any]] = [
     {
         "id": "yellow",
         "name": "Жёлтый стандарт",
-        "rel_path": "assets/presets/yellow_standard.gif",
+        "rel_path": "assets/portal_main.gif",
     },
     {"id": "classic", "name": "Classic", "rel_path": "assets/presets/classic.gif"},
     {"id": "space", "name": "Space", "rel_path": "assets/presets/space.gif"},
@@ -706,6 +706,25 @@ def portal_package_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
+def _migrate_widget_presets_catalog_inplace(items: List[Dict[str, Any]]) -> bool:
+    """
+    Раньше «Жёлтый стандарт» ссылался на yellow_standard.gif (часто путался со Strange).
+    Теперь — тот же ассет, что основной портал: assets/portal_main.gif.
+    """
+    changed = False
+    for x in items:
+        if str(x.get("id", "")).strip() != "yellow":
+            continue
+        rp = x.get("rel_path")
+        if not isinstance(rp, str) or not rp.strip():
+            continue
+        norm = rp.replace("\\", "/").lower()
+        if "yellow_standard" in norm:
+            x["rel_path"] = "assets/portal_main.gif"
+            changed = True
+    return changed
+
+
 def load_widget_presets_catalog() -> List[Dict[str, Any]]:
     data = _load_all()
     raw = data.get("widget_presets_catalog")
@@ -721,6 +740,8 @@ def load_widget_presets_catalog() -> List[Dict[str, Any]]:
                     }
                 )
         if out:
+            if _migrate_widget_presets_catalog_inplace(out):
+                save_widget_presets_catalog(out)
             return out
     return [dict(x) for x in DEFAULT_WIDGET_PRESETS_CATALOG]
 
@@ -811,7 +832,7 @@ def parse_widget_preset_rules_editor(text: str) -> List[Dict[str, str]]:
 
 def default_widget_media_fallback_path() -> Optional[str]:
     """
-    Если поле «Медиа» пусто — те же файлы, что подхватывает виджет по умолчанию (portal_main.gif и т.д.).
+    Стандартное медиа виджета, если пользователь ничего не выбрал: portal_main.gif и т.д. в assets/.
     """
     assets_dir = portal_package_dir() / "assets"
     for name in (
@@ -825,22 +846,40 @@ def default_widget_media_fallback_path() -> Optional[str]:
     return None
 
 
+def effective_widget_media_path() -> Optional[str]:
+    """Фактический путь к медиа: из config или стандартный файл из assets/."""
+    mp = load_widget_media_path()
+    if mp and Path(mp).is_file():
+        return mp
+    return default_widget_media_fallback_path()
+
+
+def ensure_widget_media_path_persisted() -> Optional[str]:
+    """
+    Если в config нет пути, но в assets есть стандартный файл — записать его в config,
+    чтобы в UI и логике «Медиа» всегда было конкретное значение.
+    """
+    mp = load_widget_media_path()
+    if mp and Path(mp).is_file():
+        return mp
+    fb = default_widget_media_fallback_path()
+    if fb and save_widget_media_path(fb):
+        return fb
+    return None
+
+
 def resolve_widget_preset_file_path(preset_id: str) -> Optional[str]:
     pid = (preset_id or "main").strip() or "main"
     if pid == "main":
-        mp = load_widget_media_path()
-        if mp and Path(mp).is_file():
-            return str(Path(mp).resolve())
-        return default_widget_media_fallback_path()
+        eff = effective_widget_media_path()
+        return str(Path(eff).resolve()) if eff and Path(eff).is_file() else None
     for pr in load_widget_presets_catalog():
         if str(pr.get("id", "")).strip() != pid:
             continue
         rel = pr.get("rel_path")
         if rel is None or (isinstance(rel, str) and not rel.strip()):
-            mp = load_widget_media_path()
-            if mp and Path(mp).is_file():
-                return str(Path(mp).resolve())
-            return default_widget_media_fallback_path()
+            eff = effective_widget_media_path()
+            return str(Path(eff).resolve()) if eff and Path(eff).is_file() else None
         p = portal_package_dir() / str(rel).strip().lstrip("/\\")
         if p.is_file():
             return str(p.resolve())

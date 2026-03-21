@@ -706,7 +706,7 @@ class PortalWidget:
         t = getattr(self, "_transient_media_path", None)
         if t and os.path.isfile(t):
             return t
-        custom = portal_config.load_widget_media_path()
+        custom = portal_config.effective_widget_media_path()
         if custom and os.path.isfile(custom):
             return custom
         assets_dir = os.path.join(os.path.dirname(__file__), "assets")
