@@ -12,7 +12,7 @@ import time
 import sys
 import platform
 from pathlib import Path
-from PIL import Image, ImageTk, ImageSequence
+from PIL import Image, ImageFilter, ImageTk, ImageSequence
 import os
 import subprocess
 from typing import Optional, Any, List
