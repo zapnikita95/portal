@@ -4,7 +4,7 @@ package.name = portalshare
 package.domain = org.portal
 source.dir = .
 source.include_exts = py,png,jpg,jpeg,kv,atlas,json,gif,xml
-version = 0.4.3
+version = 0.4.4
 requirements = python3,kivy==2.3.0,android
 orientation = portrait
 fullscreen = 0
@@ -19,7 +19,7 @@ icon.filename = %(source.dir)s/assets/icon.png
 
 # Share Sheet → PythonActivity
 android.manifest.intent_filters = intent_filters.xml
-android.permissions = android.permission.INTERNET
+android.permissions = android.permission.INTERNET,android.permission.WRITE_EXTERNAL_STORAGE,android.permission.READ_EXTERNAL_STORAGE
 
 android.api = 33
 android.minapi = 24
