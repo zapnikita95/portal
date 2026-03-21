@@ -48,32 +48,61 @@ def get_apk_asset_download_url(
 ) -> Tuple[Optional[str], str]:
     """
     Возвращает browser_download_url для APK из релиза с тегом APK_RELEASE_TAG.
+
+    Сначала запрос **без** Authorization: публичный репозиторий так всегда работает.
+    Если в .env лежит битый/просроченный PAT, запрос *с* Bearer даёт 401 — из‑за этого
+    «Скачать APK» ломался при том, что релиз на GitHub есть.
+    При 404 повторяем **с** токеном (приватный репозиторий).
     """
     o, r = _split_owner_repo(owner_repo)
     api = f"https://api.github.com/repos/{o}/{r}/releases/tags/{APK_RELEASE_TAG}"
-    req = urllib.request.Request(api, method="GET")
-    req.add_header("Accept", "application/vnd.github+json")
-    req.add_header("X-GitHub-Api-Version", "2022-11-28")
-    req.add_header("User-Agent", "PortalDesktop/1.0")
     tok = (token or "").strip()
-    if tok:
-        req.add_header("Authorization", f"Bearer {tok}")
-    try:
+
+    def _release_json(with_auth: bool) -> dict:
+        req = urllib.request.Request(api, method="GET")
+        req.add_header("Accept", "application/vnd.github+json")
+        req.add_header("X-GitHub-Api-Version", "2022-11-28")
+        req.add_header("User-Agent", "PortalDesktop/1.0")
+        if with_auth and tok:
+            req.add_header("Authorization", f"Bearer {tok}")
         with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+            raw = resp.read().decode("utf-8")
+        return json.loads(raw)
+
+    data: Optional[dict] = None
+    try:
+        data = _release_json(False)
     except urllib.error.HTTPError as e:
         try:
             detail = e.read().decode("utf-8", errors="replace")[:400]
         except Exception:
             detail = str(e)
-        if e.code == 404:
-            return None, (
-                "Релиза с APK пока нет (тег portal-android-latest). "
-                "Нажми «Собрать на GitHub», дождись окончания CI (~10–40 мин) и скачай снова."
-            )
-        return None, f"GitHub API {e.code}: {detail}"
+        if e.code == 404 and tok:
+            try:
+                data = _release_json(True)
+            except urllib.error.HTTPError as e2:
+                try:
+                    d2 = e2.read().decode("utf-8", errors="replace")[:400]
+                except Exception:
+                    d2 = str(e2)
+                if e2.code == 404:
+                    return None, (
+                        "Релиза с APK нет или нет доступа (тег portal-android-latest). "
+                        "Для приватного репо нужен валидный PORTAL_GITHUB_TOKEN (repo)."
+                    )
+                return None, f"GitHub API {e2.code}: {d2}"
+        else:
+            if e.code == 404:
+                return None, (
+                    "Релиза с APK пока нет (тег portal-android-latest). "
+                    "Нажми «Собрать на GitHub», дождись CI и скачай снова."
+                )
+            return None, f"GitHub API {e.code}: {detail}"
     except Exception as e:
         return None, str(e)
+
+    if not isinstance(data, dict):
+        return None, "Некорректный ответ GitHub API"
 
     assets = data.get("assets") or []
     preferred = "Portal-Android.apk"
@@ -102,21 +131,35 @@ def download_apk_to_file(
         return False, err
     dest_file = dest_file.expanduser()
     dest_file.parent.mkdir(parents=True, exist_ok=True)
-    req = urllib.request.Request(url, method="GET")
-    req.add_header("Accept", "application/octet-stream")
-    req.add_header("User-Agent", "PortalDesktop/1.0")
     tok = (token or "").strip()
-    if tok:
-        req.add_header("Authorization", f"Bearer {tok}")
+
+    def _open_asset(with_auth: bool):
+        req = urllib.request.Request(url, method="GET")
+        req.add_header("Accept", "application/octet-stream")
+        req.add_header("User-Agent", "PortalDesktop/1.0")
+        if with_auth and tok:
+            req.add_header("Authorization", f"Bearer {tok}")
+        return urllib.request.urlopen(req, timeout=900)
+
     tmp = dest_file.with_suffix(dest_file.suffix + ".part")
     try:
         try:
             tmp.unlink()
         except OSError:
             pass
-        with urllib.request.urlopen(req, timeout=900) as resp:
-            with open(tmp, "wb") as out:
-                shutil.copyfileobj(resp, out, length=256 * 1024)
+        try:
+            resp = _open_asset(False)
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403) and tok:
+                resp = _open_asset(True)
+            else:
+                raise
+        try:
+            with resp:
+                with open(tmp, "wb") as out:
+                    shutil.copyfileobj(resp, out, length=256 * 1024)
+        except urllib.error.HTTPError:
+            raise
         tmp.replace(dest_file)
         return True, str(dest_file)
     except Exception as e:

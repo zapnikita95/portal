@@ -254,6 +254,61 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 
+def send_sync_shared_secret_to_peer(
+    host: str,
+    new_shared_secret: str,
+    port: int = PORTAL_PORT,
+    timeout: float = 12.0,
+) -> tuple[bool, str]:
+    """
+    Отправить новый пароль сети на другой ПК с Порталом.
+    Аутентификация — текущий пароль из config (merge_outgoing_shared_secret); вызывать до локального save нового пароля.
+    Возвращает (успех, пояснение для лога).
+    """
+    host = (host or "").strip()
+    if not host:
+        return False, "пустой IP"
+    new_shared_secret = (new_shared_secret or "").strip()
+    if not new_shared_secret:
+        return False, "пустой пароль"
+    if len(new_shared_secret) > 512:
+        return False, "пароль слишком длинный"
+    msg = merge_outgoing_shared_secret(
+        {
+            "type": "sync_shared_secret",
+            "new_shared_secret": new_shared_secret,
+        }
+    )
+    payload = json.dumps(msg, ensure_ascii=False).encode("utf-8")
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.settimeout(timeout)
+        s.connect((host, port))
+        s.sendall(payload)
+        data = s.recv(16384)
+    except ConnectionRefusedError:
+        return False, "порт закрыт (запусти Портал на том ПК)"
+    except socket.timeout:
+        return False, "таймаут"
+    except OSError as e:
+        return False, str(e)[:120]
+    finally:
+        try:
+            s.close()
+        except OSError:
+            pass
+    if not data:
+        return False, "нет ответа"
+    resp = parse_portal_json_message(data)
+    if isinstance(resp, dict) and resp.get("type") == "sync_shared_secret_ok":
+        return True, "ok"
+    if isinstance(resp, dict) and resp.get("type") == "portal_auth_failed":
+        return False, "неверный текущий пароль на принимающей стороне"
+    if isinstance(resp, dict) and resp.get("type") == "sync_shared_secret_reject":
+        return False, str(resp.get("reason") or "отклонено")
+    return False, "неожиданный ответ"
+
+
 def probe_portal_peer(host: str, port: int = PORTAL_PORT, timeout: float = 3.0) -> tuple[bool, str]:
     """
     Проверка, что на host действительно отвечает Портал (ping → pong).
@@ -1199,8 +1254,8 @@ class PortalApp(ctk.CTk):
             pass
         ctk.CTkButton(
             secret_row,
-            text="Сгенерировать",
-            width=118,
+            text="Подставить",
+            width=100,
             command=self._generate_shared_secret_ui,
             font=ctk.CTkFont(size=12),
         ).pack(side="left", padx=(0, 6))
@@ -1218,6 +1273,35 @@ class PortalApp(ctk.CTk):
             command=self._copy_shared_secret_ui,
             font=ctk.CTkFont(size=12),
         ).pack(side="left")
+        sync_btns = ctk.CTkFrame(t_secret, fg_color="transparent")
+        sync_btns.pack(fill="x", padx=8, pady=(0, 6))
+        ctk.CTkButton(
+            sync_btns,
+            text="Сгенерировать и разослать по сети",
+            height=36,
+            command=self._generate_and_sync_shared_secret_ui,
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(fill="x", pady=(0, 6))
+        ctk.CTkButton(
+            sync_btns,
+            text="Разослать пароль из поля (уже введённый)",
+            height=32,
+            command=self._push_shared_secret_from_field_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(fill="x")
+        ctk.CTkLabel(
+            t_secret,
+            text=(
+                "Разсылка идёт на все IP из вкладки «Пиры» (кроме этого ПК). "
+                "На удалённых машинах должен быть запущен приём Портала. "
+                "Нужен текущий общий пароль — сначала все в одной сети с одним паролем, или без пароля (режим как в старых версиях). "
+                "Отключить TCP-рассылку: PORTAL_NO_REMOTE_SECRET_SYNC=1."
+            ),
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=680,
+            justify="left",
+        ).pack(anchor="w", padx=8, pady=(4, 8))
         ctk.CTkLabel(
             t_secret,
             text="Пока пароль не задан, на главном экране показывается быстрый ввод.",
@@ -1225,7 +1309,7 @@ class PortalApp(ctk.CTk):
             text_color="gray",
             wraplength=680,
             justify="left",
-        ).pack(anchor="w", padx=8, pady=(8, 8))
+        ).pack(anchor="w", padx=8, pady=(0, 8))
 
     def _open_apk_window(self) -> None:
         if self._apk_win is not None:
@@ -1309,8 +1393,9 @@ class PortalApp(ctk.CTk):
         ctk.CTkLabel(
             w,
             text=(
-                "Сборка: без PORTAL_GITHUB_TOKEN откроется страница Actions — Run workflow. "
-                "С токеном (repo + workflow) запуск пойдёт сам. Приватный репо — тот же токен для скачивания."
+                "Скачивание с GitHub для публичного репо идёт без токена (битый PAT в .env раньше ломал только его). "
+                "Сборка: без PORTAL_GITHUB_TOKEN откроется Actions — Run workflow; с токеном (repo + workflow) — запуск из приложения. "
+                "Приватный репо — нужен валидный токен и для скачивания."
             ),
             font=ctk.CTkFont(size=10),
             text_color="gray",
@@ -1749,11 +1834,106 @@ class PortalApp(ctk.CTk):
                 self.receive_dir_feedback.configure(text="❌ Ошибка", text_color="#e74c3c")
 
     def _generate_shared_secret_ui(self) -> None:
-        s = portal_config.generate_shared_secret(8)
+        s = portal_config.generate_shared_secret(12)
         if hasattr(self, "shared_secret_entry"):
             self.shared_secret_entry.delete(0, "end")
             self.shared_secret_entry.insert(0, s)
-        self.log("🔑 Сгенерирован пароль сети — нажми «Сохранить» и введи тот же пароль на других ПК.")
+        self.log(
+            "🔑 Подставлен новый пароль — «Сохранить» только на этом ПК, "
+            "или «Сгенерировать и разослать по сети» / «Разослать из поля» для остальных."
+        )
+
+    def _collect_peer_ips_for_secret_sync(self) -> List[str]:
+        skip: set[str] = {"127.0.0.1", "::1"}
+        try:
+            ts = (self.tailscale_ip or "").strip()
+            if ts:
+                skip.add(ts)
+        except Exception:
+            pass
+        out: List[str] = []
+        seen: set[str] = set()
+        for line in portal_config.load_peer_ips():
+            pr = portal_config.parse_peer_line(line)
+            ip = pr[0] if pr else ""
+            if not ip or ip in skip or ip in seen:
+                continue
+            seen.add(ip)
+            out.append(ip)
+        return out
+
+    def _generate_and_sync_shared_secret_ui(self) -> None:
+        if os.environ.get("PORTAL_NO_REMOTE_SECRET_SYNC", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            self.log("ℹ️ Рассылка пароля отключена (PORTAL_NO_REMOTE_SECRET_SYNC=1)")
+            return
+        new_sec = portal_config.generate_shared_secret(12)
+        self._sync_new_secret_to_peers_then_local(new_sec, intro_log="🔑 Новый пароль сгенерирован, шлю пирам…")
+
+    def _push_shared_secret_from_field_ui(self) -> None:
+        if os.environ.get("PORTAL_NO_REMOTE_SECRET_SYNC", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            self.log("ℹ️ Рассылка пароля отключена (PORTAL_NO_REMOTE_SECRET_SYNC=1)")
+            return
+        if not hasattr(self, "shared_secret_entry"):
+            return
+        new_sec = self.shared_secret_entry.get().strip()
+        if not new_sec:
+            self.log("⚠️ Введи пароль в поле или нажми «Подставить»")
+            return
+        self._sync_new_secret_to_peers_then_local(
+            new_sec, intro_log="🔑 Рассылаю пароль из поля по пирам…"
+        )
+
+    def _sync_new_secret_to_peers_then_local(
+        self, new_sec: str, *, intro_log: str
+    ) -> None:
+        new_sec = (new_sec or "").strip()
+        if not new_sec or len(new_sec) > 512:
+            self.log("⚠️ Некорректный пароль для рассылки")
+            return
+        peers = self._collect_peer_ips_for_secret_sync()
+        self.log(intro_log)
+
+        def work() -> None:
+            results: List[tuple[str, bool, str]] = []
+            for ip in peers:
+                ok, detail = send_sync_shared_secret_to_peer(ip, new_sec)
+                results.append((ip, ok, detail))
+            save_ok = portal_config.save_shared_secret(new_sec)
+
+            def done() -> None:
+                if hasattr(self, "shared_secret_entry"):
+                    try:
+                        self.shared_secret_entry.delete(0, "end")
+                        self.shared_secret_entry.insert(0, new_sec)
+                    except Exception:
+                        pass
+                self._refresh_main_secret_banner_visibility()
+                for ip, ok, detail in results:
+                    if ok:
+                        self.log(f"✅ Пароль принят на {ip}")
+                    else:
+                        self.log(f"⚠️ {ip}: не доставлен ({detail})")
+                if not peers:
+                    self.log("ℹ️ В списке пиров нет других IP — пароль сохранён только здесь.")
+                if save_ok:
+                    self.log("✅ Пароль сети сохранён на этом компьютере")
+                else:
+                    self.log("❌ Не удалось записать пароль в config.json на этом ПК")
+
+            try:
+                self.after(0, done)
+            except Exception:
+                done()
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _save_shared_secret_ui(self) -> None:
         if not hasattr(self, "shared_secret_entry"):
@@ -2538,6 +2718,81 @@ class PortalApp(ctk.CTk):
                 return
 
             req = message.get("type")
+            if req == "sync_shared_secret":
+                raw_new = message.get("new_shared_secret")
+                if not isinstance(raw_new, str):
+                    try:
+                        _portal_sendall(
+                            client_socket,
+                            json.dumps(
+                                {
+                                    "type": "sync_shared_secret_reject",
+                                    "reason": "bad_type",
+                                },
+                                ensure_ascii=False,
+                            ).encode("utf-8"),
+                        )
+                    except Exception:
+                        pass
+                    return
+                new_s = raw_new.strip()
+                if not new_s or len(new_s) > 512:
+                    try:
+                        _portal_sendall(
+                            client_socket,
+                            json.dumps(
+                                {
+                                    "type": "sync_shared_secret_reject",
+                                    "reason": "bad_length",
+                                },
+                                ensure_ascii=False,
+                            ).encode("utf-8"),
+                        )
+                    except Exception:
+                        pass
+                    return
+                if not portal_config.save_shared_secret(new_s):
+                    try:
+                        _portal_sendall(
+                            client_socket,
+                            json.dumps(
+                                {
+                                    "type": "sync_shared_secret_reject",
+                                    "reason": "save_failed",
+                                },
+                                ensure_ascii=False,
+                            ).encode("utf-8"),
+                        )
+                    except Exception:
+                        pass
+                    return
+                try:
+                    _portal_sendall(
+                        client_socket,
+                        json.dumps(
+                            {"type": "sync_shared_secret_ok"},
+                            ensure_ascii=False,
+                        ).encode("utf-8"),
+                    )
+                except Exception:
+                    pass
+
+                def _refresh_secret_ui() -> None:
+                    try:
+                        self._sync_settings_secret_entry_from_config()
+                        self._refresh_main_secret_banner_visibility()
+                        self.log(
+                            f"🔑 Пароль сети обновлён с {addr[0]} — смотри поле в ⚙ Настройки."
+                        )
+                    except Exception:
+                        pass
+
+                try:
+                    self.after(0, _refresh_secret_ui)
+                except Exception:
+                    _refresh_secret_ui()
+                return
+
             if req != "ping":
                 self._log_from_thread(f"🔗 {addr[0]} · {req}")
             
