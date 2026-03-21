@@ -1480,6 +1480,7 @@ class GlobalHotkeyManager:
                         "<Meta-Option-V>",
                     ]
                 else:
+                    # Не-legacy: Cmd+Ctrl (меньше конфликтов) + те же дубли, что в hotkey-helper
                     toggle_seqs = [
                         "<Command-Control-p>",
                         "<Command-Control-P>",
@@ -1487,18 +1488,32 @@ class GlobalHotkeyManager:
                         "<Control-Command-P>",
                         "<Meta-Control-p>",
                         "<Meta-Control-P>",
+                        "<Command-Option-p>",
+                        "<Command-Alt-p>",
+                        "<Meta-Option-p>",
+                        "<Meta-Alt-p>",
+                        "<Command-Option-P>",
+                        "<Meta-Option-P>",
                     ]
                     push_seqs = [
                         "<Command-Control-c>",
                         "<Command-Control-C>",
                         "<Control-Command-c>",
                         "<Control-Command-C>",
+                        "<Command-Shift-C>",
+                        "<Command-Shift-c>",
+                        "<Meta-Shift-C>",
+                        "<Meta-Shift-c>",
                     ]
                     pull_seqs = [
                         "<Command-Control-v>",
                         "<Command-Control-V>",
                         "<Control-Command-v>",
                         "<Control-Command-V>",
+                        "<Command-Shift-V>",
+                        "<Command-Shift-v>",
+                        "<Meta-Shift-V>",
+                        "<Meta-Shift-v>",
                         "<Command-Option-v>",
                         "<Command-Option-V>",
                         "<Meta-Option-v>",
@@ -1684,29 +1699,17 @@ class GlobalHotkeyManager:
                 if keycode == self._KEY_V and (f & CMD) and (f & ALT) and not (f & SHIFT):
                     return "v"
             else:
-                if (
-                    keycode == self._KEY_P
-                    and (f & CMD)
-                    and (f & CTRL)
-                    and not (f & ALT)
-                    and not (f & SHIFT)
-                ):
+                if keycode == self._KEY_P and (f & CMD) and (f & CTRL) and not (f & ALT) and not (f & SHIFT):
                     return "t"
-                if (
-                    keycode == self._KEY_C
-                    and (f & CMD)
-                    and (f & CTRL)
-                    and not (f & ALT)
-                    and not (f & SHIFT)
-                ):
+                if keycode == self._KEY_P and (f & CMD) and (f & ALT) and not (f & SHIFT):
+                    return "t"
+                if keycode == self._KEY_C and (f & CMD) and (f & CTRL) and not (f & ALT) and not (f & SHIFT):
                     return "c"
-                if (
-                    keycode == self._KEY_V
-                    and (f & CMD)
-                    and (f & CTRL)
-                    and not (f & ALT)
-                    and not (f & SHIFT)
-                ):
+                if keycode == self._KEY_C and (f & CMD) and (f & SHIFT) and not (f & ALT):
+                    return "c"
+                if keycode == self._KEY_V and (f & CMD) and (f & CTRL) and not (f & ALT) and not (f & SHIFT):
+                    return "v"
+                if keycode == self._KEY_V and (f & CMD) and (f & SHIFT) and not (f & ALT):
                     return "v"
                 if (
                     keycode == self._KEY_V

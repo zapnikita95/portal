@@ -1144,7 +1144,23 @@ class PortalApp(ctk.CTk):
         threading.Thread(target=worker, daemon=True).start()
     
     def log(self, message: str):
-        """Добавление сообщения в лог с автоскроллом вниз и ограничением строк"""
+        """Лог в UI; безопасен с любого потока (Tk на macOS только из главного)."""
+        try:
+            if threading.current_thread() is threading.main_thread():
+                self._log_sync(message)
+            else:
+                try:
+                    self.after(0, lambda m=message: self._log_sync(m))
+                except Exception:
+                    print(f"[Portal] {message}", flush=True)
+        except Exception:
+            try:
+                print(f"[Portal] {message}", flush=True)
+            except Exception:
+                pass
+
+    def _log_sync(self, message: str) -> None:
+        """Писать в журнал только с главного потока Tk."""
         self.log_text.configure(state="normal")
         timestamp = time.strftime("%H:%M:%S")
         line = f"[{timestamp}] {message}\n"
@@ -2289,24 +2305,15 @@ class PortalApp(ctk.CTk):
         """Тот же протокол, что и ответ get_clipboard: clipboard / clipboard_file(s) / clipboard_rich."""
         targets = self.get_target_ips()
         if not targets:
-            self.after(0, lambda: self.log("⚠️ Нет получателей — отметь IP галочками"))
+            self.log("⚠️ Нет получателей — отметь IP галочками")
             return
 
         kind, payload = self._clipboard_snapshot_resolved_for_send()
         if kind == "empty":
-            self.after(
-                0,
-                lambda: self.log(
-                    "⚠️ Буфер пуст (нет текста, картинки и скопированных файлов)"
-                ),
+            self.log(
+                "⚠️ Буфер пуст (нет текста, картинки и скопированных файлов)"
             )
             return
-
-        def _thread_log(msg: str) -> None:
-            try:
-                self.after(0, lambda m=msg: self.log(m))
-            except Exception:
-                print(msg, flush=True)
 
         def _push_to_ip(ip: str) -> None:
             sock: Optional[socket.socket] = None
@@ -2316,7 +2323,7 @@ class PortalApp(ctk.CTk):
                 try:
                     sock.connect((ip, PORTAL_PORT))
                 except ConnectionRefusedError:
-                    _thread_log(
+                    self.log(
                         f"❌ {ip}: порт не принимает (часто Windows 10061) — "
                         "на том ПК «Запустить портал», проверь IP и файрвол."
                     )
@@ -2325,7 +2332,7 @@ class PortalApp(ctk.CTk):
                     winerr = getattr(e, "winerror", None)
                     errno_val = getattr(e, "errno", None)
                     if winerr == 10061 or errno_val == 10061:
-                        _thread_log(
+                        self.log(
                             f"❌ {ip}: 10061 — на этом адресе не слушает Портал."
                         )
                         return
@@ -2335,17 +2342,17 @@ class PortalApp(ctk.CTk):
                     sock,
                     kind,
                     payload,
-                    log=_thread_log,
+                    log=self.log,
                     context_label=f"push → {ip}",
                 )
             except Exception as e:
                 err = str(e)
                 if "10061" in err:
-                    _thread_log(
+                    self.log(
                         f"❌ {ip}: 10061 — приём не запущен или неверный IP (Tailscale/VPN)."
                     )
                 else:
-                    _thread_log(f"❌ {ip}: отправка буфера — {err}")
+                    self.log(f"❌ {ip}: отправка буфера — {err}")
             finally:
                 if sock is not None:
                     try:
@@ -2369,7 +2376,7 @@ class PortalApp(ctk.CTk):
             )
         else:
             summary = f"📤 Буфер → {len(targets)} ПК"
-        self.after(0, lambda s=summary: self.log(s))
+        self.log(summary)
 
     def send_clipboard(self, target_ip: str):
         """Синхронизация / совместимость: отправить текущий текст буфера."""

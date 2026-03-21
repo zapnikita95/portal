@@ -9,8 +9,8 @@
   c — отправить буфер
   v — забрать буфер
 
-По умолчанию: Cmd+Ctrl+P / C / V (меньше конфликтов с Терминалом, чем Cmd+Option/Shift).
-Старые сочетания: PORTAL_MAC_HOTKEY_LEGACY=1 → Cmd+Option+P, Cmd+Shift+C/V.
+По умолчанию: Cmd+Ctrl и дубли Cmd+Option+P, Cmd+Shift+C/V, Cmd+Option+V (как в Tk bind_all).
+LEGACY=1: только Cmd+Option+P и Cmd+Shift+C/V (без Cmd+Ctrl).
 """
 from __future__ import annotations
 
@@ -37,10 +37,16 @@ def main() -> None:
             "<cmd>+<shift>+v": lambda: print("v", flush=True),
         }
     else:
+        # Все «обычные» и «старые» сочетания сразу — иначе при отсутствии LEGACY глобально
+        # работал только Cmd+Ctrl, а в интерфейсе часто пишут Cmd+Shift / Cmd+Option+P.
         combo = {
             "<cmd>+<ctrl>+p": lambda: print("t", flush=True),
+            "<cmd>+<alt>+p": lambda: print("t", flush=True),
             "<cmd>+<ctrl>+c": lambda: print("c", flush=True),
+            "<cmd>+<shift>+c": lambda: print("c", flush=True),
             "<cmd>+<ctrl>+v": lambda: print("v", flush=True),
+            "<cmd>+<shift>+v": lambda: print("v", flush=True),
+            "<cmd>+<alt>+v": lambda: print("v", flush=True),
         }
     # suppress=False: suppress=True на macOS ломает ввод клавиатуры в целом (CGEventTap).
     try:
