@@ -634,7 +634,7 @@ class PeerRow(BoxLayout):
         row2.add_widget(self.name_input)
 
         rm = Button(
-            text="✕ Удалить",
+            text="X Удалить",
             size_hint=(None, 1),
             width=dp(90),
             background_color=(0.42, 0.12, 0.12, 1),
