@@ -120,6 +120,29 @@ def _get_parcelable_extra_stream(intent):
         return None
 
 
+def _uris_from_clipdata(intent) -> List:
+    """Новые приложения часто кладут content:// только в ClipData, без EXTRA_STREAM."""
+    out: List = []
+    try:
+        clip = intent.getClipData()
+        if clip is None:
+            return out
+        n = int(clip.getItemCount())
+        for i in range(n):
+            try:
+                item = clip.getItemAt(i)
+                if item is None:
+                    continue
+                uri = item.getUri()
+                if uri:
+                    out.append(uri)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return out
+
+
 def _get_parcelable_arraylist_streams(intent):
     from jnius import autoclass  # type: ignore
 
@@ -189,12 +212,22 @@ def read_share_intent(activity=None, intent=None) -> Optional[SharePayload]:
                     p = _copy_uri_to_cache(resolver, uri, cache_dir, i)
                     if p:
                         paths.append(p)
+        if not paths:
+            for idx, uri in enumerate(_uris_from_clipdata(intent)):
+                p = _copy_uri_to_cache(resolver, uri, cache_dir, 200 + idx)
+                if p:
+                    paths.append(p)
     else:
         uri = _get_parcelable_extra_stream(intent)
         if uri:
             p = _copy_uri_to_cache(resolver, uri, cache_dir, 0)
             if p:
                 paths.append(p)
+        if not paths:
+            for idx, uri in enumerate(_uris_from_clipdata(intent)):
+                p = _copy_uri_to_cache(resolver, uri, cache_dir, 100 + idx)
+                if p:
+                    paths.append(p)
 
     if not paths and not (text and text.strip()):
         return None

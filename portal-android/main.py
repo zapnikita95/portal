@@ -1349,10 +1349,9 @@ class PortalAndroidApp(App):
 
     # ── Share Sheet ──────────────────────────────────────────────────────────
 
-    def _mount_cold_share_ui(self) -> None:
+    def _mount_cold_share_ui(self, attempt: int = 0) -> None:
         if self._cold_share_ui_mounted:
             return
-        self._cold_share_ui_mounted = True
         cont = self._cold_share_container
         if cont is None:
             toast("Portal: внутренняя ошибка Share", long=True)
@@ -1365,9 +1364,21 @@ class PortalAndroidApp(App):
             finish_activity()
             return
         if not self._payload_ok(payload):
-            toast('Portal: пустой "Поделиться"', long=True)
+            # Intent/ClipData на части прошивок появляется не в первый кадр Activity.
+            if attempt < 3:
+                Clock.schedule_once(
+                    lambda _dt, a=attempt + 1: self._mount_cold_share_ui(a),
+                    0.35,
+                )
+                return
+            toast(
+                'Portal: не удалось прочитать файл из «Поделиться» (пусто). '
+                "Попробуй другое приложение-источник или обнови Portal.",
+                long=True,
+            )
             finish_activity()
             return
+        self._cold_share_ui_mounted = True
         cfg = load_cfg()
         peers = normalize_peers(cfg.get("peers"))
         targets = peers_marked_for_send(peers)
@@ -1493,7 +1504,9 @@ class PortalAndroidApp(App):
                 except Exception:
                     pass
             self._share_completed = True
-            self._send_with_progress(payload, sel, secret)
+            self._send_with_progress(
+                payload, sel, secret, exit_when_done=cold_cancel
+            )
 
         def cancel(*_a):
             if popup is not None:
@@ -1558,7 +1571,14 @@ class PortalAndroidApp(App):
         popup.content = panel
         popup.open()
 
-    def _send_with_progress(self, payload, targets: list, secret: str) -> None:
+    def _send_with_progress(
+        self,
+        payload,
+        targets: list,
+        secret: str,
+        *,
+        exit_when_done: bool = False,
+    ) -> None:
         """Показать попап прогресса, отправить в фоне, закрыть по завершении."""
         n_files = len(payload.file_paths)
         n_text  = 1 if (payload.text or "").strip() else 0
@@ -1644,7 +1664,8 @@ class PortalAndroidApp(App):
                     msg  = f"[OK] {what or 'Текст'} отправлен -> {to}"
                     toast("Portal: отправлено", long=False)
                     self._log(msg)
-                finish_activity()
+                if exit_when_done:
+                    finish_activity()
 
             Clock.schedule_once(lambda _dt: done(), 0)
 
