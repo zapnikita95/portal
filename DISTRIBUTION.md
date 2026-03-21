@@ -51,7 +51,7 @@ xattr -dr com.apple.quarantine /Applications/Portal.app
 
 ## Кратко для README / лендинга
 
-1. Открыть [Releases](https://github.com/zapnikita95/portal/releases) (подставьте свой репо при форке).  
+1. Открыть вкладку **Releases** своего репозитория на GitHub (обычно `https://github.com/<владелец>/portal/releases`).  
 2. Скачать **Portal-macOS.zip** или **Portal-Windows.zip**.  
 3. Mac: распаковать → перенести `Portal.app` в «Программы».  
 4. Windows: распаковать → запустить `Portal.exe` из папки `Portal`.
