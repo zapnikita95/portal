@@ -1,7 +1,11 @@
 # Сборка debug APK (Buildozer).
 # — Артефакт Actions: portal-debug-apk
-# — GitHub Release: тег portal-android-latest, файл Portal-Android.apk (для кнопки «Скачать» в десктопе)
-# Локально: см. portal-android/Dockerfile
+# — GitHub Release: тег portal-android-latest, файл Portal-Android.apk
+#
+# Важно: на ubuntu-latest часто стоит Temurin 11 → buildozer находит его первым.
+# Явно ставим JDK 17 через actions/setup-java (JAVA_HOME).
+# В CI одна ABI arm64-v8a — иначе двойная сборка часто падает по RAM/времени на free runner.
+# Локально: см. portal-android/Dockerfile (там можно оставить обе ABI в buildozer.spec).
 name: Portal Android APK
 
 on:
@@ -18,15 +22,22 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+
+      # Иначе buildozer берёт /usr/lib/jvm/temurin-11-jdk-amd64 с образа runner → падения Gradle/AGP
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
 
       - name: APT deps (Buildozer / p4a)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            git zip unzip openjdk-17-jdk python3-pip python3-venv wget \
+            git zip unzip python3-pip python3-venv wget \
             autoconf automake libtool pkg-config zlib1g-dev \
             libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev \
             libltdl-dev
@@ -34,7 +45,19 @@ jobs:
       - name: Pip (buildozer, cython)
         run: |
           python3 -m pip install --upgrade pip
-          pip install buildozer cython
+          pip install "buildozer>=1.5.0" cython
+
+      - name: Java sanity check
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME"
+          java -version
+          which javac && javac -version
+
+      - name: CI — только arm64 (меньше RAM/времени на runner)
+        working-directory: portal-android
+        run: |
+          sed -i.bak 's/^android.archs = arm64-v8a,armeabi-v7a/android.archs = arm64-v8a/' buildozer.spec || true
+          grep -E '^android\.archs' buildozer.spec || true
 
       - name: Cache .buildozer
         uses: actions/cache@v4
@@ -42,13 +65,15 @@ jobs:
           path: |
             ~/.buildozer
             portal-android/.buildozer
-          key: buildozer-${{ runner.os }}-${{ hashFiles('portal-android/buildozer.spec', 'portal-android/**/*.py') }}
+          key: buildozer-ci-v2-${{ runner.os }}-${{ hashFiles('portal-android/buildozer.spec', 'portal-android/**/*.py', '.github/workflows/portal-android-apk.yml') }}
           restore-keys: |
-            buildozer-${{ runner.os }}-
+            buildozer-ci-v2-${{ runner.os }}-
 
       - name: buildozer android debug
         working-directory: portal-android
-        run: buildozer android debug
+        env:
+          GRADLE_OPTS: "-Xmx3584m -Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2"
+        run: buildozer --verbose android debug
 
       - name: Prepare APK for release (stable file name)
         working-directory: portal-android/bin
@@ -72,6 +97,8 @@ jobs:
             Debug APK для **Share → Portal**. Файл обновляется после каждой успешной сборки.
 
             На Mac/Windows: в приложении Portal кнопка **📥 APK → Скачать APK**.
+
+            *Сборка CI: архитектура **arm64-v8a** (современные телефоны). Для armeabi-v7a собери локально / Docker.*
           artifacts: portal-android/bin/Portal-Android.apk
           allowUpdates: true
           replacesArtifacts: true
