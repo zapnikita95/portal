@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 
 
 def main() -> None:
@@ -43,11 +44,23 @@ def main() -> None:
             "<cmd>+<ctrl>+v": lambda: print("v", flush=True),
         }
     # suppress=False: suppress=True на macOS ломает ввод клавиатуры в целом (CGEventTap).
-    try:
-        with keyboard.GlobalHotKeys(combo, suppress=False) as h:
-            h.join()
-    except Exception as e:
-        print(f"e {e!r}", flush=True, file=sys.stderr)
+    # macOS иногда снимает event tap — pynput выходит из join(); без цикла процесс умирал
+    # и глобальные хоткеи «через раз». Пересоздаём слушатель с бэкоффом.
+    delay = 1.25
+    cycle = 0
+    while True:
+        cycle += 1
+        try:
+            if cycle > 1:
+                print(f"i hotkey_listener_restart n={cycle} after {delay:.1f}s", flush=True)
+            with keyboard.GlobalHotKeys(combo, suppress=False) as h:
+                h.join()
+        except KeyboardInterrupt:
+            raise SystemExit(0) from None
+        except Exception as e:
+            print(f"e {e!r}", flush=True, file=sys.stderr)
+        time.sleep(delay)
+        delay = min(delay * 1.35, 30.0)
 
 
 if __name__ == "__main__":

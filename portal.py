@@ -1712,10 +1712,11 @@ class PortalApp(ctk.CTk):
             ]
             if sys.version_info >= (3, 13):
                 extra.append(
-                    "Python 3.13+: глобальные хоткеи — отдельный процесс pynput; "
-                    "права Input Monitoring + Универсальный доступ; "
+                    "Python 3.13+: глобальные хоткеи — отдельный процесс pynput (перезапускается при сбое tap); "
+                    "права «Мониторинг ввода» + «Универсальный доступ» — у **Portal.app**, если запускаешь сборку; "
+                    "у Terminal/Python — только если стартуешь из терминала. "
                     "PORTAL_MAC_NO_HOTKEY_HELPER=1 — только при фокусе на окне Портала. "
-                    "Свёрнутое окно: хоткеи обрабатываются через Tk fileevent (не нужен фокус на Portal)."
+                    "Свёрнутое окно: хоткеи через Tk fileevent."
                 )
             return nl.join(lines + extra)
         lines = [

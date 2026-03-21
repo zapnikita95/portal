@@ -2163,7 +2163,7 @@ class GlobalHotkeyManager:
             pass
 
     def _hotkey_helper_healthcheck(self) -> None:
-        """Один раз через ~3 с: если helper молчит или упал — подсказка в журнал."""
+        """Через ~3 с: не путаем «ещё не жали хоткей» с ошибкой прав."""
         if platform.system() != "Darwin" or sys.version_info < (3, 13):
             return
         if os.environ.get("PORTAL_MAC_NO_HOTKEY_HELPER", "").strip() in (
@@ -2178,14 +2178,17 @@ class GlobalHotkeyManager:
         if proc is not None and proc.poll() is not None:
             rc = proc.returncode
             self._log(
-                f"⚠️ hotkey-helper завершился (код {rc}). Проверь pynput, "
-                "права «Мониторинг ввода» + «Универсальный доступ» для того же Python, что запускает Портал."
+                f"⚠️ hotkey-helper не запущен или сразу вышел (код {rc}). "
+                "Права «Мониторинг ввода» и «Универсальный доступ» должны быть у **того же приложения**, "
+                "что запускает Портал: для **Portal.app** — именно Portal в списке; из Терминала — Python/Terminal. "
+                "Смотри stderr в журнале выше (строки hotkey-helper)."
             )
             return
+        # Процесс жив, но байт в pipe ещё не было — это нормально, если хоткей не нажимали
         self._log(
-            "⚠️ Глобальные хоткеи пока не приходят (helper жив, но тишина). "
-            "Добавь права Input Monitoring + Accessibility для Python/Терминала; "
-            "пока работают сочетания только при фокусе на окне Портала (bind_all)."
+            "💡 Глобальный хоткей после старта ещё не ловили — нажми Cmd+Ctrl+P **вне** окна Portal "
+            "(или LEGACY: Cmd+Option+P). Если не срабатывает: Системные настройки → Конфиденциальность → "
+            "«Мониторинг ввода» и «Универсальный доступ» → включи **Portal** (для .app) или Python (из IDE/терминала)."
         )
 
     def _setup_nslocal_monitor(self) -> None:
@@ -2346,12 +2349,13 @@ class GlobalHotkeyManager:
             )
 
     def _run_mac_hotkey_helper_subprocess(self) -> None:
-        """Запуск portal_mac_hotkey_helper.py; stdout → байты в pipe → _poll_hotkey_queue."""
+        """Запуск hotkey-helper: stdout → pipe → fileevent; супервизор перезапускает процесс при вылете."""
         hw = self._hk_w
         if hw is None:
             return
         hp = _resolve_mac_hotkey_helper_script()
-        if hp is None:
+        frozen = getattr(sys, "frozen", False)
+        if hp is None and not frozen:
             self._log(
                 "⚠️ Нет portal_mac_hotkey_helper.py — глобальные хоткеи macOS отключены "
                 "(ожидался файл рядом с приложением или в .app/_internal)."
@@ -2361,64 +2365,107 @@ class GlobalHotkeyManager:
             except OSError:
                 pass
             return
+
         env = os.environ.copy()
         env["PORTAL_HOTKEY_HELPER_SUBPROCESS"] = "1"
-        try:
-            proc = subprocess.Popen(
-                [sys.executable, str(hp)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
-                bufsize=1,
-                text=True,
-                cwd=str(hp.parent),
-                close_fds=True,
-                env=env,
-            )
-            self._hotkey_helper_proc = proc
-        except Exception as e:
-            self._log(f"⚠️ Запуск hotkey-helper: {e}")
-            return
+        env["PYTHONUNBUFFERED"] = "1"
+        # Frozen: тот же бинарник + env → portal.py сразу уходит в helper (см. portal.py).
+        if frozen:
+            cmd: List[str] = [sys.executable]
+            cwd = str(Path(sys.executable).resolve().parent)
+        else:
+            cmd = [sys.executable, str(hp)]
+            cwd = str(hp.parent)
 
-        def err_reader():
-            try:
-                if proc.stderr:
-                    for line in proc.stderr:
-                        _log_to_file(f"[hotkey-helper] {line.rstrip()}")
-            except Exception:
-                pass
+        mgr = self
 
-        threading.Thread(target=err_reader, daemon=True, name="hotkey-helper-stderr").start()
-
-        def out_reader():
-            try:
-                if not proc.stdout:
-                    return
-                for line in proc.stdout:
-                    c = (line or "").strip().lower()
-                    if len(c) == 1 and c in "tcv":
-                        try:
-                            os.write(hw, c.encode("ascii"))
-                        except (OSError, BlockingIOError, TypeError, ValueError):
-                            pass
-            except Exception:
-                pass
-            finally:
+        def supervisor() -> None:
+            attempt = 0
+            backoff = 2.0
+            while mgr._running:
+                attempt += 1
                 try:
-                    rc = proc.poll()
-                    if rc is not None and rc != 0:
-                        self._log(
-                            f"⚠️ hotkey-helper код выхода {rc} — проверь Input Monitoring / Accessibility"
-                        )
-                    else:
-                        self._log(
-                            "⚠️ hotkey-helper завершился — глобальные сочетания недоступны (остался Tk bind при фокусе)"
-                        )
-                except Exception:
-                    pass
+                    proc = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        stdin=subprocess.DEVNULL,
+                        bufsize=1,
+                        text=True,
+                        cwd=cwd,
+                        close_fds=True,
+                        env=env,
+                    )
+                except Exception as e:
+                    mgr._log(f"⚠️ Запуск hotkey-helper: {e}")
+                    time.sleep(min(backoff, 30.0))
+                    backoff = min(backoff * 1.35, 30.0)
+                    continue
+
+                mgr._hotkey_helper_proc = proc
+                if attempt > 1:
+                    mgr._log(f"♻️ hotkey-helper: перезапуск процесса #{attempt}")
+
+                def err_reader(p: Any = proc) -> None:
+                    try:
+                        if p.stderr:
+                            for line in p.stderr:
+                                s = line.rstrip()
+                                _log_to_file(f"[hotkey-helper] {s}")
+                                if not s:
+                                    continue
+                                low = s.lower()
+                                if (
+                                    s.startswith("e ")
+                                    or "traceback" in low
+                                    or "error" in low
+                                    or "exception" in low
+                                ):
+                                    portal_thread_log(
+                                        mgr.main_app,
+                                        f"hotkey-helper: {s}",
+                                        "⌨️",
+                                    )
+                    except Exception:
+                        pass
+
+                def out_reader(p: Any = proc) -> None:
+                    try:
+                        if not p.stdout:
+                            return
+                        for line in p.stdout:
+                            c = (line or "").strip().lower()
+                            if len(c) == 1 and c in "tcv":
+                                try:
+                                    os.write(hw, c.encode("ascii"))
+                                except (
+                                    OSError,
+                                    BlockingIOError,
+                                    TypeError,
+                                    ValueError,
+                                ):
+                                    pass
+                    except Exception:
+                        pass
+
+                threading.Thread(
+                    target=err_reader, daemon=True, name="hotkey-helper-stderr"
+                ).start()
+                threading.Thread(
+                    target=out_reader, daemon=True, name="hotkey-helper-stdout"
+                ).start()
+
+                rc = proc.wait()
+                if not mgr._running:
+                    break
+                mgr._log(
+                    f"⚠️ hotkey-helper процесс завершился (код {rc}), следующий запуск через {backoff:.1f} с…"
+                )
+                time.sleep(backoff)
+                backoff = min(backoff * 1.2, 25.0)
 
         threading.Thread(
-            target=out_reader, daemon=True, name="hotkey-helper-stdout"
+            target=supervisor, daemon=True, name="portal-mac-hotkey-supervisor"
         ).start()
 
     def _run_win(self) -> None:
