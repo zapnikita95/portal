@@ -76,7 +76,7 @@
 - Без токена: откроется страница workflow — вручную **Run workflow**, затем в списке запусков скачай **Artifacts → portal-debug-apk**.  
 - С токеном: задай **`PORTAL_GITHUB_TOKEN`** (PAT с правами **repo** + **workflow**) и при необходимости **`PORTAL_GITHUB_REPO=owner/repo`**, **`PORTAL_GITHUB_BRANCH=main`** — тогда кнопка сама шлёт `workflow_dispatch` в API.
 
-В репозитории лежит **[`.github/workflows/portal-android-apk.yml`](.github/workflows/portal-android-apk.yml)** — после `git pull` на другом компе он тоже есть; пушить этот файл нужен PAT с scope **workflow** (или SSH), иначе GitHub отклонит push.
+Шаблон workflow для GitHub Actions: **[`portal-android/github-workflow-portal-android-apk.yml`](portal-android/github-workflow-portal-android-apk.yml)** — создай в репозитории на GitHub путь **`.github/workflows/portal-android-apk.yml`** и вставь это содержимое (Add file → Create new file). Либо запушь `.github/` с машины, где **SSH** или PAT с scope **workflow**.
 
 Локальная сборка: **Docker** — [`portal-android/Dockerfile`](portal-android/Dockerfile).
 

@@ -36,7 +36,9 @@ ls -la bin/*.apk
 
 ### GitHub Actions
 
-В репозитории: **Actions → Portal Android APK → Run workflow**. В артефакте **`portal-debug-apk`** будет `*.apk`.
+Файл workflow в репозитории: **`github-workflow-portal-android-apk.yml`** (в этой папке) — скопируй на GitHub в **`.github/workflows/portal-android-apk.yml`** (через веб-интерфейс, если push `.github/` блокирует токен).
+
+Дальше: **Actions → Portal Android APK → Run workflow**. Артефакт **`portal-debug-apk`** → `*.apk`.
 
 ### Локальный Linux
 
