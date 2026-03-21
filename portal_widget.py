@@ -359,11 +359,12 @@ class PortalWidget:
 
     def load_portal_gif(self):
         assets_dir = os.path.join(os.path.dirname(__file__), "assets")
+        # Сначала твой GIF с MP4 (import_portal_from_mp4.py → portal_animated.gif)
         for name in (
-            "portal_animated_opening.gif",
-            "portal_opening.gif",
             "portal_animated.gif",
             "portal_static.gif",
+            "portal_animated_opening.gif",
+            "portal_opening.gif",
         ):
             gif_path = os.path.join(assets_dir, name)
             if not os.path.exists(gif_path):
@@ -478,7 +479,9 @@ class PortalWidget:
         self.canvas.delete("all")
         cx, cy = self.size // 2, self.size // 2
         if self.gif_frames:
-            img = self.gif_frames[0]
+            # Средний кадр — часто красивее, чем первый (чёрный кадр в начале видео)
+            idx = max(0, len(self.gif_frames) // 2)
+            img = self.gif_frames[idx]
             self.canvas.create_image(cx, cy, image=img, anchor=tk.CENTER)
         else:
             r_full = self.size // 2 - 18

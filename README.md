@@ -91,6 +91,18 @@ python3 portal.py --widget
 6. **Двойной клик** на виджете открывает настройки IP
 7. **Правый клик** открывает контекстное меню
 
+### Своя анимация портала (MP4 → GIF)
+
+Виджет берёт картинку из папки `assets/` (приоритет: `portal_animated.gif`).
+
+```bash
+pip install -r requirements.txt   # там есть imageio + imageio-ffmpeg
+python import_portal_from_mp4.py "C:\путь\к\видео.mp4"
+```
+
+Скрипт создаст `assets/portal_animated.gif` и `portal_static.gif`. Перезапусти Портал — вместо «нарисованного» круга будет твой портал.  
+*(Если в PATH есть `ffmpeg`, он используется первым; иначе — встроенный ffmpeg из `imageio-ffmpeg`.)*
+
 ### Отправка файла
 
 1. На устройстве-отправителе нажмите "📤 Отправить файл"
