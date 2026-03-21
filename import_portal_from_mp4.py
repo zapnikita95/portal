@@ -1,8 +1,8 @@
 """
 Импорт MP4/WebP/GIF в assets/ для виджета-портала.
 
-Пример (Windows):
-  python import_portal_from_mp4.py "C:\\Users\\1\\OneDrive\\Desktop\\111231231.mp4"
+Пример (Windows, «тот самый» портал из tumblr):
+  python import_portal_from_mp4.py "C:\\Users\\1\\Downloads\\tumblr_mm55e88N8H1rnir1do1_500.gif.mp4"
 
 Нужно одно из: ffmpeg в PATH, либо: pip install imageio imageio-ffmpeg
 """
