@@ -2,22 +2,81 @@
 
 Обычный запуск без терминала: **двойной клик** по `Portal.exe` (Windows) или **`Portal.app`** (Mac).
 
-## Сборка в облаке (GitHub Actions)
+## Сразу: получить Portal.app на Mac (у себя на компьютере)
 
-Шаблон workflow лежит в корне: **`github-workflow-portal-desktop.yml`**. Скопируй в репозиторий:
+В терминале из **корня репозитория** (`~/Desktop/portal` или где лежит проект):
 
 ```bash
-mkdir -p .github/workflows
-cp github-workflow-portal-desktop.yml .github/workflows/portal-desktop-release.yml
-git add .github/workflows/portal-desktop-release.yml && git commit -m "ci: desktop build" && git push
+cd ~/Desktop/portal
+python3 -m pip install -r requirements.txt pyinstaller pillow
+python3 scripts/generate_branding_icons.py
+pyinstaller pyinstaller_portal.spec
+open dist/Portal.app
 ```
 
-*(Если push с Personal Access Token падает с ошибкой про `workflow` — у токена в GitHub → Settings → Developer settings нужен scope **workflow**, либо добавь файл через веб-интерфейс GitHub.)*
+Готовое приложение: **`dist/Portal.app`**. Его можно перетащить в папку «Программы».
 
-После появления workflow в `.github/workflows/`:
+Если macOS пишет, что файл из интернета и не открывается:
 
-- **Вручную:** Actions → **Portal Desktop Build** → **Run workflow** → артефакты `Portal-macOS` / `Portal-Windows`.
+```bash
+xattr -dr com.apple.quarantine dist/Portal.app
+```
+
+*(Виртуальное окружение `python3 -m venv .venv` по желанию — см. раздел «Подготовка» ниже.)*
+
+---
+
+## GitHub Actions: ошибка `without workflow scope`
+
+Если при `git push` видишь:
+
+`refusing to allow a Personal Access Token to create or update workflow ... without workflow scope`
+
+это **ограничение GitHub для HTTPS + PAT**: таким токеном **нельзя** менять файлы в `.github/workflows/`.
+
+### Вариант 1 — через сайт GitHub (без токена, проще всего)
+
+1. Открой репозиторий на github.com → **Add file** → **Create new file**.
+2. Имя файла: **`.github/workflows/portal-desktop-release.yml`** (GitHub сам создаст папки).
+3. Открой на компьютере **`github-workflow-portal-desktop.yml`** из этого репо, скопируй **весь** текст → вставь в редактор на GitHub.
+4. **Commit changes** (внизу).
+
+После этого workflow уже в репо, `git pull` у себя — и можно пользоваться Actions.
+
+### Вариант 2 — дать PAT право `workflow` (classic token)
+
+GitHub → **Settings** → **Developer settings** → **Personal access tokens** → свой токен → **Edit** → включи scope **`workflow`** → сохрани. Потом снова `git push`.
+
+### Вариант 3 — SSH вместо HTTPS
+
+```bash
+git remote set-url origin git@github.com:zapnikita95/portal.git
+git push origin main
+```
+
+(Нужен SSH-ключ, добавленный в GitHub.)
+
+### Если остался локальный коммит с workflow, а push не прошёл
+
+Чтобы не путаться с историей:
+
+```bash
+git fetch origin
+git reset --hard origin/main
+```
+
+Потом добавь workflow **через сайт** (вариант 1) или исправь токен/SSH и запушь снова.
+
+---
+
+## Сборка в облаке (GitHub Actions)
+
+После того как файл **`portal-desktop-release.yml`** уже лежит в **`.github/workflows/`** (через веб или push с нужными правами):
+
+- **Вручную:** **Actions** → **Portal Desktop Build** → **Run workflow** → скачай артефакты `Portal-macOS` / `Portal-Windows`.
 - **Релиз:** `git tag v1.2.0 && git push origin v1.2.0` — к релизу прикрепятся оба ZIP.
+
+Шаблон для копирования: **`github-workflow-portal-desktop.yml`** в корне репозитория.
 
 Скилл Cursor: `.cursor/skills/portal-desktop-release/SKILL.md`.
 
