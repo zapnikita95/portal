@@ -1104,6 +1104,32 @@ class PortalWidget:
             command=self.show_ip_dialog,
         )
         menu.add_command(label="Выбрать файл (Ctrl+клик)", command=self.on_portal_click)
+        cur = portal_config.load_incoming_clipboard_files_mode()
+        clip_var = tk.StringVar(value=cur)
+        clip_menu = tk.Menu(menu, tearoff=0)
+
+        def _set_mode(mode_key: str) -> None:
+            if portal_config.save_incoming_clipboard_files_mode(mode_key):
+                clip_var.set(mode_key)
+                if self.main_app and hasattr(self.main_app, "log"):
+                    self.main_app.log(
+                        f"⚙️ Приём файлов из буфера: "
+                        f"{portal_config.INCOMING_CLIPBOARD_FILES_MODE_LABELS_RU.get(mode_key, mode_key)}"
+                    )
+            else:
+                clip_var.set(portal_config.load_incoming_clipboard_files_mode())
+
+        for key in ("both", "disk", "clipboard"):
+            clip_menu.add_radiobutton(
+                label=portal_config.INCOMING_CLIPBOARD_FILES_MODE_LABELS_RU.get(key, key),
+                variable=clip_var,
+                value=key,
+                command=lambda k=key: _set_mode(k),
+            )
+        menu.add_cascade(
+            label="Приём файлов из буфера (папка / буфер / оба)…",
+            menu=clip_menu,
+        )
         menu.add_command(label="Скрыть", command=self.hide)
         menu.add_separator()
         menu.add_command(label="Выход", command=self.destroy)
@@ -1448,6 +1474,10 @@ class GlobalHotkeyManager:
                         "<Command-Shift-v>",
                         "<Meta-Shift-V>",
                         "<Meta-Shift-v>",
+                        "<Command-Option-v>",
+                        "<Command-Option-V>",
+                        "<Meta-Option-v>",
+                        "<Meta-Option-V>",
                     ]
                 else:
                     toggle_seqs = [
@@ -1469,6 +1499,10 @@ class GlobalHotkeyManager:
                         "<Command-Control-V>",
                         "<Control-Command-v>",
                         "<Control-Command-V>",
+                        "<Command-Option-v>",
+                        "<Command-Option-V>",
+                        "<Meta-Option-v>",
+                        "<Meta-Option-V>",
                     ]
             else:
                 toggle_seqs = ["<Control-Alt-p>"]
@@ -1646,6 +1680,9 @@ class GlobalHotkeyManager:
                     return "c"
                 if keycode == self._KEY_V and (f & CMD) and (f & SHIFT) and not (f & ALT):
                     return "v"
+                # Дубль «забрать буфер» (в части приложений Cmd+Opt+V занят — тогда Cmd+Shift+V)
+                if keycode == self._KEY_V and (f & CMD) and (f & ALT) and not (f & SHIFT):
+                    return "v"
             else:
                 if (
                     keycode == self._KEY_P
@@ -1669,6 +1706,14 @@ class GlobalHotkeyManager:
                     and (f & CTRL)
                     and not (f & ALT)
                     and not (f & SHIFT)
+                ):
+                    return "v"
+                if (
+                    keycode == self._KEY_V
+                    and (f & CMD)
+                    and (f & ALT)
+                    and not (f & SHIFT)
+                    and not (f & CTRL)
                 ):
                     return "v"
         except Exception:

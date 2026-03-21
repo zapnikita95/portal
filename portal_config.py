@@ -115,6 +115,41 @@ def save_receive_copy_to_clipboard(enabled: bool) -> bool:
     return save_receive_files_mode("both" if enabled else "disk_only")
 
 
+# ── Совместимость с portal_clipboard_rich / Windows-веткой ──────────
+
+
+def incoming_clipboard_files_save_dir() -> Path:
+    """Куда писать поток clipboard_files; при «только буфер» — temp (как на Win)."""
+    import tempfile
+
+    if receive_files_mode() == "clipboard_only":
+        d = Path(tempfile.gettempdir()) / "PortalIncoming"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+    return receive_dir_path()
+
+
+def load_incoming_clipboard_files_mode() -> str:
+    """disk | clipboard | both — внутри portal_clipboard_rich / приём push."""
+    m = receive_files_mode()
+    return {"disk_only": "disk", "clipboard_only": "clipboard", "both": "both"}[m]
+
+
+def save_incoming_clipboard_files_mode(mode: str) -> bool:
+    rev = {"disk": "disk_only", "clipboard": "clipboard_only", "both": "both"}
+    key = rev.get(mode)
+    if not key:
+        return False
+    return save_receive_files_mode(key)
+
+
+INCOMING_CLIPBOARD_FILES_MODE_LABELS_RU: Dict[str, str] = {
+    "both": "Папка приёма + буфер",
+    "disk": "Только папка",
+    "clipboard": "Только буфер (временная папка)",
+}
+
+
 # ── Несколько IP ───────────────────────────────────────────────
 
 

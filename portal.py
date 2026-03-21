@@ -21,16 +21,41 @@ import shutil
 import pyperclip
 import time
 import io
-import uuid
 import struct
 import ctypes
 from pathlib import Path
-from typing import Optional, List, Dict, Tuple, Any
+from typing import Optional, List, Dict, Tuple, Any, Callable
 import subprocess
 import platform
 
 import portal_config
+import portal_clipboard_rich as portal_clip_rich
 from portal_tk_compat import ensure_tkdnd_tk_misc_patch
+
+
+def refresh_windows_shell_after_new_file(filepath: Path) -> None:
+    """Подтолкнуть Explorer обновить список (только Windows)."""
+    if platform.system() != "win32":
+        return
+    try:
+        fp = filepath.resolve()
+        parent = fp if fp.is_dir() else fp.parent
+        SHCNE_UPDATEDIR = 0x00001000
+        SHCNE_CREATE = 0x00000002
+        SHCNF_PATHW = 0x0005
+        SHCNF_FLUSH = 0x1000
+        buf_dir = ctypes.create_unicode_buffer(str(parent))
+        ctypes.windll.shell32.SHChangeNotify(
+            SHCNE_UPDATEDIR, SHCNF_PATHW | SHCNF_FLUSH, buf_dir, None
+        )
+        if fp.is_file():
+            buf_file = ctypes.create_unicode_buffer(str(fp))
+            ctypes.windll.shell32.SHChangeNotify(
+                SHCNE_CREATE, SHCNF_PATHW | SHCNF_FLUSH, buf_file, None
+            )
+    except Exception:
+        pass
+
 
 # Порт протокола Портала (должен совпадать на всех машинах)
 PORTAL_PORT = 12345
@@ -262,17 +287,30 @@ def _safe_incoming_filename(name: Any) -> str:
     return s
 
 
-def _recv_ok_prefix(sock: socket.socket, max_total: int = 64) -> bytes:
+def _recv_ok_prefix(
+    sock: socket.socket, max_total: int = 64, timeout: Optional[float] = None
+) -> bytes:
     """Прочитать ответ получателя до OK или закрытия (короткий ответ)."""
-    buf = b""
-    while len(buf) < max_total:
-        chunk = sock.recv(max(8, max_total - len(buf)))
-        if not chunk:
-            break
-        buf += chunk
-        if buf.startswith(b"OK"):
-            break
-    return buf
+    old: Optional[float] = None
+    try:
+        if timeout is not None:
+            old = sock.gettimeout()
+            sock.settimeout(timeout)
+        buf = b""
+        while len(buf) < max_total:
+            chunk = sock.recv(max(8, max_total - len(buf)))
+            if not chunk:
+                break
+            buf += chunk
+            if buf.startswith(b"OK"):
+                break
+        return buf
+    finally:
+        if timeout is not None and old is not None:
+            try:
+                sock.settimeout(old)
+            except OSError:
+                pass
 
 
 def read_first_json_from_socket(
@@ -342,7 +380,8 @@ class PortalApp(ctk.CTk):
         self._peer_checkbox_vars: Dict[str, Any] = {}
         # Один push буфера за раз (двойной хоткей / два источника событий)
         self._clipboard_push_lock = threading.Lock()
-        
+        self._clipboard_pull_lock = threading.Lock()
+
         # Создание UI
         self.create_ui()
         
@@ -499,6 +538,13 @@ class PortalApp(ctk.CTk):
             text="📁 Папка для входящих файлов (по умолчанию — Рабочий стол):",
             font=ctk.CTkFont(size=12, weight="bold"),
         ).pack(anchor="w", padx=12, pady=(4, 2))
+        ctk.CTkLabel(
+            peer_frame,
+            text="К этой папке относятся и файлы из буфера с другого ПК (отправка/забрать буфер), "
+            "кроме режима «только в буфер» — там сохранение во временную папку.",
+            font=ctk.CTkFont(size=10),
+            text_color="gray",
+        ).pack(anchor="w", padx=12, pady=(0, 2))
         recv_row = ctk.CTkFrame(peer_frame, fg_color="transparent")
         recv_row.pack(fill="x", padx=12, pady=(0, 8))
         self.receive_dir_entry = ctk.CTkEntry(recv_row, width=360, placeholder_text="~/Desktop")
@@ -604,14 +650,14 @@ class PortalApp(ctk.CTk):
                     "🔑 macOS (режим PORTAL_MAC_HOTKEY_LEGACY=1 — может конфликтовать с Терминалом):\n"
                     "   Портал — Cmd+Option+P\n"
                     "   Отправить буфер — Cmd+Shift+C\n"
-                    "   Забрать буфер — Cmd+Shift+V"
+                    "   Забрать буфер — Cmd+Shift+V (дубль: Cmd+Option+V, если не занято приложением)"
                 )
             else:
                 hotkey_text = (
                     "🔑 macOS по умолчанию (Cmd+Ctrl — реже лезет в Терминал):\n"
                     "   Показать/скрыть портал — Cmd+Ctrl+P\n"
                     "   Отправить буфер на другие ПК — Cmd+Ctrl+C\n"
-                    "   Забрать буфер с первого отмеченного IP — Cmd+Ctrl+V"
+                    "   Забрать буфер с первого отмеченного IP — Cmd+Ctrl+V (дубль: Cmd+Option+V)"
                 )
             hotkey_text += (
                 "\n📌 Забрать буфер = **первый отмеченный IP**. На том ПК в логе будет get_clipboard — это ответ твоему запросу."
@@ -1244,6 +1290,10 @@ class PortalApp(ctk.CTk):
 
             if message.get("type") == "file":
                 self.receive_file(client_socket, message, prefix=tail)
+            elif message.get("type") == "clipboard_files":
+                self.receive_clipboard_files(client_socket, message, prefix=tail)
+            elif message.get("type") == "clipboard_rich":
+                self.receive_clipboard_rich(client_socket, message, prefix=tail)
             elif message.get("type") == "clipboard":
                 self.receive_clipboard(message)
             elif message.get("type") == "get_clipboard":
@@ -1380,6 +1430,194 @@ class PortalApp(ctk.CTk):
             self._apply_portal_clipboard_files([p])
             self.log(f"📋 В буфере для вставки: {p.name}")
 
+    def receive_clipboard_files(
+        self,
+        client_socket: socket.socket,
+        message: dict,
+        prefix: bytes = b"",
+    ) -> None:
+        """Несколько файлов из буфера (push Ctrl+Alt+C) — сохранить и по режиму в буфер ОС."""
+        specs = message.get("files") or []
+        if not specs:
+            self._log_from_thread("⚠️ clipboard_files: пустой список")
+            try:
+                _portal_sendall(client_socket, b"ERR")
+            except Exception:
+                pass
+            return
+
+        save_dir = portal_config.incoming_clipboard_files_save_dir()
+        try:
+            save_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            self._log_from_thread(f"❌ Папка для приёма файлов из буфера: {e}")
+            try:
+                _portal_sendall(client_socket, b"ERR")
+            except Exception:
+                pass
+            return
+
+        saved: List[str] = []
+        buf = prefix
+        try:
+            for spec in specs:
+                raw_name = spec.get("filename", "file")
+                filename = _safe_incoming_filename(str(raw_name))
+                filesize = int(spec.get("filesize", 0))
+                unique = save_dir / f"{int(time.time() * 1000)}_{filename}"
+                with open(unique, "wb") as f:
+                    remaining = filesize
+                    while remaining > 0:
+                        if buf:
+                            take = min(len(buf), remaining)
+                            f.write(buf[:take])
+                            buf = buf[take:]
+                            remaining -= take
+                            continue
+                        chunk = client_socket.recv(min(65536, remaining))
+                        if not chunk:
+                            raise OSError(
+                                "соединение закрыто до конца файла (clipboard_files)"
+                            )
+                        f.write(chunk)
+                        remaining -= len(chunk)
+                saved.append(str(unique.resolve()))
+                refresh_windows_shell_after_new_file(unique)
+            _portal_sendall(client_socket, b"OK")
+        except Exception as e:
+            self._log_from_thread(f"❌ Приём clipboard_files: {e}")
+            try:
+                _portal_sendall(client_socket, b"ERR")
+            except Exception:
+                pass
+            return
+
+        self._log_from_thread(f"✅ Из буфера сохранено файлов: {len(saved)}")
+        try:
+            self.after(
+                0,
+                lambda paths=list(saved): self._apply_incoming_clipboard_files(paths),
+            )
+        except Exception:
+            pass
+
+    def receive_clipboard_rich(
+        self,
+        client_socket: socket.socket,
+        message: dict,
+        prefix: bytes = b"",
+    ) -> None:
+        """Картинка из буфера: JSON + сырые байты PNG (протокол Win/Mac)."""
+        try:
+            size = int(message.get("size", 0))
+        except (TypeError, ValueError):
+            size = 0
+        if not portal_clip_rich.image_size_ok(size):
+            self._log_from_thread("⚠️ Слишком большой снимок буфера (clipboard_rich)")
+            try:
+                _portal_sendall(client_socket, b"ERR")
+            except Exception:
+                pass
+            return
+
+        receive_dir = portal_config.receive_dir_path()
+        try:
+            receive_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            self._log_from_thread(f"❌ Папка приёма: {e}")
+            try:
+                _portal_sendall(client_socket, b"ERR")
+            except Exception:
+                pass
+            return
+
+        out_path = receive_dir / f"portal_clipboard_{int(time.time() * 1000)}.png"
+        buf = prefix
+        try:
+            with open(out_path, "wb") as f:
+                remaining = size
+                while remaining > 0:
+                    if buf:
+                        take = min(len(buf), remaining)
+                        f.write(buf[:take])
+                        buf = buf[take:]
+                        remaining -= take
+                        continue
+                    chunk = client_socket.recv(min(65536, remaining))
+                    if not chunk:
+                        raise OSError(
+                            "соединение закрыто до конца картинки (clipboard_rich)"
+                        )
+                    f.write(chunk)
+                    remaining -= len(chunk)
+            _portal_sendall(client_socket, b"OK")
+        except Exception as e:
+            self._log_from_thread(f"❌ Приём картинки из буфера: {e}")
+            try:
+                _portal_sendall(client_socket, b"ERR")
+            except Exception:
+                pass
+            return
+
+        refresh_windows_shell_after_new_file(out_path)
+        self._log_from_thread(f"✅ Картинка из буфера сохранена: {out_path.name}")
+        p = str(out_path.resolve())
+        try:
+            self.after(0, lambda path=p: self._apply_incoming_clipboard_image(path))
+        except Exception:
+            pass
+
+    def _apply_incoming_clipboard_files(self, paths: List[str]) -> None:
+        self.is_receiving_clipboard = True
+        try:
+            mode = portal_config.load_incoming_clipboard_files_mode()
+            msg = ""
+            if mode in ("clipboard", "both"):
+                msg = portal_clip_rich.apply_clipboard_payload(
+                    "files", file_paths=paths
+                )
+                try:
+                    self.last_clipboard = "\n".join(paths)
+                except Exception:
+                    pass
+
+            if mode == "disk":
+                self.log(
+                    f"📁 Из буфера: {len(paths)} файл(ов) в папке — "
+                    "в системный буфер не кладём (режим «только папка»)"
+                )
+            elif mode == "clipboard":
+                self.log(f"📋 {msg}")
+            else:
+                self.log(f"📁 + 📋 {msg}")
+        finally:
+            self.is_receiving_clipboard = False
+
+    def _apply_incoming_clipboard_image(self, path: str) -> None:
+        self.is_receiving_clipboard = True
+        try:
+            p = Path(path)
+            if p.is_file():
+                if platform.system() == "Darwin":
+                    if set_system_clipboard_image_from_file(p):
+                        self.log(
+                            f"📋 Картинка в буфере (macOS): {p.name} — Cmd+V"
+                        )
+                        return
+                    try:
+                        raw = p.read_bytes()
+                        if set_system_clipboard_png(raw):
+                            self.log(f"📋 Картинка в буфере (PNG): {p.name}")
+                            return
+                    except Exception:
+                        pass
+                msg = portal_clip_rich.apply_clipboard_payload(
+                    "image", image_path=str(p)
+                )
+                self.log(f"📋 {msg} — Ctrl+V / Cmd+V")
+        finally:
+            self.is_receiving_clipboard = False
+
     def _clip_batch_add(self, batch_id: str, index: int, total: int, path: Path) -> None:
         with self._clip_batch_lock:
             entry = self._clip_batches.setdefault(
@@ -1465,79 +1703,163 @@ class PortalApp(ctk.CTk):
                 f"📋 Буфер обмена обновлен ({len(clipboard_text)} символов)"
             )
     
-    def send_clipboard_response(self, client_socket: socket.socket):
-        """Ответ на get_clipboard: текст, иначе PNG картинки, иначе пути файлов из буфера, иначе пусто."""
-        try:
-            from portal_widget import grab_clipboard_file_paths, grab_clipboard_image
+    def _clipboard_snapshot_resolved_for_send(self) -> Tuple[str, dict]:
+        """Снимок буфера для отправки (push и ответ get_clipboard): snapshot + фолбэки."""
+        from portal_widget import grab_clipboard_file_paths, grab_clipboard_image
 
+        kind, payload = portal_clip_rich.clipboard_snapshot()
+        if kind == "empty":
             text = pyperclip.paste()
-            if text is None:
-                text = ""
-            if str(text).strip():
-                resp = json.dumps({"type": "clipboard", "text": text}, ensure_ascii=False)
-                # Завершающий \n — иначе клиент (Cmd+Shift+V), ждущий строку, получает обрыв
-                client_socket.sendall(resp.encode("utf-8") + b"\n")
-                self._log_from_thread(
-                    f"📋 get_clipboard → отдан текст ({len(str(text))} симв.)"
-                )
-                return
+            if text is not None and str(text).strip():
+                kind, payload = "text", {"text": str(text)}
+            else:
+                im = grab_clipboard_image()
+                if im is not None:
+                    buf = io.BytesIO()
+                    im.save(buf, format="PNG")
+                    raw = buf.getvalue()
+                    if raw:
+                        kind, payload = "image", {
+                            "image_bytes": raw,
+                            "mime": "image/png",
+                        }
+                if kind == "empty":
+                    paths_fb = grab_clipboard_file_paths()
+                    if paths_fb:
+                        kind, payload = "files", {"paths": list(paths_fb)}
+        return kind, payload
 
-            im = grab_clipboard_image()
-            if im is not None:
-                buf = io.BytesIO()
-                im.save(buf, format="PNG")
-                data = buf.getvalue()
-                meta = json.dumps(
-                    {"type": "clipboard_image", "format": "png", "size": len(data)},
-                    ensure_ascii=False,
-                )
-                client_socket.sendall(meta.encode("utf-8") + b"\n" + data)
-                self._log_from_thread(
-                    f"📋 get_clipboard → отдана картинка ({len(data)} байт)"
-                )
-                return
-
-            paths = grab_clipboard_file_paths()
-            if len(paths) == 1:
-                one = Path(paths[0])
-                if one.is_file():
-                    try:
-                        sz = int(one.stat().st_size)
-                    except OSError:
-                        sz = 0
-                    if 0 < sz <= CLIPBOARD_PULL_FILE_MAX_BYTES:
-                        hdr = json.dumps(
-                            {
-                                "type": "clipboard_file",
-                                "filename": one.name,
-                                "filesize": sz,
-                            },
-                            ensure_ascii=False,
-                        )
-                        client_socket.sendall(hdr.encode("utf-8") + b"\n")
-                        with open(one, "rb") as src_f:
-                            while True:
-                                chunk = src_f.read(65536)
-                                if not chunk:
-                                    break
-                                _portal_sendall(client_socket, chunk)
-                        self._log_from_thread(
-                            f"📋 get_clipboard → отдан файл «{one.name}» ({sz} байт)"
-                        )
-                        return
-            if paths:
-                joined = "\n".join(paths)
-                resp = json.dumps({"type": "clipboard", "text": joined}, ensure_ascii=False)
-                client_socket.sendall(resp.encode("utf-8") + b"\n")
-                self._log_from_thread(
-                    f"📋 get_clipboard → отданы пути {len(paths)} файл(ов) (>1 или >{CLIPBOARD_PULL_FILE_MAX_BYTES // (1024 * 1024)} МБ — только как текст)"
-                )
-                return
-
-            resp = json.dumps({"type": "clipboard", "text": ""}, ensure_ascii=False)
+    def _emit_resolved_clipboard_payload(
+        self,
+        client_socket: socket.socket,
+        kind: str,
+        payload: dict,
+        *,
+        log: Callable[[str], None],
+        context_label: str,
+    ) -> None:
+        """Записать снимок в сокет (ответ get_clipboard или входящий push clipboard_*)."""
+        if kind == "text":
+            t = payload.get("text", "") or ""
+            resp = json.dumps({"type": "clipboard", "text": t}, ensure_ascii=False)
             client_socket.sendall(resp.encode("utf-8") + b"\n")
-            self._log_from_thread(
-                "📋 get_clipboard → буфер пустой (нет текста, картинки и файлов на том ПК)"
+            log(f"📋 {context_label} → текст ({len(t)} симв.)")
+            return
+
+        if kind == "files":
+            paths = payload.get("paths") or []
+            valid_paths = [p for p in paths if os.path.isfile(p)]
+            if not valid_paths:
+                t = ""
+                try:
+                    t = pyperclip.paste() or ""
+                except Exception:
+                    pass
+                resp = json.dumps(
+                    {"type": "clipboard", "text": t or ""}, ensure_ascii=False
+                )
+                client_socket.sendall(resp.encode("utf-8") + b"\n")
+                log(f"📋 {context_label} → файлы не прочитались, отдан текст/пусто")
+                return
+            if len(valid_paths) == 1:
+                one = Path(valid_paths[0])
+                try:
+                    sz = int(one.stat().st_size)
+                except OSError:
+                    sz = 0
+                if 0 < sz <= CLIPBOARD_PULL_FILE_MAX_BYTES:
+                    hdr = json.dumps(
+                        {
+                            "type": "clipboard_file",
+                            "filename": one.name,
+                            "filesize": sz,
+                        },
+                        ensure_ascii=False,
+                    )
+                    client_socket.sendall(hdr.encode("utf-8") + b"\n")
+                    with open(one, "rb") as src_f:
+                        while True:
+                            chunk = src_f.read(65536)
+                            if not chunk:
+                                break
+                            _portal_sendall(client_socket, chunk)
+                    log(
+                        f"📋 {context_label} → один файл «{one.name}» ({sz} байт)"
+                    )
+                    return
+            specs = [
+                {"filename": os.path.basename(p), "filesize": os.path.getsize(p)}
+                for p in valid_paths
+            ]
+            header = {"type": "clipboard_files", "files": specs}
+            _portal_sendall(
+                client_socket,
+                json.dumps(header, ensure_ascii=False).encode("utf-8"),
+            )
+            time.sleep(0.05)
+            for p in valid_paths:
+                with open(p, "rb") as f:
+                    while True:
+                        chunk = f.read(65536)
+                        if not chunk:
+                            break
+                        _portal_sendall(client_socket, chunk)
+            okp = _recv_ok_prefix(client_socket, timeout=180.0)
+            log(
+                f"📋 {context_label} → {len(valid_paths)} файл(ов); ответ: {okp[:24]!r}"
+            )
+            return
+
+        if kind == "image":
+            image_bytes = payload.get("image_bytes") or b""
+            if not portal_clip_rich.image_size_ok(len(image_bytes)):
+                resp = json.dumps({"type": "clipboard", "text": ""}, ensure_ascii=False)
+                client_socket.sendall(resp.encode("utf-8") + b"\n")
+                log(f"📋 {context_label} → картинка слишком большая")
+                return
+            mime = payload.get("mime", "image/png")
+            hdr = {
+                "type": "clipboard_rich",
+                "clip_kind": "image",
+                "mime": mime,
+                "size": len(image_bytes),
+            }
+            _portal_sendall(
+                client_socket,
+                json.dumps(hdr, ensure_ascii=False).encode("utf-8"),
+            )
+            time.sleep(0.05)
+            _portal_sendall(client_socket, image_bytes)
+            okp = _recv_ok_prefix(client_socket, timeout=180.0)
+            log(
+                f"📋 {context_label} → картинка clipboard_rich; ответ: {okp[:24]!r}"
+            )
+            return
+
+        resp = json.dumps({"type": "clipboard", "text": ""}, ensure_ascii=False)
+        client_socket.sendall(resp.encode("utf-8") + b"\n")
+        log(f"📋 {context_label} → неизвестный снимок буфера")
+
+    def send_clipboard_response(self, client_socket: socket.socket):
+        """
+        Ответ на get_clipboard: portal_clipboard_rich (как на Windows) + фолбэк для macOS.
+        Типы: clipboard (текст), clipboard_files (поток), clipboard_rich (PNG), clipboard_image (старый клиент).
+        """
+        try:
+            kind, payload = self._clipboard_snapshot_resolved_for_send()
+
+            if kind == "empty":
+                resp = json.dumps({"type": "clipboard", "text": ""}, ensure_ascii=False)
+                client_socket.sendall(resp.encode("utf-8") + b"\n")
+                self._log_from_thread("📋 get_clipboard → буфер пуст")
+                return
+
+            self._emit_resolved_clipboard_payload(
+                client_socket,
+                kind,
+                payload,
+                log=self._log_from_thread,
+                context_label="get_clipboard",
             )
         except Exception as e:
             self._log_from_thread(f"❌ Ошибка ответа буфера: {str(e)}")
@@ -1571,11 +1893,21 @@ class PortalApp(ctk.CTk):
         if not targets:
             self.log("⚠️ Сохрани список IP и отметь, с какого ПК забирать (первый в списке)")
             return
+        if not self._clipboard_pull_lock.acquire(blocking=False):
+            self.log("⏸ Уже выполняется запрос буфера с пира — подождите")
+            return
         src = targets[0]
         self.log(
-            f"📥 Забираю буфер с {src} (на том ПК в логе будет строка get_clipboard — он отвечает твоему запросу)"
+            f"📥 Забираю буфер с {src} (на том ПК в логе будет get_clipboard — это ответ на запрос)"
         )
-        threading.Thread(target=self._pull_clipboard_worker, args=(src,), daemon=True).start()
+
+        def _worker():
+            try:
+                self._pull_clipboard_worker(src)
+            finally:
+                self._clipboard_pull_lock.release()
+
+        threading.Thread(target=_worker, daemon=True).start()
     
     def _pull_clipboard_worker(self, target_ip: str):
         """Запрос буфера с удалённой машины (сервер должен быть запущен)"""
@@ -1590,7 +1922,24 @@ class PortalApp(ctk.CTk):
             _log(f"🔌 Соединение с {target_ip} для get_clipboard…")
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client_socket.settimeout(30)
-            client_socket.connect((target_ip, PORTAL_PORT))
+            try:
+                client_socket.connect((target_ip, PORTAL_PORT))
+            except ConnectionRefusedError:
+                _log(
+                    "❌ Порт не принимает соединение (Windows часто: 10061). "
+                    "На удалённом ПК не запущен приём — открой Портал и «Запустить портал», проверь IP и файрвол."
+                )
+                return
+            except OSError as e:
+                winerr = getattr(e, "winerror", None)
+                errno_val = getattr(e, "errno", None)
+                if winerr == 10061 or errno_val == 10061:
+                    _log(
+                        "❌ Подключение отклонено (10061): на том IP не слушает Портал "
+                        "или неверный адрес. Запусти приём на удалённой машине."
+                    )
+                    return
+                raise
             client_socket.settimeout(600)
             _log(f"✅ Подключение установлено: {target_ip}:{PORTAL_PORT}")
             _portal_sendall(
@@ -1623,6 +1972,12 @@ class PortalApp(ctk.CTk):
                 finally:
                     self.is_receiving_clipboard = False
                 self.last_clipboard = text
+            elif message.get("type") == "clipboard_files":
+                self.receive_clipboard_files(client_socket, message, prefix=rest)
+                _log("📋 Файлы с удалённого ПК получены (см. строки выше)")
+            elif message.get("type") == "clipboard_rich":
+                self.receive_clipboard_rich(client_socket, message, prefix=rest)
+                _log("📋 Данные clipboard_rich с удалённого ПК получены")
             elif message.get("type") == "clipboard_file":
                 raw_name = message.get("filename", "remote_clipboard_file")
                 fname = _safe_incoming_filename(raw_name)
@@ -1632,12 +1987,9 @@ class PortalApp(ctk.CTk):
                     need = 0
                 if need <= 0 or need > CLIPBOARD_PULL_FILE_MAX_BYTES:
                     raise ValueError(f"Некорректный размер файла в ответе: {need}")
-                receive_dir = portal_config.receive_dir_path()
+                receive_dir = portal_config.incoming_clipboard_files_save_dir()
                 receive_dir.mkdir(parents=True, exist_ok=True)
-                filepath = receive_dir / fname
-                if filepath.exists():
-                    stem, suf = filepath.stem, filepath.suffix
-                    filepath = receive_dir / f"{stem}_{int(time.time())}{suf}"
+                filepath = receive_dir / f"{int(time.time() * 1000)}_{fname}"
                 data = bytearray(rest.lstrip(b"\n\r"))
                 while len(data) < need:
                     part = client_socket.recv(min(65536, need - len(data)))
@@ -1647,19 +1999,12 @@ class PortalApp(ctk.CTk):
                 if len(data) < need:
                     raise ValueError("Обрезаны данные файла из буфера")
                 filepath.write_bytes(bytes(data))
+                refresh_windows_shell_after_new_file(filepath)
                 _log(f"✅ Файл из буфера удалённого ПК сохранён: {filepath.name}")
-                reveal_ok = os.environ.get("PORTAL_REVEAL_RECEIVED", "1").strip().lower() not in (
-                    "0",
-                    "false",
-                    "no",
-                    "off",
-                )
 
                 def _finish_pull_file():
                     try:
-                        self._apply_receive_mode_after_saved_file(
-                            filepath, reveal_mac_allowed=reveal_ok
-                        )
+                        self._apply_incoming_clipboard_files([str(filepath.resolve())])
                     except Exception as ex:
                         self.log(f"❌ После приёма файла из буфера: {ex}")
 
@@ -1669,7 +2014,7 @@ class PortalApp(ctk.CTk):
                     _finish_pull_file()
             elif message.get("type") == "clipboard_image":
                 need = int(message.get("size", 0))
-                # После JSON сервер шлёт \n и сразу PNG
+                # После JSON сервер шлёт \n и сразу PNG (старые версии)
                 data = bytearray(rest.lstrip(b"\n\r"))
                 while len(data) < need:
                     part = client_socket.recv(min(65536, need - len(data)))
@@ -1678,19 +2023,37 @@ class PortalApp(ctk.CTk):
                     data.extend(part)
                 if len(data) < need:
                     raise ValueError("Обрезаны данные картинки")
-                self.is_receiving_clipboard = True
+
+                def _apply_png_pull():
+                    self.is_receiving_clipboard = True
+                    try:
+                        raw = bytes(data)
+                        ok = set_system_clipboard_png(raw)
+                        if ok:
+                            _log(
+                                f"📋 Картинка с удалённого ПК ({len(raw)} байт) — "
+                                "Cmd+V / Ctrl+V"
+                            )
+                        else:
+                            _log("⚠️ Картинка получена, но не удалось записать в буфер ОС")
+                    finally:
+                        self.is_receiving_clipboard = False
+
                 try:
-                    ok = set_system_clipboard_png(bytes(data))
-                finally:
-                    self.is_receiving_clipboard = False
-                if ok:
-                    _log(f"📋 Буфер с удалённого ПК: картинка ({len(data)} байт)")
-                else:
-                    _log("⚠️ Картинка получена, но не удалось записать в буфер ОС")
+                    self.after(0, _apply_png_pull)
+                except Exception:
+                    _apply_png_pull()
             else:
-                _log("⚠️ Неожиданный ответ при запросе буфера")
+                _log(f"⚠️ Неожиданный ответ при запросе буфера: {message.get('type')!r}")
         except Exception as e:
-            _log(f"❌ Не удалось получить буфер: {str(e)}")
+            err = str(e)
+            if "10061" in err:
+                _log(
+                    "❌ Сеть 10061: на удалённом IP не слушает порт Портала — "
+                    "запусти «Запустить портал» там и проверь Tailscale/IP."
+                )
+            else:
+                _log(f"❌ Не удалось получить буфер: {err}")
         finally:
             if client_socket is not None:
                 try:
@@ -1828,6 +2191,14 @@ class PortalApp(ctk.CTk):
                 self.log("💡 На втором ПК должен быть нажат «Запустить портал»")
                 return
             except OSError as e:
+                winerr = getattr(e, "winerror", None)
+                errno_val = getattr(e, "errno", None)
+                if winerr == 10061 or errno_val == 10061 or "10061" in str(e):
+                    self.log(
+                        f"❌ {target_ip}: 10061 — порт не принимает соединение. "
+                        "На удалённом ПК «Запустить портал», проверь IP / Tailscale / файрвол."
+                    )
+                    return
                 if "No route to host" in str(e) or "Network is unreachable" in str(e):
                     self.log(f"❌ Нет пути к {target_ip}")
                     self.log("💡 Проверь что оба ПК в одной сети (Tailscale или LAN)")
@@ -1915,66 +2286,14 @@ class PortalApp(ctk.CTk):
             self._broadcast_clipboard_push_worker_impl()
 
     def _broadcast_clipboard_push_worker_impl(self) -> None:
-        from portal_widget import grab_clipboard_image, grab_clipboard_file_paths
-
+        """Тот же протокол, что и ответ get_clipboard: clipboard / clipboard_file(s) / clipboard_rich."""
         targets = self.get_target_ips()
         if not targets:
             self.after(0, lambda: self.log("⚠️ Нет получателей — отметь IP галочками"))
             return
 
-        paths = grab_clipboard_file_paths()
-        if paths:
-            batch_id = str(uuid.uuid4())
-            n = len(paths)
-            for i, fp in enumerate(paths):
-                if not os.path.isfile(fp):
-                    continue
-                batch_arg: Optional[Tuple[str, int, int]] = (
-                    (batch_id, i, n) if n > 1 else None
-                )
-                for ip in targets:
-                    threading.Thread(
-                        target=self.send_file,
-                        args=(fp, ip),
-                        kwargs={
-                            "portal_clipboard": True,
-                            "clip_batch": batch_arg,
-                        },
-                        daemon=True,
-                    ).start()
-            self.after(
-                0,
-                lambda: self.log(
-                    f"📤 Буфер: {len(paths)} файл(ов) → {len(targets)} ПК (вставка Ctrl+V)"
-                ),
-            )
-            return
-
-        im = grab_clipboard_image()
-        if im is not None:
-            import tempfile
-
-            tmp = Path(tempfile.gettempdir()) / f"portal_push_{int(time.time() * 1000)}.png"
-            try:
-                im.save(tmp, "PNG")
-            except Exception as e:
-                self.after(0, lambda: self.log(f"❌ Не удалось сохранить картинку: {e}"))
-                return
-            for ip in targets:
-                threading.Thread(
-                    target=self.send_file,
-                    args=(str(tmp), ip),
-                    kwargs={"portal_clipboard": True},
-                    daemon=True,
-                ).start()
-            self.after(
-                0,
-                lambda: self.log(f"📤 Буфер: картинка → {len(targets)} ПК"),
-            )
-            return
-
-        text = pyperclip.paste() or ""
-        if not str(text).strip():
+        kind, payload = self._clipboard_snapshot_resolved_for_send()
+        if kind == "empty":
             self.after(
                 0,
                 lambda: self.log(
@@ -1982,12 +2301,75 @@ class PortalApp(ctk.CTk):
                 ),
             )
             return
+
+        def _thread_log(msg: str) -> None:
+            try:
+                self.after(0, lambda m=msg: self.log(m))
+            except Exception:
+                print(msg, flush=True)
+
+        def _push_to_ip(ip: str) -> None:
+            sock: Optional[socket.socket] = None
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(30)
+                try:
+                    sock.connect((ip, PORTAL_PORT))
+                except ConnectionRefusedError:
+                    _thread_log(
+                        f"❌ {ip}: порт не принимает (часто Windows 10061) — "
+                        "на том ПК «Запустить портал», проверь IP и файрвол."
+                    )
+                    return
+                except OSError as e:
+                    winerr = getattr(e, "winerror", None)
+                    errno_val = getattr(e, "errno", None)
+                    if winerr == 10061 or errno_val == 10061:
+                        _thread_log(
+                            f"❌ {ip}: 10061 — на этом адресе не слушает Портал."
+                        )
+                        return
+                    raise
+                sock.settimeout(600)
+                self._emit_resolved_clipboard_payload(
+                    sock,
+                    kind,
+                    payload,
+                    log=_thread_log,
+                    context_label=f"push → {ip}",
+                )
+            except Exception as e:
+                err = str(e)
+                if "10061" in err:
+                    _thread_log(
+                        f"❌ {ip}: 10061 — приём не запущен или неверный IP (Tailscale/VPN)."
+                    )
+                else:
+                    _thread_log(f"❌ {ip}: отправка буфера — {err}")
+            finally:
+                if sock is not None:
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass
+
         for ip in targets:
-            threading.Thread(
-                target=self.send_clipboard_text,
-                args=(ip, text),
-                daemon=True,
-            ).start()
+            threading.Thread(target=_push_to_ip, args=(ip,), daemon=True).start()
+
+        if kind == "text":
+            summary = f"📤 Буфер (текст) → {len(targets)} ПК"
+        elif kind == "files":
+            n = len([p for p in (payload.get("paths") or []) if os.path.isfile(p)])
+            summary = (
+                f"📤 Буфер: {n} файл(ов) (clipboard_files) → {len(targets)} ПК"
+            )
+        elif kind == "image":
+            summary = (
+                f"📤 Буфер: картинка (clipboard_rich) → {len(targets)} ПК"
+            )
+        else:
+            summary = f"📤 Буфер → {len(targets)} ПК"
+        self.after(0, lambda s=summary: self.log(s))
 
     def send_clipboard(self, target_ip: str):
         """Синхронизация / совместимость: отправить текущий текст буфера."""
