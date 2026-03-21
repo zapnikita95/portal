@@ -40,45 +40,69 @@ ctk.set_default_color_theme("blue")
 PROBE_TIMEOUT_SEC = 10.0
 
 
-def probe_portal_peer(host: str, port: int = PORTAL_PORT, timeout: float = PROBE_TIMEOUT_SEC) -> tuple[bool, str]:
+def probe_portal_peer(
+    host: str,
+    port: int = PORTAL_PORT,
+    timeout: float = PROBE_TIMEOUT_SEC,
+    debug_steps: Optional[List[str]] = None,
+) -> tuple[bool, str]:
     """
     Проверка Портала на host: TCP + ping → pong.
-    Возвращает (успех, код):
-      ok | refused | timeout | bad_reply | dns | error | legacy_port_open
-    legacy_port_open — порт слушает, но нет ответа pong (часто старая версия на паре).
+    Возвращает (успех, код): ok | refused | timeout | bad_reply | dns | error | legacy_port_open
+    Если debug_steps передан — в него пишутся пошаговые сообщения для лога.
     """
     host = (host or "").strip()
     if not host:
         return False, "no_host"
+
+    def _d(msg: str):
+        if debug_steps is not None:
+            debug_steps.append(msg)
+
     s = None
     tcp_connected = False
     try:
+        _d(f"1/4 Создаю сокет…")
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(timeout)
+        _d(f"2/4 Подключаюсь к {host}:{port} (timeout {timeout}s)…")
         s.connect((host, port))
         tcp_connected = True
+        _d(f"3/4 TCP OK, шлю ping…")
         s.sendall(json.dumps({"type": "ping"}, ensure_ascii=False).encode("utf-8"))
         s.settimeout(min(5.0, timeout))
+        _d(f"4/4 Жду pong (5s)…")
         data = s.recv(4096)
         if not data:
+            _d("4/4 Получен пустой ответ (соединение закрыто без данных)")
             return False, "legacy_port_open"
+        _d(f"4/4 Получено {len(data)} байт")
         msg = json.loads(data.decode("utf-8", errors="replace"))
         if msg.get("type") == "pong":
+            _d("4/4 pong OK")
             return True, "ok"
+        _d(f"4/4 Ответ не pong: {list(msg.keys())[:5]}")
         return False, "bad_reply"
     except ConnectionRefusedError:
+        _d("2/4 Ошибка: Connection refused (порт закрыт / не слушает)")
         return False, "refused"
     except socket.timeout:
         if tcp_connected:
+            _d("4/4 Таймаут на recv — TCP есть, pong не пришёл (старая версия на паре?)")
             return False, "legacy_port_open"
+        _d("2/4 Таймаут на connect — нет маршрута до хоста")
         return False, "timeout"
     except socket.gaierror:
+        _d("2/4 Ошибка DNS (адрес не найден)")
         return False, "dns"
-    except OSError:
+    except OSError as e:
+        _d(f"Ошибка: {type(e).__name__}: {e}")
         return False, "error"
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        _d(f"4/4 JSON ошибка: {e}")
         return False, "bad_reply"
-    except Exception:
+    except Exception as e:
+        _d(f"Ошибка: {type(e).__name__}: {e}")
         return False, "error"
     finally:
         if s is not None:
@@ -576,13 +600,16 @@ class PortalApp(ctk.CTk):
             return
 
         def worker():
-            ok, code = probe_portal_peer(ip)
+            steps: List[str] = []
+            ok, code = probe_portal_peer(ip, debug_steps=steps)
             msg_t, msg_c = self._format_peer_probe_result(ip, ok, code)
 
             def apply():
                 if hasattr(self, "peer_link_status_label"):
                     self.peer_link_status_label.configure(text=msg_t, text_color=msg_c)
                 if not silent:
+                    for line in steps:
+                        self.log(f"   {line}")
                     if ok:
                         self.log(
                             f"📡 Связь с парой: OK — {ip}:{PORTAL_PORT} "
@@ -697,8 +724,7 @@ class PortalApp(ctk.CTk):
     def handle_client(self, client_socket: socket.socket, addr):
         """Обработка клиентского подключения"""
         try:
-            # Получение типа операции
-            data = client_socket.recv(1024).decode('utf-8')
+            data = client_socket.recv(1024).decode("utf-8")
             message = json.loads(data)
             
             if message.get("type") == "file":
@@ -708,7 +734,7 @@ class PortalApp(ctk.CTk):
             elif message.get("type") == "get_clipboard":
                 self.send_clipboard_response(client_socket)
             elif message.get("type") == "ping":
-                # Лёгкая проверка «это наш Портал» для индикатора связи
+                self.log(f"📡 Ping от {addr[0]} → отправляю pong")
                 pong = json.dumps(
                     {"type": "pong", "ok": True, "version": 1},
                     ensure_ascii=False,
