@@ -8,8 +8,12 @@ import json
 import os
 import sys
 import tempfile
+import secrets
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# Алфавит без O/0/I/1 — проще диктовать и копировать
+_SHARED_SECRET_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 
 def config_path() -> Path:
@@ -282,3 +286,31 @@ def load_receive_dir() -> Path:
 def default_receive_dir() -> Path:
     """Папка приёма по умолчанию (рабочий стол)."""
     return receive_dir_path()
+
+
+# ── Пароль сети (shared secret) — одинаковый на всех своих ПК ─────────
+
+
+def load_shared_secret() -> str:
+    """Пустая строка = проверка отключена (как в старых версиях)."""
+    v = _load_all().get("shared_secret")
+    if v is None:
+        return ""
+    s = str(v).strip()
+    return s
+
+
+def save_shared_secret(secret: Optional[str]) -> bool:
+    """Пустая строка или None — убрать пароль из конфига."""
+    data = _load_all()
+    if secret is None or not str(secret).strip():
+        data.pop("shared_secret", None)
+    else:
+        data["shared_secret"] = str(secret).strip()
+    return _write_all(data)
+
+
+def generate_shared_secret(length: int = 8) -> str:
+    """Случайный код (по умолчанию 8 символов)."""
+    n = max(6, min(int(length), 32))
+    return "".join(secrets.choice(_SHARED_SECRET_ALPHABET) for _ in range(n))

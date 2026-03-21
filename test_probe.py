@@ -8,6 +8,11 @@ import sys
 import json
 import socket
 
+try:
+    from portal import merge_outgoing_shared_secret
+except ImportError:
+    merge_outgoing_shared_secret = None  # type: ignore
+
 PORT = 12345
 TIMEOUT = 10.0
 
@@ -37,7 +42,10 @@ def main():
         print("   TCP connect OK")
 
         print("3. Шлю ping…")
-        s.sendall(json.dumps({"type": "ping"}).encode("utf-8"))
+        ping = {"type": "ping"}
+        if merge_outgoing_shared_secret is not None:
+            ping = merge_outgoing_shared_secret(ping)
+        s.sendall(json.dumps(ping, ensure_ascii=False).encode("utf-8"))
 
         print("4. Жду pong (5s)…")
         s.settimeout(5.0)

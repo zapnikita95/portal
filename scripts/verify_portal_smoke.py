@@ -29,6 +29,9 @@ def main() -> int:
             "load_receive_dir",
             "receive_dir_path",
             "load_peer_ips",
+            "load_shared_secret",
+            "save_shared_secret",
+            "generate_shared_secret",
         ]
         for name in need:
             if not hasattr(portal_config, name):
@@ -38,6 +41,10 @@ def main() -> int:
 
     try:
         import portal  # noqa: F401
+
+        for name in ("merge_outgoing_shared_secret", "incoming_peer_secret_ok"):
+            if not hasattr(portal, name):
+                errors.append(f"portal: нет функции {name!r}")
     except Exception as e:
         errors.append(f"portal: {e}")
         _print_errors(errors)

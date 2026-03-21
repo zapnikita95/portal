@@ -17,6 +17,7 @@ import customtkinter as ctk
 import socket
 import threading
 import json
+import hmac
 import shutil
 import pyperclip
 import time
@@ -64,6 +65,47 @@ PORTAL_PORT = 12345
 PEER_STATUS_POLL_MS = 20000
 # Один файл из буфера удалённого ПК по get_clipboard (не гоняем гигабайты по TCP)
 CLIPBOARD_PULL_FILE_MAX_BYTES = 100 * 1024 * 1024
+
+
+def _portal_allow_legacy_no_auth() -> bool:
+    """Принимать соединения без поля secret (небезопасно; только для перехода со старых клиентов)."""
+    return os.environ.get("PORTAL_ALLOW_LEGACY_NO_AUTH", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def merge_outgoing_shared_secret(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Добавить secret в первый JSON запроса, если пароль задан в config.json."""
+    secret = portal_config.load_shared_secret()
+    if not secret:
+        return message
+    out = dict(message)
+    out["secret"] = secret
+    return out
+
+
+def incoming_peer_secret_ok(message: Optional[dict]) -> bool:
+    """Проверка пароля сети на приёме (константное время)."""
+    expected = portal_config.load_shared_secret()
+    if not expected:
+        return True
+    if _portal_allow_legacy_no_auth():
+        return True
+    if not isinstance(message, dict):
+        return False
+    got = message.get("secret")
+    if got is None:
+        return False
+    try:
+        a = str(got).encode("utf-8")
+        b = expected.encode("utf-8")
+    except Exception:
+        return False
+    if len(a) > 512 or len(b) > 512:
+        return False
+    return hmac.compare_digest(a, b)
 
 
 def set_system_clipboard_png(png_bytes: bytes) -> bool:
@@ -185,7 +227,8 @@ def probe_portal_peer(host: str, port: int = PORTAL_PORT, timeout: float = 3.0) 
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(timeout)
         s.connect((host, port))
-        s.sendall(json.dumps({"type": "ping"}, ensure_ascii=False).encode("utf-8"))
+        ping = merge_outgoing_shared_secret({"type": "ping"})
+        s.sendall(json.dumps(ping, ensure_ascii=False).encode("utf-8"))
         data = s.recv(4096)
         s.close()
         if not data:
@@ -648,6 +691,56 @@ class PortalApp(ctk.CTk):
         self.receive_mode_menu.pack(side="left", padx=(0, 8))
         cur_m = portal_config.receive_files_mode()
         self.receive_mode_menu.set(self._receive_files_mode_labels.get(cur_m, self._receive_files_mode_labels["both"]))
+
+        ctk.CTkLabel(
+            peer_frame,
+            text="Пароль сети (shared secret — одинаковый на всех своих ПК, защита в LAN):",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(anchor="w", padx=12, pady=(8, 2))
+        secret_row = ctk.CTkFrame(peer_frame, fg_color="transparent")
+        secret_row.pack(fill="x", padx=12, pady=(0, 4))
+        self.shared_secret_entry = ctk.CTkEntry(
+            secret_row, width=240, placeholder_text="пусто = без пароля (как в старых версиях)"
+        )
+        self.shared_secret_entry.pack(side="left", padx=(0, 8))
+        try:
+            _sec0 = portal_config.load_shared_secret()
+            if _sec0:
+                self.shared_secret_entry.insert(0, _sec0)
+        except Exception:
+            pass
+        ctk.CTkButton(
+            secret_row,
+            text="Сгенерировать",
+            width=118,
+            command=self._generate_shared_secret_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            secret_row,
+            text="Сохранить",
+            width=96,
+            command=self._save_shared_secret_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            secret_row,
+            text="Копировать",
+            width=96,
+            command=self._copy_shared_secret_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left")
+        ctk.CTkLabel(
+            peer_frame,
+            text=(
+                "В общей Wi‑Fi / офисной сети лучше задать пароль. "
+                "На принимающем ПК: PORTAL_ALLOW_LEGACY_NO_AUTH=1 — принять старый клиент без поля secret (временно, небезопасно)."
+            ),
+            font=ctk.CTkFont(size=10),
+            text_color="gray",
+            wraplength=640,
+            justify="left",
+        ).pack(anchor="w", padx=12, pady=(0, 6))
 
         ip_edit_row = ctk.CTkFrame(peer_frame, fg_color="transparent")
         ip_edit_row.pack(fill="x", padx=12, pady=(0, 6))
@@ -1152,6 +1245,38 @@ class PortalApp(ctk.CTk):
             if hasattr(self, "receive_dir_feedback"):
                 self.receive_dir_feedback.configure(text="❌ Ошибка", text_color="#e74c3c")
 
+    def _generate_shared_secret_ui(self) -> None:
+        s = portal_config.generate_shared_secret(8)
+        if hasattr(self, "shared_secret_entry"):
+            self.shared_secret_entry.delete(0, "end")
+            self.shared_secret_entry.insert(0, s)
+        self.log("🔑 Сгенерирован пароль сети — нажми «Сохранить» и введи тот же пароль на других ПК.")
+
+    def _save_shared_secret_ui(self) -> None:
+        if not hasattr(self, "shared_secret_entry"):
+            return
+        raw = self.shared_secret_entry.get().strip()
+        if portal_config.save_shared_secret(raw if raw else None):
+            if raw:
+                self.log("✅ Пароль сети сохранён — на всех своих компьютерах должен быть тот же пароль.")
+            else:
+                self.log("✅ Пароль сети снят: приём как в старых версиях (без проверки).")
+        else:
+            self.log("⚠️ Не удалось сохранить пароль сети (права на config.json?)")
+
+    def _copy_shared_secret_ui(self) -> None:
+        if not hasattr(self, "shared_secret_entry"):
+            return
+        raw = self.shared_secret_entry.get().strip()
+        if not raw:
+            self.log("⚠️ Поле пароля пустое — нечего копировать")
+            return
+        try:
+            pyperclip.copy(raw)
+            self.log("📋 Пароль сети скопирован в буфер")
+        except Exception as e:
+            self.log(f"⚠️ Не удалось скопировать: {e}")
+
     def _parse_peer_ips_draft(self) -> List[str]:
         if not hasattr(self, "peer_ips_text"):
             return list(portal_config.load_peer_ips())
@@ -1468,6 +1593,15 @@ class PortalApp(ctk.CTk):
                 text_color="green",
             )
             self.log(f"✅ Портал запущен, приём на 0.0.0.0:{PORTAL_PORT} (для связи: {shown})")
+            if portal_config.load_shared_secret():
+                self.log(
+                    "🔒 Пароль сети включён — другие ПК должны иметь тот же пароль в настройках "
+                    "(или на этом ПК PORTAL_ALLOW_LEGACY_NO_AUTH=1 для старых клиентов)."
+                )
+            if _portal_allow_legacy_no_auth():
+                self.log(
+                    "⚠️ PORTAL_ALLOW_LEGACY_NO_AUTH=1 — принимаются подключения и без пароля (риск в LAN)."
+                )
             self._refresh_local_link_status_label()
             self._arm_peer_poll()
         except Exception as e:
@@ -1529,6 +1663,24 @@ class PortalApp(ctk.CTk):
                 self._log_from_thread(
                     "⚠️ Клиент прислал не-JSON или обрыв заголовка (ping / метаданные файла)"
                 )
+                return
+
+            if not incoming_peer_secret_ok(message):
+                self._log_from_thread(
+                    f"⚠️ {addr[0]}: отклонено — неверный или отсутствующий пароль сети "
+                    "(укажи тот же пароль в настройках на отправителе; "
+                    "PORTAL_ALLOW_LEGACY_NO_AUTH=1 на приёме — только для старых клиентов)"
+                )
+                try:
+                    _portal_sendall(
+                        client_socket,
+                        json.dumps(
+                            {"type": "portal_auth_failed", "reason": "secret"},
+                            ensure_ascii=False,
+                        ).encode("utf-8"),
+                    )
+                except Exception:
+                    pass
                 return
 
             req = message.get("type")
@@ -2064,11 +2216,15 @@ class PortalApp(ctk.CTk):
         *,
         log: Callable[[str], None],
         context_label: str,
+        attach_secret: bool = True,
     ) -> None:
         """Записать снимок в сокет (ответ get_clipboard или входящий push clipboard_*)."""
+        def _sec(d: Dict[str, Any]) -> Dict[str, Any]:
+            return merge_outgoing_shared_secret(d) if attach_secret else d
+
         if kind == "text":
             t = payload.get("text", "") or ""
-            resp = json.dumps({"type": "clipboard", "text": t}, ensure_ascii=False)
+            resp = json.dumps(_sec({"type": "clipboard", "text": t}), ensure_ascii=False)
             client_socket.sendall(resp.encode("utf-8") + b"\n")
             log(f"📋 {context_label} → текст ({len(t)} симв.)")
             return
@@ -2083,7 +2239,8 @@ class PortalApp(ctk.CTk):
                 except Exception:
                     pass
                 resp = json.dumps(
-                    {"type": "clipboard", "text": t or ""}, ensure_ascii=False
+                    _sec({"type": "clipboard", "text": t or ""}),
+                    ensure_ascii=False,
                 )
                 client_socket.sendall(resp.encode("utf-8") + b"\n")
                 log(f"📋 {context_label} → файлы не прочитались, отдан текст/пусто")
@@ -2096,11 +2253,13 @@ class PortalApp(ctk.CTk):
                     sz = 0
                 if 0 < sz <= CLIPBOARD_PULL_FILE_MAX_BYTES:
                     hdr = json.dumps(
-                        {
-                            "type": "clipboard_file",
-                            "filename": one.name,
-                            "filesize": sz,
-                        },
+                        _sec(
+                            {
+                                "type": "clipboard_file",
+                                "filename": one.name,
+                                "filesize": sz,
+                            }
+                        ),
                         ensure_ascii=False,
                     )
                     client_socket.sendall(hdr.encode("utf-8") + b"\n")
@@ -2125,7 +2284,7 @@ class PortalApp(ctk.CTk):
                 {"filename": os.path.basename(p), "filesize": os.path.getsize(p)}
                 for p in valid_paths
             ]
-            header = {"type": "clipboard_files", "files": specs}
+            header = _sec({"type": "clipboard_files", "files": specs})
             _portal_sendall(
                 client_socket,
                 json.dumps(header, ensure_ascii=False).encode("utf-8"),
@@ -2147,17 +2306,21 @@ class PortalApp(ctk.CTk):
         if kind == "image":
             image_bytes = payload.get("image_bytes") or b""
             if not portal_clip_rich.image_size_ok(len(image_bytes)):
-                resp = json.dumps({"type": "clipboard", "text": ""}, ensure_ascii=False)
+                resp = json.dumps(
+                    _sec({"type": "clipboard", "text": ""}), ensure_ascii=False
+                )
                 client_socket.sendall(resp.encode("utf-8") + b"\n")
                 log(f"📋 {context_label} → картинка слишком большая")
                 return
             mime = payload.get("mime", "image/png")
-            hdr = {
-                "type": "clipboard_rich",
-                "clip_kind": "image",
-                "mime": mime,
-                "size": len(image_bytes),
-            }
+            hdr = _sec(
+                {
+                    "type": "clipboard_rich",
+                    "clip_kind": "image",
+                    "mime": mime,
+                    "size": len(image_bytes),
+                }
+            )
             _portal_sendall(
                 client_socket,
                 json.dumps(hdr, ensure_ascii=False).encode("utf-8"),
@@ -2170,7 +2333,7 @@ class PortalApp(ctk.CTk):
             )
             return
 
-        resp = json.dumps({"type": "clipboard", "text": ""}, ensure_ascii=False)
+        resp = json.dumps(_sec({"type": "clipboard", "text": ""}), ensure_ascii=False)
         client_socket.sendall(resp.encode("utf-8") + b"\n")
         log(f"📋 {context_label} → неизвестный снимок буфера")
     
@@ -2194,6 +2357,7 @@ class PortalApp(ctk.CTk):
                 payload,
                 log=self._log_from_thread,
                 context_label="get_clipboard",
+                attach_secret=False,
             )
         except Exception as e:
             self._log_from_thread(f"❌ Ошибка ответа буфера: {str(e)}")
@@ -2289,9 +2453,18 @@ class PortalApp(ctk.CTk):
             _log(f"✅ Подключение установлено: {target_ip}:{PORTAL_PORT}")
             _portal_sendall(
                 client_socket,
-                json.dumps({"type": "get_clipboard"}).encode("utf-8"),
+                json.dumps(
+                    merge_outgoing_shared_secret({"type": "get_clipboard"}),
+                    ensure_ascii=False,
+                ).encode("utf-8"),
             )
             message, rest = read_one_json_object_from_socket(client_socket)
+            if message.get("type") == "portal_auth_failed":
+                _log(
+                    "❌ Удалённый ПК отклонил запрос: неверный пароль сети. "
+                    "Задай тот же пароль в настройках здесь и на машине-приёмнике."
+                )
+                return
             if message.get("type") == "clipboard":
                 text = message.get("text", "")
                 lines = [ln.strip() for ln in (text or "").split("\n") if ln.strip()]
@@ -2565,6 +2738,7 @@ class PortalApp(ctk.CTk):
                 bid, i, n = clip_batch
                 message["clip_batch"] = {"id": bid, "i": i, "n": n}
 
+            message = merge_outgoing_shared_secret(message)
             # Без лимита времени на передачу больших файлов; отдельный таймаут на ответ OK
             client_socket.settimeout(None)
             _portal_sendall(client_socket, json.dumps(message, ensure_ascii=False).encode("utf-8"))
@@ -2745,7 +2919,9 @@ class PortalApp(ctk.CTk):
                     self.log("💡 Проверь что оба ПК в одной сети")
                 return
 
-            message = {"type": "clipboard", "text": clipboard_text}
+            message = merge_outgoing_shared_secret(
+                {"type": "clipboard", "text": clipboard_text}
+            )
             _portal_sendall(
                 client_socket,
                 json.dumps(message, ensure_ascii=False).encode("utf-8"),
