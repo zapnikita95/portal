@@ -22,6 +22,14 @@
 chmod +x "$0" 2>/dev/null
 cd "$(dirname "$0")" || exit 1
 
+# Секреты не в git: положи PORTAL_GITHUB_TOKEN в .env (см. README → Android).
+if [[ -f ".env" ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    source ".env"
+    set +a
+fi
+
 LOG="${HOME}/Library/Logs/portal_nohup.log"
 
 FOREGROUND="${PORTAL_FOREGROUND:-0}"

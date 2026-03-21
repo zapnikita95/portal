@@ -36,5 +36,8 @@ Thumbs.db
 desktop.ini
 
 # Portal specific
+.env
+.env.*
+!.env.example
 Portal_Received/
 chroma_preview_test.png
