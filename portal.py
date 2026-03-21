@@ -509,6 +509,112 @@ def read_one_json_object_from_socket(
         buf += chunk
 
 
+def wire_ctk_entry_paste(entry: Any) -> None:
+    """
+    Явная вставка из буфера (pyperclip) для CTkEntry.
+    На Windows/macOS Tk/CustomTkinter иногда не обрабатывают Ctrl+V, Cmd+V, Shift+Ins и «Вставить» из контекстного меню.
+    """
+    if entry is None:
+        return
+
+    def _paste(event=None):
+        try:
+            raw = pyperclip.paste()
+        except Exception:
+            raw = ""
+        if raw is None:
+            raw = ""
+        s = str(raw).replace("\r\n", "\n")
+        line = s.split("\n", 1)[0]
+        if "\r" in line:
+            line = line.split("\r", 1)[0]
+        try:
+            inner = getattr(entry, "_entry", entry)
+            if inner.selection_present():
+                entry.delete("sel.first", "sel.last")
+        except Exception:
+            try:
+                entry.delete("sel.first", "sel.last")
+            except Exception:
+                pass
+        try:
+            entry.insert("insert", line)
+        except Exception:
+            try:
+                entry.insert("end", line)
+            except Exception:
+                pass
+        return "break"
+
+    for seq in (
+        "<<Paste>>",
+        "<Control-v>",
+        "<Control-V>",
+        "<Shift-Insert>",
+    ):
+        try:
+            entry.bind(seq, _paste, add=True)
+        except Exception:
+            pass
+    if platform.system() == "Darwin":
+        for seq in ("<Command-v>", "<Command-V>", "<Meta-v>", "<Meta-V>"):
+            try:
+                entry.bind(seq, _paste, add=True)
+            except Exception:
+                pass
+
+
+def wire_ctk_textbox_paste(tb: Any) -> None:
+    """Многострочная вставка для CTkTextbox (список IP и т.п.) — тот же обход глюков Tk."""
+    import tkinter as tk
+
+    if tb is None:
+        return
+
+    def _paste(event=None):
+        try:
+            raw = pyperclip.paste()
+        except Exception:
+            raw = ""
+        if raw is None:
+            raw = ""
+        s = str(raw).replace("\r\n", "\n").replace("\r", "\n")
+        try:
+            inner = getattr(tb, "_textbox", tb)
+            if inner.tag_ranges(tk.SEL):
+                tb.delete("sel.first", "sel.last")
+        except Exception:
+            try:
+                tb.delete("sel.first", "sel.last")
+            except Exception:
+                pass
+        try:
+            tb.insert("insert", s)
+        except Exception:
+            try:
+                tb.insert("end", s)
+            except Exception:
+                pass
+        return "break"
+
+    for seq in (
+        "<<Paste>>",
+        "<Control-v>",
+        "<Control-V>",
+        "<Shift-Insert>",
+    ):
+        try:
+            tb.bind(seq, _paste, add=True)
+        except Exception:
+            pass
+    if platform.system() == "Darwin":
+        for seq in ("<Command-v>", "<Command-V>", "<Meta-v>", "<Meta-V>"):
+            try:
+                tb.bind(seq, _paste, add=True)
+            except Exception:
+                pass
+
+
 class PortalApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -783,6 +889,7 @@ class PortalApp(ctk.CTk):
             _msr, width=240, placeholder_text="введи пароль и сохрани"
         )
         self.main_secret_entry.pack(side="left", padx=(0, 8))
+        wire_ctk_entry_paste(self.main_secret_entry)
         ctk.CTkButton(
             _msr,
             text="Сохранить пароль",
@@ -1048,6 +1155,7 @@ class PortalApp(ctk.CTk):
             self.receive_dir_entry.insert(0, str(portal_config.receive_dir_path()))
         except Exception:
             pass
+        wire_ctk_entry_paste(self.receive_dir_entry)
         ctk.CTkButton(
             recv_row,
             text="Обзор…",
@@ -1149,6 +1257,7 @@ class PortalApp(ctk.CTk):
                 self.widget_media_entry.insert(0, _wmp)
         except Exception:
             pass
+        wire_ctk_entry_paste(self.widget_media_entry)
         ctk.CTkButton(
             wm_row1,
             text="Обзор…",
@@ -1209,6 +1318,7 @@ class PortalApp(ctk.CTk):
         )
         self.widget_size_entry.pack(side="left", padx=(0, 10))
         self.widget_size_entry.insert(0, str(portal_config.load_widget_size()))
+        wire_ctk_entry_paste(self.widget_size_entry)
         ctk.CTkLabel(wm_geo, text="Угол:", font=ctk.CTkFont(size=12)).pack(
             side="left", padx=(0, 6)
         )
@@ -1236,6 +1346,7 @@ class PortalApp(ctk.CTk):
         )
         self.widget_margin_x_entry.pack(side="left", padx=(0, 8))
         self.widget_margin_x_entry.insert(0, str(portal_config.load_widget_margin_x()))
+        wire_ctk_entry_paste(self.widget_margin_x_entry)
         ctk.CTkLabel(wm_geo, text="Y:", font=ctk.CTkFont(size=12)).pack(
             side="left", padx=(0, 4)
         )
@@ -1244,6 +1355,7 @@ class PortalApp(ctk.CTk):
         )
         self.widget_margin_y_entry.pack(side="left", padx=(0, 8))
         self.widget_margin_y_entry.insert(0, str(portal_config.load_widget_margin_y()))
+        wire_ctk_entry_paste(self.widget_margin_y_entry)
         ctk.CTkButton(
             wm_geo,
             text="Сохранить размер и угол",
@@ -1350,6 +1462,7 @@ class PortalApp(ctk.CTk):
         self.peer_ips_text.pack(side="left", padx=(0, 10), anchor="nw", fill="both", expand=True)
         self._fill_peer_ips_textbox()
         self.peer_ips_text.bind("<KeyRelease>", self._on_peer_ips_edited)
+        wire_ctk_textbox_paste(self.peer_ips_text)
         btn_col = ctk.CTkFrame(ip_edit_row, fg_color="transparent")
         btn_col.pack(side="left", fill="y")
         ctk.CTkButton(
@@ -1379,6 +1492,7 @@ class PortalApp(ctk.CTk):
                 self.shared_secret_entry.insert(0, _sec0)
         except Exception:
             pass
+        wire_ctk_entry_paste(self.shared_secret_entry)
         ctk.CTkButton(
             secret_row,
             text="Подставить",
@@ -1510,6 +1624,7 @@ class PortalApp(ctk.CTk):
             self.github_repo_entry.insert(0, portal_config.load_github_repo())
         except Exception:
             self.github_repo_entry.insert(0, portal_config.DEFAULT_GITHUB_REPO)
+        wire_ctk_entry_paste(self.github_repo_entry)
         ctk.CTkButton(
             row,
             text="Сохранить",
@@ -2471,6 +2586,7 @@ class PortalApp(ctk.CTk):
         )
         ip_e.insert(0, peer)
         ip_e.pack(side="left", padx=(0, 6))
+        wire_ctk_entry_paste(ip_e)
         ev_labels = list(portal_config.WIDGET_PRESET_EVENT_LABELS_RU.values())
         ev_m = ctk.CTkOptionMenu(
             fr,
@@ -3985,10 +4101,12 @@ class PortalApp(ctk.CTk):
     
     def push_shared_clipboard_hotkey(self):
         """Ctrl+Alt+C / Cmd+Ctrl+C (legacy: Cmd+Shift+C) — отправить локальный буфер на выбранные ПК"""
-        if not self.get_target_ips():
-            self.log("⚠️ Сохрани список IP и отметь получателей (галочки) или укажи IP в виджете")
-            return
-        threading.Thread(target=self._broadcast_clipboard_push_worker, daemon=True).start()
+        # Снимок буфера только на главном потоке Tk: на Windows pywin32/OpenClipboard
+        # и pyperclip из фонового потока часто дают пустой буфер или сбой.
+        try:
+            self.after(0, self._broadcast_clipboard_push_on_main_thread)
+        except Exception:
+            self._broadcast_clipboard_push_on_main_thread()
     
     def pull_shared_clipboard_hotkey(self):
         """Ctrl+Alt+V / Cmd+Ctrl+V — забрать буфер с первого выбранного ПК"""
@@ -4230,7 +4348,8 @@ class PortalApp(ctk.CTk):
         ip_entry = ctk.CTkEntry(dialog, width=200, font=ctk.CTkFont(size=12))
         ip_entry.pack(pady=10)
         ip_entry.insert(0, self.remote_peer_ip or "100.")
-        
+        wire_ctk_entry_paste(ip_entry)
+
         def send():
             ip = ip_entry.get().strip()
             if ip:
@@ -4253,10 +4372,10 @@ class PortalApp(ctk.CTk):
     def send_clipboard_dialog(self):
         """Отправка буфера (текст / картинка / файлы) на все отмеченные ПК."""
         if self.get_target_ips():
-            threading.Thread(
-                target=self._broadcast_clipboard_push_worker,
-                daemon=True,
-            ).start()
+            try:
+                self.after(0, self._broadcast_clipboard_push_on_main_thread)
+            except Exception:
+                self._broadcast_clipboard_push_on_main_thread()
         else:
             self.log("⚠️ Сначала сохрани список IP и отметь получателей")
             dialog = ctk.CTkToplevel(self)
@@ -4271,6 +4390,7 @@ class PortalApp(ctk.CTk):
             ip_entry = ctk.CTkEntry(dialog, width=200, font=ctk.CTkFont(size=12))
             ip_entry.pack(pady=10)
             ip_entry.insert(0, "100.")
+            wire_ctk_entry_paste(ip_entry)
 
             def send():
                 ip = ip_entry.get().strip()
@@ -4279,10 +4399,10 @@ class PortalApp(ctk.CTk):
                     portal_config.save_peer_send_targets([ip])
                     self.rebuild_peer_checkboxes()
                     dialog.destroy()
-                    threading.Thread(
-                        target=self._broadcast_clipboard_push_worker,
-                        daemon=True,
-                    ).start()
+                    try:
+                        self.after(0, self._broadcast_clipboard_push_on_main_thread)
+                    except Exception:
+                        self._broadcast_clipboard_push_on_main_thread()
 
             send_button = ctk.CTkButton(
                 dialog,
@@ -4425,97 +4545,102 @@ class PortalApp(ctk.CTk):
                 except Exception:
                     pass
     
-    def _broadcast_clipboard_push_worker(self) -> None:
-        """Фон: файлы из буфера → send_file; картинка без путей → PNG; иначе текст."""
-        with self._clipboard_push_lock:
-            self._broadcast_clipboard_push_worker_impl()
-
-    def _broadcast_clipboard_push_worker_impl(self) -> None:
-        """Тот же протокол, что и ответ get_clipboard: clipboard / clipboard_file(s) / clipboard_rich."""
-        targets = self.get_target_ips()
-        if not targets:
-            self.log("⚠️ Нет получателей — отметь IP галочками")
-            return
-
-        kind, payload = self._clipboard_snapshot_resolved_for_send()
-        if kind == "empty":
+    def _broadcast_clipboard_push_on_main_thread(self) -> None:
+        """
+        Только главный поток Tk: чтение буфера + постановка TCP-потоков.
+        Иначе на Windows фоновый поток часто видит «пустой» буфер (OpenClipboard/pyperclip).
+        """
+        if not self.get_target_ips():
             self.log(
-                "⚠️ Буфер пуст (нет текста, картинки и скопированных файлов)"
+                "⚠️ Сохрани список IP и отметь получателей (галочки) или укажи IP в виджете"
             )
             return
 
-        def _push_to_ip(ip: str) -> None:
-            sock: Optional[socket.socket] = None
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(30)
+        with self._clipboard_push_lock:
+            targets = self.get_target_ips()
+            if not targets:
+                self.log("⚠️ Нет получателей — отметь IP галочками")
+                return
+
+            kind, payload = self._clipboard_snapshot_resolved_for_send()
+            if kind == "empty":
+                self.log(
+                    "⚠️ Буфер пуст (нет текста, картинки и скопированных файлов)"
+                )
+                return
+
+            def _push_to_ip(ip: str) -> None:
+                sock: Optional[socket.socket] = None
                 try:
-                    sock.connect((ip, PORTAL_PORT))
-                except ConnectionRefusedError:
-                    self.log(
-                        f"❌ {ip}: порт не принимает (часто Windows 10061) — "
-                        "на том ПК «Запустить портал», проверь IP и файрвол."
-                    )
-                    return
-                except OSError as e:
-                    winerr = getattr(e, "winerror", None)
-                    errno_val = getattr(e, "errno", None)
-                    if winerr == 10061 or errno_val == 10061:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(30)
+                    try:
+                        sock.connect((ip, PORTAL_PORT))
+                    except ConnectionRefusedError:
                         self.log(
-                            f"❌ {ip}: 10061 — на этом адресе не слушает Портал."
+                            f"❌ {ip}: порт не принимает (часто Windows 10061) — "
+                            "на том ПК «Запустить портал», проверь IP и файрвол."
                         )
                         return
-                    raise
-                sock.settimeout(600)
-                sent_ok = self._emit_resolved_clipboard_payload(
-                    sock,
-                    kind,
-                    payload,
-                    log=self.log,
-                    context_label=f"push → {ip}",
-                )
-                if sent_ok:
-                    try:
-                        self.after(
-                            0,
-                            lambda ip_=ip: self._pulse_portal_widget(
-                                pulse_event="send", peer_ip=ip_
-                            ),
-                        )
-                    except Exception:
-                        pass
-            except Exception as e:
-                err = str(e)
-                if "10061" in err:
-                    self.log(
-                        f"❌ {ip}: 10061 — приём не запущен или неверный IP (Tailscale/VPN)."
+                    except OSError as e:
+                        winerr = getattr(e, "winerror", None)
+                        errno_val = getattr(e, "errno", None)
+                        if winerr == 10061 or errno_val == 10061:
+                            self.log(
+                                f"❌ {ip}: 10061 — на этом адресе не слушает Портал."
+                            )
+                            return
+                        raise
+                    sock.settimeout(600)
+                    sent_ok = self._emit_resolved_clipboard_payload(
+                        sock,
+                        kind,
+                        payload,
+                        log=self.log,
+                        context_label=f"push → {ip}",
                     )
-                else:
-                    self.log(f"❌ {ip}: отправка буфера — {err}")
-            finally:
-                if sock is not None:
-                    try:
-                        sock.close()
-                    except OSError:
-                        pass
+                    if sent_ok:
+                        try:
+                            self.after(
+                                0,
+                                lambda ip_=ip: self._pulse_portal_widget(
+                                    pulse_event="send", peer_ip=ip_
+                                ),
+                            )
+                        except Exception:
+                            pass
+                except Exception as e:
+                    err = str(e)
+                    if "10061" in err:
+                        self.log(
+                            f"❌ {ip}: 10061 — приём не запущен или неверный IP (Tailscale/VPN)."
+                        )
+                    else:
+                        self.log(f"❌ {ip}: отправка буфера — {err}")
+                finally:
+                    if sock is not None:
+                        try:
+                            sock.close()
+                        except OSError:
+                            pass
 
-        for ip in targets:
-            threading.Thread(target=_push_to_ip, args=(ip,), daemon=True).start()
+            for ip in targets:
+                threading.Thread(target=_push_to_ip, args=(ip,), daemon=True).start()
 
-        if kind == "text":
-            summary = f"📤 Буфер (текст) → {len(targets)} ПК"
-        elif kind == "files":
-            n = len([p for p in (payload.get("paths") or []) if os.path.isfile(p)])
-            summary = (
-                f"📤 Буфер: {n} файл(ов) (clipboard_files) → {len(targets)} ПК"
-            )
-        elif kind == "image":
-            summary = (
-                f"📤 Буфер: картинка (clipboard_rich) → {len(targets)} ПК"
-            )
-        else:
-            summary = f"📤 Буфер → {len(targets)} ПК"
-        self.log(summary)
+            if kind == "text":
+                summary = f"📤 Буфер (текст) → {len(targets)} ПК"
+            elif kind == "files":
+                n = len([p for p in (payload.get("paths") or []) if os.path.isfile(p)])
+                summary = (
+                    f"📤 Буфер: {n} файл(ов) (clipboard_files) → {len(targets)} ПК"
+                )
+            elif kind == "image":
+                summary = (
+                    f"📤 Буфер: картинка (clipboard_rich) → {len(targets)} ПК"
+                )
+            else:
+                summary = f"📤 Буфер → {len(targets)} ПК"
+            self.log(summary)
     
     def send_clipboard(self, target_ip: str):
         """Синхронизация / совместимость: отправить текущий текст буфера."""
@@ -4596,19 +4721,23 @@ class PortalApp(ctk.CTk):
                     self.after(1000, self._clipboard_tick)
                     return
                 current = pyperclip.paste()
+                if current is None:
+                    current = ""
                 if current != self.last_clipboard:
                     self.last_clipboard = current
-                    if self.sync_clipboard_enabled:
+                    if self.sync_clipboard_enabled and str(current).strip():
                         ips = self.get_target_ips()
                         if ips:
                             if not self._try_begin_clipboard_wave():
                                 pass
                             else:
+                                # Текст уже прочитан на главном потоке — не вызывать pyperclip из фона (Windows).
+                                captured = current
 
                                 def _auto_wave():
                                     try:
                                         for ip in ips:
-                                            self.send_clipboard(ip)
+                                            self.send_clipboard_text(ip, captured)
                                     finally:
                                         self._end_clipboard_wave()
 

@@ -1875,17 +1875,17 @@ class GlobalHotkeyManager:
         Биндим несколько вариантов написания.
         """
         def _toggle(e=None):
-            self._log("🔑 Tk bind → переключить виджет", "🔑")
+            self._log("Tk bind → переключить виджет", "🔑")
             self._toggle_ui()
             return "break"
 
         def _push(e=None):
-            self._log("🔑 Tk bind → отправить буфер", "🔑")
+            self._log("Tk bind → отправить буфер", "🔑")
             self._on_push()
             return "break"
 
         def _pull(e=None):
-            self._log("🔑 Tk bind → забрать буфер с удалённого ПК", "🔑")
+            self._log("Tk bind → забрать буфер с удалённого ПК", "🔑")
             self._on_pull()
             return "break"
 
@@ -2110,13 +2110,13 @@ class GlobalHotkeyManager:
                         if c in (ord("t"), ord("c"), ord("v")):
                             self._hotkey_pipe_got_byte = True
                         if c == ord("t"):
-                            self._log("🔑 Глобальный хоткей → виджет", "🔑")
+                            self._log("Глобальный хоткей → виджет", "🔑")
                             self._toggle_ui()
                         elif c == ord("c"):
-                            self._log("🔑 Глобальный хоткей → отправить буфер", "🔑")
+                            self._log("Глобальный хоткей → отправить буфер", "🔑")
                             self._on_push()
                         elif c == ord("v"):
-                            self._log("🔑 Глобальный хоткей → забрать буфер", "🔑")
+                            self._log("Глобальный хоткей → забрать буфер", "🔑")
                             self._on_pull()
             except BlockingIOError:
                 pass
@@ -2179,13 +2179,13 @@ class GlobalHotkeyManager:
 
     def _dispatch_local_hotkey(self, cmd: str) -> None:
         if cmd == "t":
-            self._log("🔑 Local → виджет", "🔑")
+            self._log("Local → виджет", "🔑")
             self._toggle_ui()
         elif cmd == "c":
-            self._log("🔑 Local → отправить буфер", "🔑")
+            self._log("Local → отправить буфер", "🔑")
             self._on_push()
         elif cmd == "v":
-            self._log("🔑 Local → забрать буфер", "🔑")
+            self._log("Local → забрать буфер", "🔑")
             self._on_pull()
 
     def _nsevent_match_command(self, event) -> Optional[str]:
@@ -2303,7 +2303,9 @@ class GlobalHotkeyManager:
                 self._log(f"✅ pynput GlobalHotKeys: {label}")
                 h.join()
         except Exception as e:
-            self._log(f"pynput GlobalHotKeys ({label}): {e}")
+            self._log(
+                f"pynput GlobalHotKeys ({label}): {type(e).__name__}: {e!r}"
+            )
 
     def _run_mac_hotkey_helper_subprocess(self) -> None:
         """Запуск portal_mac_hotkey_helper.py; stdout → байты в pipe → _poll_hotkey_queue."""
@@ -2393,7 +2395,8 @@ class GlobalHotkeyManager:
             "<ctrl>+<alt>+С": self.push_clipboard,
             "<ctrl>+<alt>+м": self.pull_clipboard,
             "<ctrl>+<alt>+М": self.pull_clipboard,
-            "<win>+<shift>+p": self.toggle_widget,
+            # В pynput клавиша Win = Key.cmd (не существует тега <win>)
+            "<cmd>+<shift>+p": self.toggle_widget,
         }
         self._run_pynput_hotkeys(
             combo,
@@ -2416,6 +2419,7 @@ class GlobalHotkeyManager:
 
     def toggle_widget(self):
         """Из чужого потока — только в очередь → PortalApp._drain_ui_signal_queue."""
+        self._log("Глобальный хоткей → виджет", "🔑")
         self._enqueue_toggle()
 
     def _on_toggle(self):
@@ -2444,9 +2448,11 @@ class GlobalHotkeyManager:
                 pass
 
     def push_clipboard(self):
+        self._log("Глобальный хоткей → отправить буфер", "🔑")
         self._enqueue_push()
 
     def pull_clipboard(self):
+        self._log("Глобальный хоткей → забрать буфер", "🔑")
         self._enqueue_pull()
 
 

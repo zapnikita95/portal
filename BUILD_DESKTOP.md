@@ -141,3 +141,26 @@ xattr -dr com.apple.quarantine dist/Portal.app
 ## 5. Отладка без консоли
 
 Сборка **без чёрного окна консоли**. Если нужен вывод в терминал — временно в `pyinstaller_portal.spec` поставь `console=True` для `EXE` и пересобери.
+
+## 6. «Обычный» установщик (опционально)
+
+Сборка PyInstaller даёт **портативную папку** — это нормально. Если нужен мастер «Далее → Далее»:
+
+### Windows (.exe установщик)
+
+1. Собери приложение: `pyinstaller -y pyinstaller_portal.spec` → папка **`dist/Portal/`** (внутри `Portal.exe` и остальное).
+2. Установи **[Inno Setup](https://jrsoftware.org/isinfo.php)** (бесплатно) → **Create a new script using the Script Wizard**.
+3. В мастере: **Application main executable** = `dist/Portal/Portal.exe`; добавь **всю папку** `dist/Portal` как файлы (чтобы рядом остались DLL и `_internal`), целевая папка например `{autopf}\Portal`, поставь галочку **ярлык на рабочем столе / в меню Пуск**.
+4. Скомпилируй скрипт — получишь один **`Setup.exe`** (или как назовёшь).
+
+Альтернативы: **NSIS**, **WiX Toolset** — по сути то же: упаковать содержимое `dist/Portal` в Program Files + ярлык.
+
+### macOS (.dmg)
+
+1. После сборки лежит **`dist/Portal.app`**.
+2. В **Дисковой утилите** → **Файл → Новый образ → Пустой образ** → перетащи в открывшееся окно **`Portal.app`** и (по желанию) ярлык на папку «Программы» → сохрани как `.dmg`.  
+   Либо утилита **`create-dmg`** (Homebrew: `brew install create-dmg`) — удобнее для красивого окна «перетащи в Программы».
+
+Подпись и нотаризация для чужих Mac — отдельно, нужен **Apple Developer Program**; без этого пользователи всё равно могут обойти карантин (`xattr`), см. выше.
+
+Общий обзор «ZIP vs установщик»: **[DISTRIBUTION.md](DISTRIBUTION.md)**.
