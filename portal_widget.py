@@ -1756,7 +1756,8 @@ class GlobalHotkeyManager:
         self._last_pull_debounce = 0.0
         self._hotkey_helper_proc: Optional[Any] = None
         self._hotkey_pipe_got_byte = False
-        self._helper_nsevent_active = False
+        # Любой из CGEventTap / NSEvent / pynput подтвердил старт (для healthcheck)
+        self._helper_global_listener_ok = False
         # macOS: чтение pipe через Tk fileevent — иначе after(25) замирает при свёрнутом окне
         self._mac_pipe_fileevent_installed = False
 
@@ -1862,8 +1863,9 @@ class GlobalHotkeyManager:
                     except Exception:
                         pass
                     self._log(
-                        "⌛ macOS 3.13+: запуск глобальных хоткеев (NSEvent → pynput fallback). "
-                        "Нужны права «Мониторинг ввода» + «Универсальный доступ» для Portal.app"
+                        "⌛ macOS 3.13+: глобальные хоткеи — отдельный процесс "
+                        "(CGEventTap → NSEvent → pynput). Нужен «Мониторинг ввода» для Portal.app; "
+                        "после выдачи прав полностью перезапусти Portal."
                     )
         else:
             t = threading.Thread(target=self._run_win, daemon=True, name="portal-hotkeys-win")
@@ -2170,7 +2172,7 @@ class GlobalHotkeyManager:
         if os.environ.get("PORTAL_MAC_NO_HOTKEY_HELPER", "").strip() in ("1", "true", "yes"):
             return
         # Всё хорошо: монитор активен или уже пришёл хоткей
-        if self._hotkey_pipe_got_byte or self._helper_nsevent_active:
+        if self._hotkey_pipe_got_byte or self._helper_global_listener_ok:
             return
         proc = self._hotkey_helper_proc
         if proc is not None and proc.poll() is not None:
@@ -2440,19 +2442,27 @@ class GlobalHotkeyManager:
                                 except (OSError, BlockingIOError, TypeError, ValueError):
                                     pass
                             elif cl.startswith("i "):
-                                # Инфо от helper: nsevent_monitor_ok, pynput_ok, restart
+                                # Инфо от helper: cgevent_tap_ok, nsevent_monitor_ok, pynput_ok
                                 _log_to_file(f"[hotkey-helper] {c}")
-                                if "nsevent_monitor_ok" in cl:
-                                    mgr._helper_nsevent_active = True
+                                if "cgevent_tap_ok" in cl:
+                                    mgr._helper_global_listener_ok = True
                                     portal_thread_log(
                                         mgr.main_app,
-                                        "✅ NSEvent глобальный монитор активен (Cmd+Ctrl+P/C/V из любого приложения)",
+                                        "✅ Глобальные хоткеи: CGEventTap (Cmd+Ctrl+P/C/V из любого приложения)",
+                                        "⌨️",
+                                    )
+                                elif "nsevent_monitor_ok" in cl:
+                                    mgr._helper_global_listener_ok = True
+                                    portal_thread_log(
+                                        mgr.main_app,
+                                        "✅ Глобальные хоткеи: NSEvent (Cmd+Ctrl+P/C/V из любого приложения)",
                                         "⌨️",
                                     )
                                 elif "pynput_ok" in cl:
+                                    mgr._helper_global_listener_ok = True
                                     portal_thread_log(
                                         mgr.main_app,
-                                        "✅ pynput глобальные хоткеи активны (Cmd+Ctrl+P/C/V)",
+                                        "✅ Глобальные хоткеи: pynput (Cmd+Ctrl+P/C/V)",
                                         "⌨️",
                                     )
                     except Exception:

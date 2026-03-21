@@ -11,3 +11,4 @@ tkinterdnd2>=0.3.0
 imageio>=2.33.0
 imageio-ffmpeg>=0.4.9
 pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'
+pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'

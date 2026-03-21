@@ -75,6 +75,7 @@ if sys.platform == "darwin":
             "Foundation",
             "objc",
             "PyObjCTools",
+            "Quartz",
         ]
     )
 
