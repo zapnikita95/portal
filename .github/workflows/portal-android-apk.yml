@@ -1,10 +1,7 @@
-# Скопируй этот файл в репозиторий как:
-#   .github/workflows/portal-android-apk.yml
-# (через веб GitHub: Add file → Create new file), если push workflow блокирует токен без scope «workflow».
-#
 # Сборка debug APK (Buildozer).
 # — Артефакт Actions: portal-debug-apk
-# — GitHub Release: тег portal-android-latest, файл Portal-Android.apk
+# — GitHub Release: тег portal-android-latest, файл Portal-Android.apk (для кнопки «Скачать» в десктопе)
+# Локально: см. portal-android/Dockerfile
 name: Portal Android APK
 
 on:

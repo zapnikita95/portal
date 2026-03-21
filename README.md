@@ -72,11 +72,13 @@
 
 Каталог **[`portal-android/`](portal-android/)** — Kivy + Share Sheet, тот же TCP-протокол. Подробности: [`portal-android/README.md`](portal-android/README.md).
 
-В **главном окне Портала** (блок *Android APK*): ссылки на **GitHub Actions** и кнопка **«Запустить сборку APK»**.  
-- Без токена: откроется страница workflow — вручную **Run workflow**, затем в списке запусков скачай **Artifacts → portal-debug-apk**.  
-- С токеном: задай **`PORTAL_GITHUB_TOKEN`** (PAT с правами **repo** + **workflow**) и при необходимости **`PORTAL_GITHUB_REPO=owner/repo`**, **`PORTAL_GITHUB_BRANCH=main`** — тогда кнопка сама шлёт `workflow_dispatch` в API.
+В приложении: **📥 APK → «Скачать APK с GitHub»** — файл кладётся в **`Загрузки/Portal-Android.apk`** (из GitHub Release, тег **`portal-android-latest`**).
 
-Шаблон workflow для GitHub Actions: **[`portal-android/github-workflow-portal-android-apk.yml`](portal-android/github-workflow-portal-android-apk.yml)** — создай в репозитории на GitHub путь **`.github/workflows/portal-android-apk.yml`** и вставь это содержимое (Add file → Create new file). Либо запушь `.github/` с машины, где **SSH** или PAT с scope **workflow**.
+**Как выложить APK на GitHub (один раз настроить CI):** в репо уже есть **[`.github/workflows/portal-android-apk.yml`](.github/workflows/portal-android-apk.yml)** — после push запусти workflow вручную (**Actions → Portal Android APK → Run workflow**) или дождись сборки по push в `portal-android/**`. Успешный run публикует **`Portal-Android.apk`** в релиз с тегом `portal-android-latest` (обновляется при каждой сборке). Дополнительно остаётся артефакт **portal-debug-apk**.
+
+Опционально **`PORTAL_GITHUB_TOKEN`** (PAT: **repo** + **workflow**) — тогда **«Собрать на GitHub»** в окне APK шлёт `workflow_dispatch` без браузера. **`PORTAL_GITHUB_REPO`**, **`PORTAL_GITHUB_BRANCH`** — если не хочешь менять `owner/repo` в настройках.
+
+Шаблон-копия workflow: **[`portal-android/github-workflow-portal-android-apk.yml`](portal-android/github-workflow-portal-android-apk.yml)**.
 
 Локальная сборка: **Docker** — [`portal-android/Dockerfile`](portal-android/Dockerfile).
 
@@ -245,7 +247,9 @@ Portal/
 - **Python 3.13 + Drag&Drop в главном окне**: патч в `portal_tk_compat.py` вызывается **после** `TkinterDnD._require(...)` — иначе методы ещё не на `BaseWidget`, и `drop_target_register` не появится на `Misc`/CTk.
 - **macOS: Терминал всплывает при Cmd+Shift+C?** Запускай через `start_portal.command` — по умолчанию Портал уходит в **фон** (`nohup`), лог `~/Library/Logs/portal_nohup.log`. Передний план только для отладки: `./start_portal.command --foreground`.
 - **macOS: виджет не виден / нужна магента-хромакей?** `PORTAL_MAC_CHROMA_ONLY=1 ./start_portal.command` (по умолчанию в скрипте **не** задаётся — пробуем нормальную прозрачность).
-- **Журнал:** кнопка «Копировать весь журнал», Cmd/Ctrl+C в поле журнала; дублирование в `portal_activity.log` рядом с `config.json` (macOS: `~/Library/Application Support/Portal/`).
+- **Интерфейс:** сверху кнопки **⚙ Настройки** (папка приёма, режим входящих, виджет, список пиров, пароль), **📥 APK**, **📋 Журнал**, **❓** (горячие клавиши). На главном экране — кому слать и (если пароль ещё не задан) баннер «Пароль сети».
+- **Автозапуск приёма:** при старте приложения сервер поднимается сам. Отключить: `PORTAL_NO_AUTO_START=1`.
+- **Журнал:** окно по кнопке «📋 Журнал»; «Копировать всё», Cmd/Ctrl+C в поле; дублирование в `portal_activity.log` рядом с `config.json` (macOS: `~/Library/Application Support/Portal/`).
 - **Глобальные хоткеи на Mac**: в «Конфиденциальность» нужны **и** Универсальный доступ, **и** **Мониторинг ввода** (Input Monitoring) — это разные переключатели. После фонового запуска добавь в список тот `python3`, который реально в PATH (см. `which python3`).
 
 ## 📄 Лицензия

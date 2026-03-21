@@ -479,7 +479,11 @@ class PortalApp(ctk.CTk):
         self.portal_widget_ref: Optional[Any] = None
         self._hotkey_mgr: Optional[Any] = None
         self._widget_pulse_generation: int = 0
-        
+        self._settings_win: Optional[ctk.CTkToplevel] = None
+        self._log_win: Optional[ctk.CTkToplevel] = None
+        self._apk_win: Optional[ctk.CTkToplevel] = None
+        self._help_win: Optional[ctk.CTkToplevel] = None
+
         # Создание UI
         self.create_ui()
         
@@ -591,34 +595,59 @@ class PortalApp(ctk.CTk):
             return None
     
     def create_ui(self):
-        """Создание интерфейса"""
-        # Всё в одном вертикальном скролле — до журнала можно долистать колёсиком / трекпадом
+        """Создание интерфейса: верхняя панель + главный скролл; настройки/APK/лог/справка — отдельные окна."""
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        toolbar = ctk.CTkFrame(self, fg_color="transparent")
+        toolbar.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 4))
+        ctk.CTkLabel(
+            toolbar,
+            text="🌀 Портал",
+            font=ctk.CTkFont(size=20, weight="bold"),
+        ).pack(side="left", padx=(0, 14))
+        ctk.CTkButton(
+            toolbar,
+            text="⚙ Настройки",
+            width=118,
+            command=self._open_settings_window,
+            font=ctk.CTkFont(size=13),
+        ).pack(side="left", padx=3)
+        ctk.CTkButton(
+            toolbar,
+            text="📥 APK",
+            width=82,
+            command=self._open_apk_window,
+            font=ctk.CTkFont(size=13),
+        ).pack(side="left", padx=3)
+        ctk.CTkButton(
+            toolbar,
+            text="📋 Журнал",
+            width=100,
+            command=self._open_log_window,
+            font=ctk.CTkFont(size=13),
+        ).pack(side="left", padx=3)
+        ctk.CTkButton(
+            toolbar,
+            text="❓",
+            width=40,
+            command=self._open_help_window,
+            font=ctk.CTkFont(size=14),
+        ).pack(side="left", padx=3)
+
         outer = ctk.CTkFrame(self, fg_color="transparent")
-        outer.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
+        outer.grid(row=1, column=0, sticky="nsew", padx=6, pady=(0, 8))
         outer.grid_columnconfigure(0, weight=1)
         outer.grid_rowconfigure(0, weight=1)
         main_frame = ctk.CTkScrollableFrame(outer, fg_color="transparent")
         main_frame.grid(row=0, column=0, sticky="nsew")
-        outer.grid_rowconfigure(0, weight=1)
-        outer.grid_columnconfigure(0, weight=1)
-        
-        # Заголовок
-        title_label = ctk.CTkLabel(
+
+        ctk.CTkLabel(
             main_frame,
-            text="🌀 ПОРТАЛ",
-            font=ctk.CTkFont(size=32, weight="bold")
-        )
-        title_label.pack(pady=(20, 10))
-        
-        subtitle = ctk.CTkLabel(
-            main_frame,
-            text="Передача файлов и синхронизация буфера обмена",
-            font=ctk.CTkFont(size=14),
-            text_color="gray"
-        )
-        subtitle.pack(pady=(0, 30))
+            text="Передача файлов и общий буфер · пиры и папки — в ⚙ Настройки",
+            font=ctk.CTkFont(size=13),
+            text_color="gray",
+        ).pack(pady=(10, 14))
         
         # Информация о подключении
         info_frame = ctk.CTkFrame(main_frame)
@@ -649,402 +678,56 @@ class PortalApp(ctk.CTk):
             )
             warning_label.pack(pady=10)
         
-        # IP компьютеров в сетке (сохраняется в %APPDATA%/Portal или ~/Library/...)
         peer_frame = ctk.CTkFrame(main_frame)
         peer_frame.pack(fill="x", padx=20, pady=(0, 10))
-        ctk.CTkLabel(
-            peer_frame,
-            text="🖥 IP других компьютеров (Tailscale / LAN) — список, несколько строк:",
-            font=ctk.CTkFont(size=13, weight="bold"),
-        ).pack(anchor="w", padx=12, pady=(10, 4))
-        ctk.CTkLabel(
-            peer_frame,
-            text="Сохраняется на диск. Ниже отметь галочками, кому слать сразу (файлы, буфер, виджет).",
-            font=ctk.CTkFont(size=11),
-            text_color="gray",
-        ).pack(anchor="w", padx=12, pady=(0, 4))
-        ctk.CTkLabel(
-            peer_frame,
-            text=f"💡 Только IP в строке (например 100.65.63.84), порт :{PORTAL_PORT} добавляется сам.",
-            font=ctk.CTkFont(size=11),
-            text_color="gray70",
-        ).pack(anchor="w", padx=12, pady=(0, 8))
 
-        ctk.CTkLabel(
-            peer_frame,
-            text="📁 Папка для входящих файлов (по умолчанию — Рабочий стол):",
-            font=ctk.CTkFont(size=12, weight="bold"),
-        ).pack(anchor="w", padx=12, pady=(4, 2))
-        ctk.CTkLabel(
-            peer_frame,
-            text="К этой папке относятся и файлы из буфера с другого ПК (отправка/забрать буфер), "
-            "кроме режима «только в буфер» — там сохранение во временную папку.",
-            font=ctk.CTkFont(size=10),
-            text_color="gray",
-        ).pack(anchor="w", padx=12, pady=(0, 2))
-        recv_row = ctk.CTkFrame(peer_frame, fg_color="transparent")
-        recv_row.pack(fill="x", padx=12, pady=(0, 8))
-        self.receive_dir_entry = ctk.CTkEntry(recv_row, width=360, placeholder_text="~/Desktop")
-        self.receive_dir_entry.pack(side="left", padx=(0, 8))
-        try:
-            self.receive_dir_entry.insert(0, str(portal_config.receive_dir_path()))
-        except Exception:
-            pass
-        ctk.CTkButton(
-            recv_row,
-            text="Обзор…",
-            width=88,
-            command=self.choose_receive_dir,
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(
-            recv_row,
-            text="Сохранить папку",
-            width=130,
-            command=self.save_receive_dir_from_ui,
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left")
-        self.receive_dir_feedback = ctk.CTkLabel(
-            recv_row, text="", font=ctk.CTkFont(size=12), text_color="gray"
-        )
-        self.receive_dir_feedback.pack(side="left", padx=(8, 0))
-
-        ctk.CTkLabel(
-            peer_frame,
-            text="Внешний вид портала (GIF/PNG/JPEG/WebP — виджет на столе):",
-            font=ctk.CTkFont(size=12, weight="bold"),
-        ).pack(anchor="w", padx=12, pady=(10, 2))
-        wm_row1 = ctk.CTkFrame(peer_frame, fg_color="transparent")
-        wm_row1.pack(fill="x", padx=12, pady=(0, 4))
-        self.widget_media_entry = ctk.CTkEntry(
-            wm_row1,
-            width=340,
-            placeholder_text="пусто = только папка assets/ в проекте",
-            font=ctk.CTkFont(size=12),
-        )
-        self.widget_media_entry.pack(side="left", padx=(0, 8))
-        try:
-            _wmp = portal_config.load_widget_media_path()
-            if _wmp:
-                self.widget_media_entry.insert(0, _wmp)
-        except Exception:
-            pass
-        ctk.CTkButton(
-            wm_row1,
-            text="Обзор…",
-            width=88,
-            command=self.choose_widget_media_file,
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(
-            wm_row1,
-            text="Видео → GIF",
-            width=100,
-            command=self.choose_widget_video_convert_to_gif,
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(
-            wm_row1,
-            text="Сброс",
-            width=72,
-            command=self.clear_widget_media_from_ui,
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left")
-        wm_row2 = ctk.CTkFrame(peer_frame, fg_color="transparent")
-        wm_row2.pack(fill="x", padx=12, pady=(0, 6))
-        self._widget_media_mode_labels_ru = dict(portal_config.WIDGET_MEDIA_MODE_LABELS_RU)
-        self._widget_media_mode_rev = {
-            v: k for k, v in self._widget_media_mode_labels_ru.items()
-        }
-        self.widget_media_mode_menu = ctk.CTkOptionMenu(
-            wm_row2,
-            values=list(self._widget_media_mode_labels_ru.values()),
-            command=lambda _c: None,
-            width=460,
-            font=ctk.CTkFont(size=12),
-        )
-        self.widget_media_mode_menu.pack(side="left", padx=(0, 8))
-        _wmm = portal_config.load_widget_media_mode()
-        self.widget_media_mode_menu.set(
-            self._widget_media_mode_labels_ru.get(
-                _wmm, self._widget_media_mode_labels_ru["auto"]
-            )
-        )
-        ctk.CTkButton(
-            wm_row2,
-            text="Сохранить внешний вид",
-            width=168,
-            command=self.save_widget_media_from_ui,
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left")
-        wm_geo = ctk.CTkFrame(peer_frame, fg_color="transparent")
-        wm_geo.pack(fill="x", padx=12, pady=(6, 4))
-        ctk.CTkLabel(
-            wm_geo,
-            text="Размер (квадрат, px):",
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 6))
-        self.widget_size_entry = ctk.CTkEntry(
-            wm_geo, width=56, font=ctk.CTkFont(size=12)
-        )
-        self.widget_size_entry.pack(side="left", padx=(0, 10))
-        self.widget_size_entry.insert(0, str(portal_config.load_widget_size()))
-        ctk.CTkLabel(
-            wm_geo,
-            text="Угол:",
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 6))
-        self._widget_corner_labels_ru = dict(portal_config.WIDGET_CORNER_LABELS_RU)
-        self._widget_corner_rev = {v: k for k, v in self._widget_corner_labels_ru.items()}
-        self.widget_corner_menu = ctk.CTkOptionMenu(
-            wm_geo,
-            values=list(self._widget_corner_labels_ru.values()),
-            command=lambda _c: None,
-            width=168,
-            font=ctk.CTkFont(size=12),
-        )
-        self.widget_corner_menu.pack(side="left", padx=(0, 10))
-        _wc = portal_config.load_widget_corner()
-        self.widget_corner_menu.set(
-            self._widget_corner_labels_ru.get(_wc, self._widget_corner_labels_ru["br"])
-        )
-        ctk.CTkLabel(
-            wm_geo,
-            text="Отступ X:",
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 4))
-        self.widget_margin_x_entry = ctk.CTkEntry(
-            wm_geo, width=44, font=ctk.CTkFont(size=12)
-        )
-        self.widget_margin_x_entry.pack(side="left", padx=(0, 8))
-        self.widget_margin_x_entry.insert(0, str(portal_config.load_widget_margin_x()))
-        ctk.CTkLabel(
-            wm_geo,
-            text="Y:",
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 4))
-        self.widget_margin_y_entry = ctk.CTkEntry(
-            wm_geo, width=44, font=ctk.CTkFont(size=12)
-        )
-        self.widget_margin_y_entry.pack(side="left", padx=(0, 8))
-        self.widget_margin_y_entry.insert(0, str(portal_config.load_widget_margin_y()))
-        ctk.CTkButton(
-            wm_geo,
-            text="Сохранить размер и угол",
-            width=178,
-            command=self.save_widget_geometry_from_ui,
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(4, 0))
-        ctk.CTkLabel(
-            peer_frame,
-            text=(
-                "Компактный виджет: например размер 120–160, угол «Снизу справа», отступы 16 / 72. "
-                "Перетаскивание (Alt+ЛКМ) по-прежнему работает."
-            ),
-            font=ctk.CTkFont(size=10),
-            text_color="gray",
-            wraplength=640,
-            justify="left",
-        ).pack(anchor="w", padx=12, pady=(0, 2))
-        ctk.CTkLabel(
-            peer_frame,
-            text=(
-                "Видео для виджета: кнопка «Видео → GIF» или выбери MP4/WebM в «Обзор…» — "
-                "предложит конвертацию в assets/portal_animated.gif. Готовый GIF/PNG — как раньше."
-            ),
-            font=ctk.CTkFont(size=10),
-            text_color="gray",
-            wraplength=640,
-            justify="left",
-        ).pack(anchor="w", padx=12, pady=(0, 4))
-
-        ctk.CTkLabel(
-            peer_frame,
-            text="Android APK (Share → Portal):",
-            font=ctk.CTkFont(size=12, weight="bold"),
-        ).pack(anchor="w", padx=12, pady=(8, 2))
-        apk_row = ctk.CTkFrame(peer_frame, fg_color="transparent")
-        apk_row.pack(fill="x", padx=12, pady=(0, 2))
-        self.github_repo_entry = ctk.CTkEntry(
-            apk_row,
-            width=200,
-            placeholder_text="owner/repo",
-            font=ctk.CTkFont(size=12),
-        )
-        self.github_repo_entry.pack(side="left", padx=(0, 8))
-        try:
-            self.github_repo_entry.insert(0, portal_config.load_github_repo())
-        except Exception:
-            self.github_repo_entry.insert(0, portal_config.DEFAULT_GITHUB_REPO)
-        ctk.CTkButton(
-            apk_row,
-            text="Сохранить repo",
-            width=118,
-            command=self.save_github_repo_from_ui,
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(
-            apk_row,
-            text="Страница сборки APK",
-            width=150,
-            command=self.open_android_apk_workflow_page,
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(
-            apk_row,
-            text="Все запуски Actions",
-            width=138,
-            command=self.open_github_actions_runs_page,
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(
-            apk_row,
-            text="Запустить сборку APK",
-            width=158,
-            command=self.trigger_android_apk_workflow,
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left")
-        ctk.CTkLabel(
-            peer_frame,
-            text=(
-                "Автозапуск сборки: задай переменную окружения PORTAL_GITHUB_TOKEN "
-                "(PAT с правами repo + workflow). Иначе открой «Страница сборки APK» и нажми "
-                "«Run workflow». APK: Actions → последний успешный run → Artifacts → portal-debug-apk."
-            ),
-            font=ctk.CTkFont(size=10),
-            text_color="gray",
-            wraplength=640,
-            justify="left",
-        ).pack(anchor="w", padx=12, pady=(0, 6))
-
-        ctk.CTkLabel(
-            peer_frame,
-            text="Входящие файлы (не «как из буфера» у отправителя — там всегда диск+буфер):",
-            font=ctk.CTkFont(size=12, weight="bold"),
-        ).pack(anchor="w", padx=12, pady=(4, 2))
-        self._receive_files_mode_labels = {
-            "both": "На диск и в буфер (Cmd+V)",
-            "disk_only": "Только в папку приёма",
-            "clipboard_only": "В буфер (+ файл в папке; без «Показать в Finder»)",
-        }
-        rm_row = ctk.CTkFrame(peer_frame, fg_color="transparent")
-        rm_row.pack(fill="x", padx=12, pady=(0, 6))
-        self.receive_mode_menu = ctk.CTkOptionMenu(
-            rm_row,
-            values=list(self._receive_files_mode_labels.values()),
-            command=self._on_receive_files_mode_menu,
-            width=420,
-            font=ctk.CTkFont(size=12),
-        )
-        self.receive_mode_menu.pack(side="left", padx=(0, 8))
-        cur_m = portal_config.receive_files_mode()
-        self.receive_mode_menu.set(self._receive_files_mode_labels.get(cur_m, self._receive_files_mode_labels["both"]))
-
-        ctk.CTkLabel(
-            peer_frame,
-            text="Пароль сети (shared secret — одинаковый на всех своих ПК, защита в LAN):",
-            font=ctk.CTkFont(size=12, weight="bold"),
-        ).pack(anchor="w", padx=12, pady=(8, 2))
-        secret_row = ctk.CTkFrame(peer_frame, fg_color="transparent")
-        secret_row.pack(fill="x", padx=12, pady=(0, 4))
-        self.shared_secret_entry = ctk.CTkEntry(
-            secret_row, width=240, placeholder_text="пусто = без пароля (как в старых версиях)"
-        )
-        self.shared_secret_entry.pack(side="left", padx=(0, 8))
-        try:
-            _sec0 = portal_config.load_shared_secret()
-            if _sec0:
-                self.shared_secret_entry.insert(0, _sec0)
-        except Exception:
-            pass
-        ctk.CTkButton(
-            secret_row,
-            text="Сгенерировать",
-            width=118,
-            command=self._generate_shared_secret_ui,
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(
-            secret_row,
-            text="Сохранить",
-            width=96,
-            command=self._save_shared_secret_ui,
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(
-            secret_row,
-            text="Копировать",
-            width=96,
-            command=self._copy_shared_secret_ui,
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left")
-        ctk.CTkLabel(
-            peer_frame,
-            text=(
-                "В общей Wi‑Fi / офисной сети лучше задать пароль. "
-                "На принимающем ПК: PORTAL_ALLOW_LEGACY_NO_AUTH=1 — принять старый клиент без поля secret (временно, небезопасно)."
-            ),
-            font=ctk.CTkFont(size=10),
-            text_color="gray",
-            wraplength=640,
-            justify="left",
-        ).pack(anchor="w", padx=12, pady=(0, 6))
-
-        ctk.CTkLabel(
-            peer_frame,
-            text=(
-                "Список пиров: один на строку — только IPv4 (100.x.x.x) или «IP Имя» / «IP, Имя» "
-                "(имена только на этом ПК, на другом компе могут быть свои)."
-            ),
-            font=ctk.CTkFont(size=10),
-            text_color="gray",
-            wraplength=640,
-            justify="left",
-        ).pack(anchor="w", padx=12, pady=(0, 2))
-        ip_edit_row = ctk.CTkFrame(peer_frame, fg_color="transparent")
-        ip_edit_row.pack(fill="x", padx=12, pady=(0, 6))
-        self.peer_ips_text = ctk.CTkTextbox(ip_edit_row, width=420, height=100, font=ctk.CTkFont(size=13))
-        self.peer_ips_text.pack(side="left", padx=(0, 10), anchor="nw")
-        self._fill_peer_ips_textbox()
-        self.peer_ips_text.bind("<KeyRelease>", self._on_peer_ips_edited)
-        btn_col = ctk.CTkFrame(ip_edit_row, fg_color="transparent")
-        btn_col.pack(side="left", fill="y")
-        ctk.CTkButton(
-            btn_col,
-            text="Сохранить\nсписок IP",
-            width=130,
-            command=self.save_peer_ips_from_ui,
-            font=ctk.CTkFont(size=12),
-        ).pack(pady=(0, 6))
-        ctk.CTkButton(
-            btn_col,
-            text="Сохранить\nвыбор",
-            width=130,
-            command=self.save_peer_selection_from_ui,
-            font=ctk.CTkFont(size=12),
-        ).pack()
-        self.ip_saved_feedback = ctk.CTkLabel(
+        self._peer_targets_heading = ctk.CTkLabel(
             peer_frame,
             text="",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color="#3dd68c",
+            font=ctk.CTkFont(size=13, weight="bold"),
         )
-        self.ip_saved_feedback.pack(anchor="w", padx=12, pady=(0, 4))
-
         if platform.system() == "Darwin":
             _hk = (
                 "Cmd+Shift+C"
-                if os.environ.get("PORTAL_MAC_HOTKEY_LEGACY", "").strip().lower() in ("1", "true", "yes")
+                if os.environ.get("PORTAL_MAC_HOTKEY_LEGACY", "").strip().lower()
+                in ("1", "true", "yes")
                 else "Cmd+Ctrl+C"
             )
         else:
             _hk = "Ctrl+Alt+C"
+        self._peer_targets_heading.configure(
+            text=(
+                f"Кому отправлять ({_hk}, файлы и виджет). "
+                "Список IP редактируется в ⚙ Настройки → вкладка «Пиры»:"
+            )
+        )
+        self._main_secret_frame = ctk.CTkFrame(peer_frame)
         ctk.CTkLabel(
-            peer_frame,
-            text=f"Кому отправлять ({_hk}, файлы, виджет):",
-            font=ctk.CTkFont(size=12, weight="bold"),
-        ).pack(anchor="w", padx=12, pady=(4, 2))
-        # Одна компактная строка с чекбоксами (без высокого ScrollableFrame)
+            self._main_secret_frame,
+            text="Пароль сети (одинаковый на всех своих ПК):",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=4, pady=(0, 4))
+        _msr = ctk.CTkFrame(self._main_secret_frame, fg_color="transparent")
+        _msr.pack(fill="x")
+        self.main_secret_entry = ctk.CTkEntry(
+            _msr, width=240, placeholder_text="введи пароль и сохрани"
+        )
+        self.main_secret_entry.pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            _msr,
+            text="Сохранить пароль",
+            width=130,
+            command=self._save_main_secret_banner,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left")
+        ctk.CTkLabel(
+            self._main_secret_frame,
+            text="Когда пароль задан, менять его можно в ⚙ Настройки → «Пароль».",
+            font=ctk.CTkFont(size=10),
+            text_color="gray",
+        ).pack(anchor="w", padx=4, pady=(4, 0))
+
+        self._peer_targets_heading.pack(anchor="w", padx=12, pady=(8, 4))
         self.peer_select_frame = ctk.CTkFrame(peer_frame, fg_color="transparent", height=42)
         self.peer_select_frame.pack(fill="x", padx=12, pady=(0, 4))
         try:
@@ -1052,53 +735,21 @@ class PortalApp(ctk.CTk):
         except Exception:
             pass
         self.rebuild_peer_checkboxes()
-
-        # Подсказки по хоткеям (виджет + общий буфер)
-        hotkey_frame = ctk.CTkFrame(peer_frame, fg_color="transparent")
-        hotkey_frame.pack(fill="x", padx=12, pady=(0, 10))
-        if platform.system() == "Darwin":
-            _leg = os.environ.get("PORTAL_MAC_HOTKEY_LEGACY", "").strip().lower() in ("1", "true", "yes")
-            if _leg:
-                hotkey_text = (
-                    "🔑 macOS (режим PORTAL_MAC_HOTKEY_LEGACY=1 — может конфликтовать с Терминалом):\n"
-                    "   Портал — Cmd+Option+P\n"
-                    "   Отправить буфер — Cmd+Shift+C\n"
-                    "   Забрать буфер — Cmd+Shift+V (дубль: Cmd+Option+V, если не занято приложением)\n"
-                    "   Русская раскладка — Cmd+Option+з, Cmd+Shift+с / м (дубль: Cmd+Option+м)"
-                )
-            else:
-                hotkey_text = (
-                    "🔑 macOS по умолчанию (Cmd+Ctrl — реже лезет в Терминал):\n"
-                    "   Показать/скрыть портал — Cmd+Ctrl+P\n"
-                    "   Отправить буфер на другие ПК — Cmd+Ctrl+C\n"
-                    "   Забрать буфер с первого отмеченного IP — Cmd+Ctrl+V\n"
-                    "   Русская раскладка (те же физические клавиши) — Cmd+Ctrl+з / с / м"
-                )
-            hotkey_text += (
-                "\n📌 Забрать буфер = **первый отмеченный IP**. На том ПК в логе будет get_clipboard — это ответ твоему запросу."
-                "\n💡 Старые сочетания: экспорт PORTAL_MAC_HOTKEY_LEGACY=1 перед запуском."
-            )
-            if sys.version_info >= (3, 13):
-                hotkey_text += (
-                    "\n✅ Python 3.13+: глобальные хоткеи — отдельный процесс pynput (не падает вместе с окном). "
-                    "Права: Input Monitoring + Универсальный доступ для Терминала/Python. "
-                    "Отключить helper: PORTAL_MAC_NO_HOTKEY_HELPER=1 (только при фокусе на Портале)."
-                )
-        else:
-            hotkey_text = (
-                "🔑 Быстрые клавиши:\n"
-                "   Портал — Ctrl+Alt+P или Win+Shift+P (глобально, pynput). keyboard только PORTAL_HOTKEY_BACKEND=keyboard\n"
-                "   Отправить буфер (текст / картинка / файлы) — Ctrl+Alt+C\n"
-                "   Забрать буфер с другого ПК (текст / файлы / картинка) — Ctrl+Alt+V"
-            )
-        ctk.CTkLabel(
-            hotkey_frame,
-            text=hotkey_text,
+        ctk.CTkButton(
+            peer_frame,
+            text="Сохранить выбор получателей",
+            width=210,
+            command=self.save_peer_selection_from_ui,
             font=ctk.CTkFont(size=12),
-            text_color="gray",
-            justify="left",
-            anchor="w",
-        ).pack(anchor="w")
+        ).pack(anchor="w", padx=12, pady=(8, 4))
+        self.ip_saved_feedback = ctk.CTkLabel(
+            peer_frame,
+            text="",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#3dd68c",
+        )
+        self.ip_saved_feedback.pack(anchor="w", padx=12, pady=(0, 4))
+        self._refresh_main_secret_banner_visibility()
 
         # Статус связи с парой (ping/pong к Порталу на другом ПК)
         self._peer_poll_job = None
@@ -1185,12 +836,586 @@ class PortalApp(ctk.CTk):
         )
         self.status_label.pack(pady=10)
         
-        # Лог: внутри общего скролла + своя прокрутка в текстбоксе
-        log_frame = ctk.CTkFrame(main_frame)
-        log_frame.pack(fill="x", expand=False, padx=12, pady=16)
-        
+        self._setup_floating_log_window()
+
+
+        self._refresh_local_link_status_label()
+        self.after(800, lambda: self.check_peer_connection_async(silent=True))
+        self._arm_peer_poll()
+        self.after(
+            200,
+            lambda: self.log(
+                "📋 Журнал — кнопка «📋 Журнал» сверху. Файл: "
+                + str(portal_config.activity_log_path())
+            ),
+        )
+        self.after(500, self._auto_start_portal_if_enabled)
+
+
+    def _refresh_main_secret_banner_visibility(self) -> None:
+        if not hasattr(self, "_main_secret_frame") or not hasattr(
+            self, "_peer_targets_heading"
+        ):
+            return
+        if portal_config.load_shared_secret():
+            try:
+                self._main_secret_frame.pack_forget()
+            except Exception:
+                pass
+        else:
+            try:
+                self._main_secret_frame.pack(
+                    fill="x",
+                    padx=12,
+                    pady=(4, 10),
+                    before=self._peer_targets_heading,
+                )
+            except Exception:
+                try:
+                    self._main_secret_frame.pack(fill="x", padx=12, pady=(4, 10))
+                except Exception:
+                    pass
+
+    def _save_main_secret_banner(self) -> None:
+        if not hasattr(self, "main_secret_entry"):
+            return
+        raw = self.main_secret_entry.get().strip()
+        if not raw:
+            self.log("⚠️ Введи пароль или оставь пустым и задай в Настройках")
+            return
+        if portal_config.save_shared_secret(raw):
+            self.log("✅ Пароль сохранён")
+            try:
+                self.main_secret_entry.delete(0, "end")
+            except Exception:
+                pass
+            self._refresh_main_secret_banner_visibility()
+            self._sync_settings_secret_entry_from_config()
+
+    def _sync_settings_secret_entry_from_config(self) -> None:
+        if not hasattr(self, "shared_secret_entry"):
+            return
+        try:
+            self.shared_secret_entry.delete(0, "end")
+            s = portal_config.load_shared_secret()
+            if s:
+                self.shared_secret_entry.insert(0, s)
+        except Exception:
+            pass
+
+    def _on_settings_closed(self) -> None:
+        try:
+            self.rebuild_peer_checkboxes()
+            self._sync_settings_secret_entry_from_config()
+            self._refresh_main_secret_banner_visibility()
+        except Exception:
+            pass
+
+    def _open_settings_window(self) -> None:
+        if self._settings_win is not None:
+            try:
+                if self._settings_win.winfo_exists():
+                    self._settings_win.deiconify()
+                    self._settings_win.lift()
+                    self._settings_win.focus_force()
+                    return
+            except Exception:
+                self._settings_win = None
+        win = ctk.CTkToplevel(self)
+        win.title("Настройки · Портал")
+        win.geometry("760x640")
+        win.minsize(640, 520)
+        try:
+            win.transient(self)
+        except Exception:
+            pass
+        self._settings_win = win
+        self._build_settings_window_content(win)
+        win.protocol("WM_DELETE_WINDOW", lambda: self._hide_settings_window())
+
+    def _hide_settings_window(self) -> None:
+        if self._settings_win is not None:
+            try:
+                self._on_settings_closed()
+                self._settings_win.withdraw()
+            except Exception:
+                pass
+
+    def _build_settings_window_content(self, win: ctk.CTkToplevel) -> None:
+        try:
+            if win.winfo_children():
+                return
+        except Exception:
+            pass
+        tab = ctk.CTkTabview(win)
+        tab.pack(fill="both", expand=True, padx=10, pady=10)
+
+        t_recv = tab.add("Папка и приём")
+        t_widget = tab.add("Виджет")
+        t_peers = tab.add("Пиры")
+        t_secret = tab.add("Пароль")
+
+        ctk.CTkLabel(
+            t_recv,
+            text="Папка для входящих файлов (по умолчанию — Рабочий стол):",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=8, pady=(8, 4))
+        ctk.CTkLabel(
+            t_recv,
+            text="К этой папке относятся файлы из буфера с другого ПК, кроме режима «только в буфер».",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+        ).pack(anchor="w", padx=8, pady=(0, 6))
+        recv_row = ctk.CTkFrame(t_recv, fg_color="transparent")
+        recv_row.pack(fill="x", padx=8, pady=(0, 8))
+        self.receive_dir_entry = ctk.CTkEntry(
+            recv_row, width=400, placeholder_text="~/Desktop"
+        )
+        self.receive_dir_entry.pack(side="left", padx=(0, 8))
+        try:
+            self.receive_dir_entry.insert(0, str(portal_config.receive_dir_path()))
+        except Exception:
+            pass
+        ctk.CTkButton(
+            recv_row,
+            text="Обзор…",
+            width=88,
+            command=self.choose_receive_dir,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            recv_row,
+            text="Сохранить папку",
+            width=130,
+            command=self.save_receive_dir_from_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left")
+        self.receive_dir_feedback = ctk.CTkLabel(
+            recv_row, text="", font=ctk.CTkFont(size=12), text_color="gray"
+        )
+        self.receive_dir_feedback.pack(side="left", padx=(8, 0))
+
+        ctk.CTkLabel(
+            t_recv,
+            text="Режим входящих файлов (не из «буферного» push с другого ПК):",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=8, pady=(16, 4))
+        self._receive_files_mode_labels = {
+            "both": "На диск и в буфер (Cmd+V)",
+            "disk_only": "Только в папку приёма",
+            "clipboard_only": "В буфер (+ файл в папке; без «Показать в Finder»)",
+        }
+        rm_row = ctk.CTkFrame(t_recv, fg_color="transparent")
+        rm_row.pack(fill="x", padx=8, pady=(0, 10))
+        self.receive_mode_menu = ctk.CTkOptionMenu(
+            rm_row,
+            values=list(self._receive_files_mode_labels.values()),
+            command=self._on_receive_files_mode_menu,
+            width=440,
+            font=ctk.CTkFont(size=12),
+        )
+        self.receive_mode_menu.pack(side="left", padx=(0, 8))
+        cur_m = portal_config.receive_files_mode()
+        self.receive_mode_menu.set(
+            self._receive_files_mode_labels.get(
+                cur_m, self._receive_files_mode_labels["both"]
+            )
+        )
+
+        ctk.CTkLabel(
+            t_widget,
+            text="Медиа виджета на столе (GIF / PNG / JPEG / WebP):",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=8, pady=(8, 4))
+        wm_row1 = ctk.CTkFrame(t_widget, fg_color="transparent")
+        wm_row1.pack(fill="x", padx=8, pady=(0, 4))
+        self.widget_media_entry = ctk.CTkEntry(
+            wm_row1,
+            width=360,
+            placeholder_text="пусто = только папка assets/ в проекте",
+            font=ctk.CTkFont(size=12),
+        )
+        self.widget_media_entry.pack(side="left", padx=(0, 8))
+        try:
+            _wmp = portal_config.load_widget_media_path()
+            if _wmp:
+                self.widget_media_entry.insert(0, _wmp)
+        except Exception:
+            pass
+        ctk.CTkButton(
+            wm_row1,
+            text="Обзор…",
+            width=88,
+            command=self.choose_widget_media_file,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            wm_row1,
+            text="Видео → GIF",
+            width=100,
+            command=self.choose_widget_video_convert_to_gif,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            wm_row1,
+            text="Сброс",
+            width=72,
+            command=self.clear_widget_media_from_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left")
+        wm_row2 = ctk.CTkFrame(t_widget, fg_color="transparent")
+        wm_row2.pack(fill="x", padx=8, pady=(0, 6))
+        self._widget_media_mode_labels_ru = dict(
+            portal_config.WIDGET_MEDIA_MODE_LABELS_RU
+        )
+        self._widget_media_mode_rev = {
+            v: k for k, v in self._widget_media_mode_labels_ru.items()
+        }
+        self.widget_media_mode_menu = ctk.CTkOptionMenu(
+            wm_row2,
+            values=list(self._widget_media_mode_labels_ru.values()),
+            command=lambda _c: None,
+            width=460,
+            font=ctk.CTkFont(size=12),
+        )
+        self.widget_media_mode_menu.pack(side="left", padx=(0, 8))
+        _wmm = portal_config.load_widget_media_mode()
+        self.widget_media_mode_menu.set(
+            self._widget_media_mode_labels_ru.get(
+                _wmm, self._widget_media_mode_labels_ru["auto"]
+            )
+        )
+        ctk.CTkButton(
+            wm_row2,
+            text="Сохранить внешний вид",
+            width=168,
+            command=self.save_widget_media_from_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left")
+        wm_geo = ctk.CTkFrame(t_widget, fg_color="transparent")
+        wm_geo.pack(fill="x", padx=8, pady=(10, 4))
+        ctk.CTkLabel(
+            wm_geo, text="Размер (px):", font=ctk.CTkFont(size=12)
+        ).pack(side="left", padx=(0, 6))
+        self.widget_size_entry = ctk.CTkEntry(
+            wm_geo, width=56, font=ctk.CTkFont(size=12)
+        )
+        self.widget_size_entry.pack(side="left", padx=(0, 10))
+        self.widget_size_entry.insert(0, str(portal_config.load_widget_size()))
+        ctk.CTkLabel(wm_geo, text="Угол:", font=ctk.CTkFont(size=12)).pack(
+            side="left", padx=(0, 6)
+        )
+        self._widget_corner_labels_ru = dict(portal_config.WIDGET_CORNER_LABELS_RU)
+        self._widget_corner_rev = {
+            v: k for k, v in self._widget_corner_labels_ru.items()
+        }
+        self.widget_corner_menu = ctk.CTkOptionMenu(
+            wm_geo,
+            values=list(self._widget_corner_labels_ru.values()),
+            command=lambda _c: None,
+            width=168,
+            font=ctk.CTkFont(size=12),
+        )
+        self.widget_corner_menu.pack(side="left", padx=(0, 10))
+        _wc = portal_config.load_widget_corner()
+        self.widget_corner_menu.set(
+            self._widget_corner_labels_ru.get(_wc, self._widget_corner_labels_ru["br"])
+        )
+        ctk.CTkLabel(
+            wm_geo, text="Отступ X:", font=ctk.CTkFont(size=12)
+        ).pack(side="left", padx=(0, 4))
+        self.widget_margin_x_entry = ctk.CTkEntry(
+            wm_geo, width=44, font=ctk.CTkFont(size=12)
+        )
+        self.widget_margin_x_entry.pack(side="left", padx=(0, 8))
+        self.widget_margin_x_entry.insert(0, str(portal_config.load_widget_margin_x()))
+        ctk.CTkLabel(wm_geo, text="Y:", font=ctk.CTkFont(size=12)).pack(
+            side="left", padx=(0, 4)
+        )
+        self.widget_margin_y_entry = ctk.CTkEntry(
+            wm_geo, width=44, font=ctk.CTkFont(size=12)
+        )
+        self.widget_margin_y_entry.pack(side="left", padx=(0, 8))
+        self.widget_margin_y_entry.insert(0, str(portal_config.load_widget_margin_y()))
+        ctk.CTkButton(
+            wm_geo,
+            text="Сохранить размер и угол",
+            width=178,
+            command=self.save_widget_geometry_from_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(4, 0))
+        ctk.CTkLabel(
+            t_widget,
+            text=(
+                "Компактно: 120–160 px, угол снизу справа. Видео — «Видео→GIF» или Обзор→MP4."
+            ),
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=680,
+            justify="left",
+        ).pack(anchor="w", padx=8, pady=(8, 8))
+
+        ctk.CTkLabel(
+            t_peers,
+            text="Список пиров (один IP на строку или «IP Имя»):",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=8, pady=(8, 4))
+        ip_edit_row = ctk.CTkFrame(t_peers, fg_color="transparent")
+        ip_edit_row.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.peer_ips_text = ctk.CTkTextbox(
+            ip_edit_row, width=440, height=180, font=ctk.CTkFont(size=13)
+        )
+        self.peer_ips_text.pack(side="left", padx=(0, 10), anchor="nw", fill="both", expand=True)
+        self._fill_peer_ips_textbox()
+        self.peer_ips_text.bind("<KeyRelease>", self._on_peer_ips_edited)
+        btn_col = ctk.CTkFrame(ip_edit_row, fg_color="transparent")
+        btn_col.pack(side="left", fill="y")
+        ctk.CTkButton(
+            btn_col,
+            text="Сохранить\nсписок IP",
+            width=130,
+            command=self.save_peer_ips_from_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(pady=(0, 6))
+
+        ctk.CTkLabel(
+            t_secret,
+            text="Пароль сети (shared secret):",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=8, pady=(8, 4))
+        secret_row = ctk.CTkFrame(t_secret, fg_color="transparent")
+        secret_row.pack(fill="x", padx=8, pady=(0, 8))
+        self.shared_secret_entry = ctk.CTkEntry(
+            secret_row,
+            width=260,
+            placeholder_text="пусто = без пароля (как в старых версиях)",
+        )
+        self.shared_secret_entry.pack(side="left", padx=(0, 8))
+        try:
+            _sec0 = portal_config.load_shared_secret()
+            if _sec0:
+                self.shared_secret_entry.insert(0, _sec0)
+        except Exception:
+            pass
+        ctk.CTkButton(
+            secret_row,
+            text="Сгенерировать",
+            width=118,
+            command=self._generate_shared_secret_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            secret_row,
+            text="Сохранить",
+            width=96,
+            command=self._save_shared_secret_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            secret_row,
+            text="Копировать",
+            width=96,
+            command=self._copy_shared_secret_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left")
+        ctk.CTkLabel(
+            t_secret,
+            text="Пока пароль не задан, на главном экране показывается быстрый ввод.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=680,
+            justify="left",
+        ).pack(anchor="w", padx=8, pady=(8, 8))
+
+    def _open_apk_window(self) -> None:
+        if self._apk_win is not None:
+            try:
+                if self._apk_win.winfo_exists():
+                    self._apk_win.deiconify()
+                    self._apk_win.lift()
+                    return
+            except Exception:
+                self._apk_win = None
+        w = ctk.CTkToplevel(self)
+        w.title("Android APK")
+        w.geometry("520x360")
+        try:
+            w.transient(self)
+        except Exception:
+            pass
+        self._apk_win = w
+        ctk.CTkLabel(
+            w,
+            text="Android · Share → Portal",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).pack(anchor="w", padx=14, pady=(14, 4))
+        ctk.CTkLabel(
+            w,
+            text=(
+                "Готовый APK лежит в GitHub Release (тег portal-android-latest). "
+                "Кнопка ниже качает его в папку «Загрузки»."
+            ),
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=480,
+            justify="left",
+        ).pack(anchor="w", padx=14, pady=(0, 12))
+        ctk.CTkButton(
+            w,
+            text="⬇ Скачать APK с GitHub",
+            height=44,
+            command=self.download_portal_apk_from_github,
+            font=ctk.CTkFont(size=15, weight="bold"),
+        ).pack(fill="x", padx=14, pady=(0, 10))
+        row2 = ctk.CTkFrame(w, fg_color="transparent")
+        row2.pack(fill="x", padx=14, pady=4)
+        ctk.CTkButton(
+            row2,
+            text="Открыть релиз в браузере",
+            width=200,
+            command=self.open_apk_release_page,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            row2,
+            text="Собрать на GitHub",
+            width=160,
+            command=self.trigger_android_apk_workflow,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left")
+        ctk.CTkLabel(
+            w,
+            text="Другой репозиторий (редко нужно):",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+        ).pack(anchor="w", padx=14, pady=(14, 4))
+        row = ctk.CTkFrame(w, fg_color="transparent")
+        row.pack(fill="x", padx=14, pady=0)
+        self.github_repo_entry = ctk.CTkEntry(
+            row, width=220, placeholder_text="owner/repo"
+        )
+        self.github_repo_entry.pack(side="left", padx=(0, 8))
+        try:
+            self.github_repo_entry.insert(0, portal_config.load_github_repo())
+        except Exception:
+            self.github_repo_entry.insert(0, portal_config.DEFAULT_GITHUB_REPO)
+        ctk.CTkButton(
+            row,
+            text="Сохранить",
+            width=100,
+            command=self.save_github_repo_from_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left")
+        ctk.CTkLabel(
+            w,
+            text=(
+                "Сборка: без PORTAL_GITHUB_TOKEN откроется страница Actions — Run workflow. "
+                "С токеном (repo + workflow) запуск пойдёт сам. Приватный репо — тот же токен для скачивания."
+            ),
+            font=ctk.CTkFont(size=10),
+            text_color="gray",
+            wraplength=480,
+            justify="left",
+        ).pack(anchor="w", padx=14, pady=(12, 14))
+
+    def _open_log_window(self) -> None:
+        if self._log_win is not None:
+            try:
+                if self._log_win.winfo_exists():
+                    self._log_win.deiconify()
+                    self._log_win.lift()
+                    return
+            except Exception:
+                self._log_win = None
+        self._setup_floating_log_window()
+        if self._log_win is not None:
+            self._log_win.deiconify()
+            self._log_win.lift()
+
+    def _open_help_window(self) -> None:
+        if self._help_win is not None:
+            try:
+                if self._help_win.winfo_exists():
+                    self._help_win.deiconify()
+                    self._help_win.lift()
+                    return
+            except Exception:
+                self._help_win = None
+        h = ctk.CTkToplevel(self)
+        h.title("Справка · горячие клавиши")
+        h.geometry("620x480")
+        try:
+            h.transient(self)
+        except Exception:
+            pass
+        self._help_win = h
+        txt = ctk.CTkTextbox(h, wrap="word", font=ctk.CTkFont(size=13))
+        txt.pack(fill="both", expand=True, padx=10, pady=10)
+        txt.insert("1.0", self._hotkey_help_text())
+        txt.configure(state="disabled")
+
+    def _hotkey_help_text(self) -> str:
+        nl = chr(10)
+        if platform.system() == "Darwin":
+            _leg = os.environ.get("PORTAL_MAC_HOTKEY_LEGACY", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            if _leg:
+                lines = [
+                    "macOS (PORTAL_MAC_HOTKEY_LEGACY=1):",
+                    "  Портал — Cmd+Option+P",
+                    "  Отправить буфер — Cmd+Shift+C",
+                    "  Забрать буфер — Cmd+Shift+V",
+                    "  Русская раскладка — Cmd+Option+з, Cmd+Shift+с / м",
+                ]
+            else:
+                lines = [
+                    "macOS (по умолчанию, Cmd+Ctrl):",
+                    "  Показать/скрыть портал — Cmd+Ctrl+P",
+                    "  Отправить буфер — Cmd+Ctrl+C",
+                    "  Забрать буфер — Cmd+Ctrl+V",
+                    "  Русская раскладка — Cmd+Ctrl+з / с / м",
+                ]
+            extra = [
+                "",
+                "Забрать буфер — первый отмеченный IP на главном экране.",
+                "Старые сочетания: export PORTAL_MAC_HOTKEY_LEGACY=1",
+            ]
+            if sys.version_info >= (3, 13):
+                extra.append(
+                    "Python 3.13+: глобальные хоткеи — отдельный процесс pynput; "
+                    "права Input Monitoring + Универсальный доступ; "
+                    "PORTAL_MAC_NO_HOTKEY_HELPER=1 — только при фокусе на окне Портала."
+                )
+            return nl.join(lines + extra)
+        lines = [
+            "Windows / Linux:",
+            "  Портал — Ctrl+Alt+P или Win+Shift+P",
+            "  Отправить буфер — Ctrl+Alt+C",
+            "  Забрать буфер — Ctrl+Alt+V",
+        ]
+        return nl.join(lines)
+
+    def _setup_floating_log_window(self) -> None:
+        if self._log_win is not None:
+            try:
+                if self._log_win.winfo_exists():
+                    return
+            except Exception:
+                pass
+        self._log_win = ctk.CTkToplevel(self)
+        self._log_win.title("Журнал · Портал")
+        self._log_win.geometry("720x420")
+        try:
+            self._log_win.transient(self)
+        except Exception:
+            pass
+        log_frame = ctk.CTkFrame(self._log_win)
+        log_frame.pack(fill="both", expand=True, padx=8, pady=8)
         log_title_row = ctk.CTkFrame(log_frame, fg_color="transparent")
-        log_title_row.pack(fill="x", padx=10, pady=(10, 5))
+        log_title_row.pack(fill="x", padx=8, pady=(6, 4))
         ctk.CTkLabel(
             log_title_row,
             text="📋 Журнал",
@@ -1212,59 +1437,45 @@ class PortalApp(ctk.CTk):
         ).pack(side="left", padx=(0, 6))
         ctk.CTkButton(
             log_title_row,
-            text="Открыть папку лога",
-            width=140,
+            text="Папка лога",
+            width=110,
             command=self.open_log_folder,
             font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 0))
+        ).pack(side="left")
         self.log_hint_label = ctk.CTkLabel(
             log_frame,
-            text=f"💡 Ctrl+C в журнале — копировать выделение. Дублирование в файл: {portal_config.activity_log_path()}",
+            text=f"Ctrl+C в журнале — копирование. Файл: {portal_config.activity_log_path()}",
             font=ctk.CTkFont(size=11),
             text_color="gray",
-            wraplength=720,
+            wraplength=680,
             justify="left",
             anchor="w",
         )
-        self.log_hint_label.pack(fill="x", padx=10, pady=(0, 4))
-
-        log_btn_row = ctk.CTkFrame(log_frame, fg_color="transparent")
-        log_btn_row.pack(fill="x", padx=10, pady=(0, 4))
-        ctk.CTkButton(
-            log_btn_row,
-            text="📋 Копировать весь журнал",
-            width=200,
-            command=self.copy_whole_activity_log,
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 10))
-        _lp = portal_config.activity_log_path()
-        ctk.CTkLabel(
-            log_btn_row,
-            text=f"Также пишется в: {_lp}",
-            font=ctk.CTkFont(size=11),
-            text_color="gray",
-            anchor="w",
-        ).pack(side="left", fill="x", expand=True)
-
-        self.log_text = ctk.CTkTextbox(log_frame, height=300, wrap="word")
-        self.log_text.pack(fill="x", expand=False, padx=10, pady=(0, 10))
-        self.log_text.insert("1.0", "Готов к работе...\n")
+        self.log_hint_label.pack(fill="x", padx=8, pady=(0, 4))
+        self.log_text = ctk.CTkTextbox(log_frame, height=280, wrap="word")
+        self.log_text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.log_text.insert("1.0", "Готов к работе..." + chr(10))
         self._setup_log_text_selectable()
         self._log_max_lines = 400
-        # Cmd/Ctrl+C: копировать выделение или весь журнал (в disabled-текстбоксе своё копирование часто ломается)
         self.log_text.bind("<Command-c>", self._log_copy_selection_hotkey)
         self.log_text.bind("<Control-c>", self._log_copy_selection_hotkey)
+        self._log_win.withdraw()
 
-        self._refresh_local_link_status_label()
-        self.after(800, lambda: self.check_peer_connection_async(silent=True))
-        self._arm_peer_poll()
-        self.after(
-            200,
-            lambda: self.log(
-                "📋 Журнал здесь внизу (не пропал): «Копировать всё», Ctrl+C по выделению, "
-                f"файл {portal_config.activity_log_path()}"
-            ),
-        )
+    def _auto_start_portal_if_enabled(self) -> None:
+        if os.environ.get("PORTAL_NO_AUTO_START", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            self.log("ℹ️ Автозапуск приёма отключён (PORTAL_NO_AUTO_START)")
+            return
+        if self.is_server_running:
+            return
+        try:
+            self.start_server()
+            self.log("🚀 Портал запущен автоматически (приём файлов и буфера)")
+        except Exception as e:
+            self.log(f"⚠️ Автозапуск: {e}")
 
     def _process_main_window_drop(self, paths: List[str]) -> None:
         """
@@ -1664,6 +1875,13 @@ class PortalApp(ctk.CTk):
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _apk_repo_from_ui(self) -> str:
+        if hasattr(self, "github_repo_entry"):
+            raw = self.github_repo_entry.get().strip()
+            if raw and raw.count("/") == 1:
+                return raw
+        return portal_config.load_github_repo()
+
     def save_github_repo_from_ui(self) -> None:
         if not hasattr(self, "github_repo_entry"):
             return
@@ -1673,62 +1891,79 @@ class PortalApp(ctk.CTk):
         else:
             self.log("⚠️ Некорректный repo — нужен формат owner/repo (один слэш)")
 
-    def open_android_apk_workflow_page(self) -> None:
+    def open_apk_release_page(self) -> None:
         try:
             import portal_github
 
-            repo = (
-                self.github_repo_entry.get().strip()
-                if hasattr(self, "github_repo_entry")
-                else portal_config.load_github_repo()
-            )
-            if not repo or repo.count("/") != 1:
-                repo = portal_config.load_github_repo()
-            url = portal_github.actions_workflow_page_url(repo)
+            repo = self._apk_repo_from_ui()
+            url = portal_github.apk_release_page_url(repo)
             webbrowser.open(url)
-            self.log(f"🌐 Открыта страница workflow: {url}")
+            self.log(f"🌐 Релиз с APK: {url}")
         except Exception as e:
-            self.log(f"❌ Не удалось открыть страницу GitHub: {e}")
+            self.log(f"❌ Не удалось открыть релиз: {e}")
 
-    def open_github_actions_runs_page(self) -> None:
-        try:
-            import portal_github
+    def download_portal_apk_from_github(self) -> None:
+        import portal_github
 
-            repo = (
-                self.github_repo_entry.get().strip()
-                if hasattr(self, "github_repo_entry")
-                else portal_config.load_github_repo()
+        repo = self._apk_repo_from_ui()
+        if not repo or repo.count("/") != 1:
+            self.log("⚠️ Укажи репозиторий как owner/repo и сохрани")
+            return
+        home = Path.home()
+        down = home / "Downloads"
+        if not down.is_dir():
+            down = home / "Загрузки"
+        if not down.is_dir():
+            down = home
+        dest = down / "Portal-Android.apk"
+        token = os.environ.get("PORTAL_GITHUB_TOKEN", "").strip()
+
+        def work() -> None:
+            ok, msg = portal_github.download_apk_to_file(
+                repo, dest, token=token or None
             )
-            if not repo or repo.count("/") != 1:
-                repo = portal_config.load_github_repo()
-            url = portal_github.actions_runs_page_url(repo)
-            webbrowser.open(url)
-            self.log(f"🌐 Открыты запуски Actions: {url}")
-        except Exception as e:
-            self.log(f"❌ Не удалось открыть GitHub: {e}")
+
+            def done() -> None:
+                if ok:
+                    self.log(f"✅ APK сохранён: {msg}")
+                    if platform.system() == "Darwin":
+                        try:
+                            subprocess.run(
+                                ["open", "-R", str(dest)],
+                                check=False,
+                                capture_output=True,
+                            )
+                        except Exception:
+                            pass
+                else:
+                    self.log(f"❌ Скачивание APK: {msg}")
+
+            try:
+                self.after(0, done)
+            except Exception:
+                done()
+
+        self.log("⬇ Качаю APK с GitHub Release…")
+        threading.Thread(target=work, daemon=True).start()
 
     def trigger_android_apk_workflow(self) -> None:
         import portal_github
 
         token = os.environ.get("PORTAL_GITHUB_TOKEN", "").strip()
+        repo = self._apk_repo_from_ui()
+        if not repo or repo.count("/") != 1:
+            self.log("⚠️ Укажи репозиторий как owner/repo")
+            return
         if not token:
             self.log(
-                "⚠️ Нет PORTAL_GITHUB_TOKEN — открой «Страница сборки APK» и запусти workflow вручную "
-                "(кнопка Run workflow). Токен: GitHub → Settings → Developer settings → PAT, права repo + workflow."
+                "ℹ️ Нет PORTAL_GITHUB_TOKEN — открываю страницу workflow. "
+                "Нажми Run workflow. Токен (repo+workflow) нужен только для запуска из приложения."
             )
             try:
-                repo = portal_config.load_github_repo()
                 webbrowser.open(portal_github.actions_workflow_page_url(repo))
             except Exception:
                 pass
             return
-        repo = (
-            self.github_repo_entry.get().strip()
-            if hasattr(self, "github_repo_entry")
-            else portal_config.load_github_repo()
-        )
-        if not repo or repo.count("/") != 1:
-            repo = portal_config.load_github_repo()
         branch = os.environ.get("PORTAL_GITHUB_BRANCH", "main").strip() or "main"
 
         def work() -> None:

@@ -36,9 +36,12 @@ ls -la bin/*.apk
 
 ### GitHub Actions
 
-Файл workflow в репозитории: **`github-workflow-portal-android-apk.yml`** (в этой папке) — скопируй на GitHub в **`.github/workflows/portal-android-apk.yml`** (через веб-интерфейс, если push `.github/` блокирует токен).
+В корне репозитория: **`.github/workflows/portal-android-apk.yml`**. После успешной сборки:
 
-Дальше: **Actions → Portal Android APK → Run workflow**. Артефакт **`portal-debug-apk`** → `*.apk`.
+- **Release** с тегом **`portal-android-latest`** и файлом **`Portal-Android.apk`** (удобно для кнопки «Скачать APK» в десктопе).
+- Артефакт **`portal-debug-apk`** (как запасной вариант).
+
+Копия шаблона в этой папке: **`github-workflow-portal-android-apk.yml`**.
 
 ### Локальный Linux
 
