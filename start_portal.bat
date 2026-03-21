@@ -38,6 +38,17 @@ if errorlevel 1 (
 echo ✅ Зависимости готовы
 echo.
 
+REM Быстрый тест keyboard (для хоткеев)
+echo 🔍 Тест библиотеки keyboard для хоткеев...
+python -c "import keyboard; print('✅ keyboard работает')" 2>nul
+if errorlevel 1 (
+    echo ⚠️  keyboard не работает — хоткеи могут не сработать
+    echo    Установи: pip install keyboard
+) else (
+    echo ✅ keyboard готов
+)
+echo.
+
 REM Авто-конвертация портала если GIF ещё нет
 if not exist "assets\portal_animated.gif" (
     if exist "C:\Users\1\Downloads\tumblr_mm55e88N8H1rnir1do1_500.gif.mp4" (
