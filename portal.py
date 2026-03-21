@@ -29,6 +29,7 @@ from typing import Optional, List, Dict, Tuple, Any, Callable
 import subprocess
 import platform
 import queue
+import webbrowser
 
 import portal_config
 import portal_clipboard_rich as portal_clip_rich
@@ -97,6 +98,8 @@ def refresh_windows_shell_after_new_file(filepath: Path) -> None:
 
 # Порт протокола Портала (должен совпадать на всех машинах)
 PORTAL_PORT = 12345
+# Виджет не проигрывает видео напрямую — только после конвертации в GIF
+_WIDGET_VIDEO_EXTS = (".mp4", ".webm", ".mov", ".mkv")
 # Как часто обновлять статус «пара онлайн?» (мс)
 PEER_STATUS_POLL_MS = 20000
 # Один файл из буфера удалённого ПК по get_clipboard (не гоняем гигабайты по TCP)
@@ -735,6 +738,13 @@ class PortalApp(ctk.CTk):
         ).pack(side="left", padx=(0, 6))
         ctk.CTkButton(
             wm_row1,
+            text="Видео → GIF",
+            width=100,
+            command=self.choose_widget_video_convert_to_gif,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            wm_row1,
             text="Сброс",
             width=72,
             command=self.clear_widget_media_from_ui,
@@ -770,14 +780,73 @@ class PortalApp(ctk.CTk):
         ctk.CTkLabel(
             peer_frame,
             text=(
-                "Видео (MP4): конвертируй в GIF — python import_portal_from_mp4.py … "
-                "или положи готовый GIF в assets/. Прозрачный фон: см. README (хромакей / macOS)."
+                "Видео для виджета: кнопка «Видео → GIF» или выбери MP4/WebM в «Обзор…» — "
+                "предложит конвертацию в assets/portal_animated.gif. Готовый GIF/PNG — как раньше."
             ),
             font=ctk.CTkFont(size=10),
             text_color="gray",
             wraplength=640,
             justify="left",
         ).pack(anchor="w", padx=12, pady=(0, 4))
+
+        ctk.CTkLabel(
+            peer_frame,
+            text="Android APK (Share → Portal):",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(anchor="w", padx=12, pady=(8, 2))
+        apk_row = ctk.CTkFrame(peer_frame, fg_color="transparent")
+        apk_row.pack(fill="x", padx=12, pady=(0, 2))
+        self.github_repo_entry = ctk.CTkEntry(
+            apk_row,
+            width=200,
+            placeholder_text="owner/repo",
+            font=ctk.CTkFont(size=12),
+        )
+        self.github_repo_entry.pack(side="left", padx=(0, 8))
+        try:
+            self.github_repo_entry.insert(0, portal_config.load_github_repo())
+        except Exception:
+            self.github_repo_entry.insert(0, portal_config.DEFAULT_GITHUB_REPO)
+        ctk.CTkButton(
+            apk_row,
+            text="Сохранить repo",
+            width=118,
+            command=self.save_github_repo_from_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            apk_row,
+            text="Страница сборки APK",
+            width=150,
+            command=self.open_android_apk_workflow_page,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            apk_row,
+            text="Все запуски Actions",
+            width=138,
+            command=self.open_github_actions_runs_page,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            apk_row,
+            text="Запустить сборку APK",
+            width=158,
+            command=self.trigger_android_apk_workflow,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left")
+        ctk.CTkLabel(
+            peer_frame,
+            text=(
+                "Автозапуск сборки: задай переменную окружения PORTAL_GITHUB_TOKEN "
+                "(PAT с правами repo + workflow). Иначе открой «Страница сборки APK» и нажми "
+                "«Run workflow». APK: Actions → последний успешный run → Artifacts → portal-debug-apk."
+            ),
+            font=ctk.CTkFont(size=10),
+            text_color="gray",
+            wraplength=640,
+            justify="left",
+        ).pack(anchor="w", padx=12, pady=(0, 6))
 
         ctk.CTkLabel(
             peer_frame,
@@ -1433,19 +1502,184 @@ class PortalApp(ctk.CTk):
 
     def choose_widget_media_file(self) -> None:
         from tkinter import filedialog
+        from tkinter import messagebox
 
         if not hasattr(self, "widget_media_entry"):
             return
         p = filedialog.askopenfilename(
-            title="Картинка или GIF для портала",
+            title="Картинка, GIF или видео для портала",
             filetypes=[
-                ("Изображения", "*.gif *.png *.jpg *.jpeg *.webp"),
+                ("Изображения и GIF", "*.gif *.png *.jpg *.jpeg *.webp"),
+                ("Видео (будет конвертация)", "*.mp4 *.webm *.mov *.mkv"),
+                ("Все файлы", "*.*"),
+            ],
+        )
+        if not p:
+            return
+        low = p.lower()
+        if low.endswith(_WIDGET_VIDEO_EXTS):
+            if messagebox.askyesno(
+                "Видео → GIF",
+                "Виджет использует GIF/картинки.\n\n"
+                "Сконвертировать выбранное видео в assets/portal_animated.gif\n"
+                "(скрипт import_portal_from_mp4.py, может занять несколько минут)?",
+            ):
+                self._start_widget_video_convert(p)
+            return
+        self.widget_media_entry.delete(0, "end")
+        self.widget_media_entry.insert(0, p)
+
+    def choose_widget_video_convert_to_gif(self) -> None:
+        from tkinter import filedialog
+
+        if not hasattr(self, "widget_media_entry"):
+            return
+        p = filedialog.askopenfilename(
+            title="Видео для конвертации в GIF виджета",
+            filetypes=[
+                ("Видео", "*.mp4 *.webm *.mov *.mkv"),
                 ("Все файлы", "*.*"),
             ],
         )
         if p:
-            self.widget_media_entry.delete(0, "end")
-            self.widget_media_entry.insert(0, p)
+            self._start_widget_video_convert(p)
+
+    def _start_widget_video_convert(self, video_path: str) -> None:
+        """import_portal_from_mp4.py в фоне → путь к portal_animated.gif в конфиг."""
+        root = Path(__file__).resolve().parent
+        script = root / "import_portal_from_mp4.py"
+        if not script.is_file():
+            self.log(f"❌ Не найден {script.name} — положи скрипт рядом с portal.py")
+            return
+        vp = Path(video_path)
+        if not vp.is_file():
+            self.log("⚠️ Файл видео не найден")
+            return
+        self.log(f"⏳ Конвертация видео → GIF… ({vp.name})")
+
+        def work() -> None:
+            try:
+                r = subprocess.run(
+                    [sys.executable, str(script), str(vp)],
+                    cwd=str(root),
+                    capture_output=True,
+                    text=True,
+                    timeout=900,
+                )
+                out = (r.stdout or "") + (r.stderr or "")
+            except Exception as ex:
+                r = None
+                out = str(ex)
+
+            def done() -> None:
+                if r is not None and r.returncode == 0:
+                    gif = root / "assets" / "portal_animated.gif"
+                    if gif.is_file():
+                        gp = str(gif.resolve())
+                        self.widget_media_entry.delete(0, "end")
+                        self.widget_media_entry.insert(0, gp)
+                        self.save_widget_media_from_ui()
+                    else:
+                        self.log("⚠️ Конвертация завершилась, но portal_animated.gif не найден")
+                else:
+                    tail = (out or "")[-1200:] if out else ""
+                    self.log(
+                        f"❌ Конвертация видео не удалась"
+                        f"{f' (код {r.returncode})' if r is not None else ''}: {tail}"
+                    )
+
+            try:
+                self.after(0, done)
+            except Exception:
+                done()
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def save_github_repo_from_ui(self) -> None:
+        if not hasattr(self, "github_repo_entry"):
+            return
+        raw = self.github_repo_entry.get().strip()
+        if portal_config.save_github_repo(raw):
+            self.log(f"✅ GitHub repo сохранён: {raw}")
+        else:
+            self.log("⚠️ Некорректный repo — нужен формат owner/repo (один слэш)")
+
+    def open_android_apk_workflow_page(self) -> None:
+        try:
+            import portal_github
+
+            repo = (
+                self.github_repo_entry.get().strip()
+                if hasattr(self, "github_repo_entry")
+                else portal_config.load_github_repo()
+            )
+            if not repo or repo.count("/") != 1:
+                repo = portal_config.load_github_repo()
+            url = portal_github.actions_workflow_page_url(repo)
+            webbrowser.open(url)
+            self.log(f"🌐 Открыта страница workflow: {url}")
+        except Exception as e:
+            self.log(f"❌ Не удалось открыть страницу GitHub: {e}")
+
+    def open_github_actions_runs_page(self) -> None:
+        try:
+            import portal_github
+
+            repo = (
+                self.github_repo_entry.get().strip()
+                if hasattr(self, "github_repo_entry")
+                else portal_config.load_github_repo()
+            )
+            if not repo or repo.count("/") != 1:
+                repo = portal_config.load_github_repo()
+            url = portal_github.actions_runs_page_url(repo)
+            webbrowser.open(url)
+            self.log(f"🌐 Открыты запуски Actions: {url}")
+        except Exception as e:
+            self.log(f"❌ Не удалось открыть GitHub: {e}")
+
+    def trigger_android_apk_workflow(self) -> None:
+        import portal_github
+
+        token = os.environ.get("PORTAL_GITHUB_TOKEN", "").strip()
+        if not token:
+            self.log(
+                "⚠️ Нет PORTAL_GITHUB_TOKEN — открой «Страница сборки APK» и запусти workflow вручную "
+                "(кнопка Run workflow). Токен: GitHub → Settings → Developer settings → PAT, права repo + workflow."
+            )
+            try:
+                repo = portal_config.load_github_repo()
+                webbrowser.open(portal_github.actions_workflow_page_url(repo))
+            except Exception:
+                pass
+            return
+        repo = (
+            self.github_repo_entry.get().strip()
+            if hasattr(self, "github_repo_entry")
+            else portal_config.load_github_repo()
+        )
+        if not repo or repo.count("/") != 1:
+            repo = portal_config.load_github_repo()
+        branch = os.environ.get("PORTAL_GITHUB_BRANCH", "main").strip() or "main"
+
+        def work() -> None:
+            ok, msg = portal_github.dispatch_android_apk_workflow(
+                repo, token, ref=branch
+            )
+
+            def done() -> None:
+                if ok:
+                    self.log(f"🤖 {msg}")
+                else:
+                    self.log(f"❌ Запуск сборки: {msg}")
+
+            try:
+                self.after(0, done)
+            except Exception:
+                done()
+
+        self.log("🤖 Запрос на запуск сборки APK на GitHub…")
+        threading.Thread(target=work, daemon=True).start()
 
     def save_widget_media_from_ui(self) -> None:
         if not hasattr(self, "widget_media_entry"):
@@ -1455,6 +1689,13 @@ class PortalApp(ctk.CTk):
             self.log("⚠️ Файл не найден — проверь путь")
             return
         if raw:
+            low = raw.lower()
+            if low.endswith(_WIDGET_VIDEO_EXTS):
+                self.log(
+                    "⚠️ Виджет не использует MP4/WebM напрямую. Нажми «Видео → GIF» "
+                    "или выбери видео в «Обзор…» и согласись на конвертацию."
+                )
+                return
             if not portal_config.save_widget_media_path(raw):
                 self.log("⚠️ Не удалось сохранить путь к медиа")
                 return

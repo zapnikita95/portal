@@ -57,7 +57,7 @@
 - **Всегда анимация** — покадрово, даже для многостраничных форматов.
 - **Всегда статика** — один кадр и масштаб.
 
-Пустой путь = как раньше, файлы из папки **`assets/`** в проекте (`portal_animated.gif` и т.д.). Для **MP4** используй `python import_portal_from_mp4.py` (или положи готовый GIF в `assets/`). Прозрачный фон: см. ниже (хромакей Windows, переменные macOS).
+Пустой путь = как раньше, файлы из папки **`assets/`** в проекте (`portal_animated.gif` и т.д.). **Видео (MP4/WebM/MOV):** в настройках кнопки **«Обзор…»** (фильтр «Видео») или **«Видео → GIF»** — конвертация в `assets/portal_animated.gif` через `import_portal_from_mp4.py`. Прозрачный фон: см. ниже (хромакей Windows, переменные macOS).
 
 ### Пароль сети (shared secret) — быстрый слой защиты
 
@@ -70,7 +70,15 @@
 
 ## Android (экспериментально)
 
-Каталог **[`portal-android/`](portal-android/)** — Kivy + тот же TCP-протокол (`portal_protocol.py`). Share Sheet и тайл быстрых настроек описаны в `portal-android/README.md` (нужны intent-filter и pyjnius). Сборка через **Buildozer** обычно на Linux/CI.
+Каталог **[`portal-android/`](portal-android/)** — Kivy + Share Sheet, тот же TCP-протокол. Подробности: [`portal-android/README.md`](portal-android/README.md).
+
+В **главном окне Портала** (блок *Android APK*): ссылки на **GitHub Actions** и кнопка **«Запустить сборку APK»**.  
+- Без токена: откроется страница workflow — вручную **Run workflow**, затем в списке запусков скачай **Artifacts → portal-debug-apk**.  
+- С токеном: задай **`PORTAL_GITHUB_TOKEN`** (PAT с правами **repo** + **workflow**) и при необходимости **`PORTAL_GITHUB_REPO=owner/repo`**, **`PORTAL_GITHUB_BRANCH=main`** — тогда кнопка сама шлёт `workflow_dispatch` в API.
+
+В репозитории лежит **[`.github/workflows/portal-android-apk.yml`](.github/workflows/portal-android-apk.yml)** — после `git pull` на другом компе он тоже есть; пушить этот файл нужен PAT с scope **workflow** (или SSH), иначе GitHub отклонит push.
+
+Локальная сборка: **Docker** — [`portal-android/Dockerfile`](portal-android/Dockerfile).
 
 ## Сборка .exe / .app (PyInstaller)
 

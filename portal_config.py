@@ -410,6 +410,34 @@ def generate_shared_secret(length: int = 8) -> str:
     return "".join(secrets.choice(_SHARED_SECRET_ALPHABET) for _ in range(n))
 
 
+# ── GitHub (сборка Android APK в Actions) ──────────────────────────
+
+DEFAULT_GITHUB_REPO = "zapnikita95/portal"
+
+
+def load_github_repo() -> str:
+    """Репозиторий owner/repo для ссылок и workflow_dispatch."""
+    env = os.environ.get("PORTAL_GITHUB_REPO", "").strip()
+    if env and env.count("/") == 1 and not env.startswith("/"):
+        return env
+    raw = (_load_all().get("github_repo") or "").strip()
+    if raw and raw.count("/") == 1 and not raw.startswith("/"):
+        return raw
+    return DEFAULT_GITHUB_REPO
+
+
+def save_github_repo(repo: Optional[str]) -> bool:
+    s = (repo or "").strip()
+    if not s or s.count("/") != 1 or s.startswith("/"):
+        return False
+    a, _, b = s.partition("/")
+    if not a or not b or "/" in b:
+        return False
+    data = _load_all()
+    data["github_repo"] = s
+    return _write_all(data)
+
+
 # ── Внешний вид виджета-портала (GIF/PNG и т.д.) ───────────────────
 
 
