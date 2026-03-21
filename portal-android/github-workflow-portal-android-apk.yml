@@ -70,7 +70,7 @@ jobs:
         working-directory: portal-android
         env:
           GRADLE_OPTS: "-Xmx3584m -Dorg.gradle.daemon=false -Dorg.gradle.workers.max=2"
-        run: buildozer --verbose android debug
+        run: buildozer android debug
 
       - name: Prepare APK for release (stable file name)
         working-directory: portal-android/bin
