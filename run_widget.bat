@@ -1,4 +1,11 @@
 @echo off
-echo Запуск Портала с виджетом...
-python portal.py --widget
-pause
+chcp 65001 >nul 2>&1
+cd /d "%~dp0"
+echo 🌀 Запуск Портала с виджетом...
+echo.
+python portal.py
+if errorlevel 1 (
+    echo.
+    echo ❌ Ошибка при запуске
+    pause
+)

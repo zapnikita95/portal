@@ -852,19 +852,12 @@ class PortalApp(ctk.CTk):
 if __name__ == "__main__":
     import sys
     
-    # Проверяем аргументы командной строки
-    show_widget = "--widget" in sys.argv or "-w" in sys.argv
+    # По умолчанию ВСЕГДА запускаем виджет (если не указан --no-widget)
+    show_widget = "--no-widget" not in sys.argv and "-nw" not in sys.argv
     
     app = PortalApp()
 
-    if not show_widget:
-        app.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        app.log("⚠️ ЗАПУСК БЕЗ ВИДЖЕТА: глобальные хоткеи ВЫКЛЮЧЕНЫ.")
-        app.log("   Ctrl+Alt+P / буфер с клавиатуры работают только с флагом --widget")
-        app.log("   Запуск:  python portal.py --widget   или   run_widget.bat")
-        app.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-
-    # Если запрошен виджет, создаем его
+    # Виджет запускается всегда (если не отключен явно)
     if show_widget:
         _dbg = (
             Path(os.environ.get("TEMP", os.environ.get("TMP", ".")))

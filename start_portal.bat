@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul 2>&1
 REM Запуск Портала с виджетом на рабочем столе
 REM Автоматически определяет путь к скрипту
 
@@ -12,6 +13,7 @@ REM Проверка наличия Python
 python --version >nul 2>&1
 if errorlevel 1 (
     echo ❌ Python не найден! Установите Python 3.8+ с python.org
+    echo.
     pause
     exit /b 1
 )
@@ -24,9 +26,10 @@ echo 📦 Проверка зависимостей...
 pip show customtkinter >nul 2>&1
 if errorlevel 1 (
     echo ⚠️  Зависимости не установлены. Устанавливаю...
-    pip install -r requirements.txt
+    pip install -r requirements.txt --quiet --disable-pip-version-check
     if errorlevel 1 (
         echo ❌ Ошибка установки зависимостей
+        echo.
         pause
         exit /b 1
     )
@@ -34,13 +37,14 @@ if errorlevel 1 (
 
 echo ✅ Зависимости готовы
 echo.
-echo 🚀 Запуск Портала с виджетом...
+echo 🚀 Запуск Портала...
 echo.
 echo 💡 Используйте Ctrl+Alt+P для показа/скрытия виджета
 echo 📝 Отладка хоткеев: %TEMP%\portal_hotkey_debug.log
 echo.
 
-python portal.py --widget
+REM Запуск БЕЗ --widget, т.к. теперь виджет запускается по умолчанию
+python portal.py
 
 if errorlevel 1 (
     echo.
