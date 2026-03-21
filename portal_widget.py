@@ -105,7 +105,13 @@ class PortalWidget:
         self._after_id: Optional[Any] = None  # id для after_cancel
         self._after_master: Optional[Any] = None  # тот же Tk/CTk, что вызвал after (нужен для cancel)
 
-        self.gif_frames: List[ImageTk.PhotoImage] = []
+        self.gif_frames: List[ImageTk.PhotoImage] = []   # полный размер, для loop
+        self.gif_pil_frames: List[Any] = []              # PIL Image, для scale при открытии/закрытии
+        self._gif_duration_ms: int = 60
+        self._gif_loop_idx: int = 0
+        self._gif_loop_id: Optional[Any] = None
+        self._gif_anim_idx: float = 0.0     # счётчик кадра при открытии/закрытии
+        self._tmp_photo: Optional[ImageTk.PhotoImage] = None  # удерживает ref от GC
         self.target_ip: Optional[str] = None
 
         if main_app and getattr(main_app, "remote_peer_ip", None):
@@ -372,14 +378,22 @@ class PortalWidget:
             try:
                 gif = Image.open(gif_path)
                 self.gif_frames = []
+                self.gif_pil_frames = []
+                durations: List[int] = []
                 for frame in ImageSequence.Iterator(gif):
+                    d = int(frame.info.get("duration", 60))
+                    durations.append(max(20, d))
                     rgba = frame.convert("RGBA")
                     rgba = rgba.resize((self.size, self.size), Image.Resampling.LANCZOS)
                     # Подложка под хромакей: почти чёрный → CHROMA_KEY
                     bg = Image.new("RGBA", rgba.size, CHROMA_KEY)
                     bg.paste(rgba, (0, 0), rgba)
-                    self.gif_frames.append(ImageTk.PhotoImage(bg.convert("RGBA")))
+                    composed = bg.convert("RGBA")
+                    self.gif_pil_frames.append(composed)
+                    self.gif_frames.append(ImageTk.PhotoImage(composed))
                 if self.gif_frames:
+                    self._gif_duration_ms = max(30, int(sum(durations) / len(durations)))
+                    print(f"[Portal] GIF: {len(self.gif_frames)} frames @ {self._gif_duration_ms}ms, {gif_path}")
                     return
             except Exception as e:
                 print(f"[Portal] GIF {gif_path}: {e}")
@@ -405,65 +419,112 @@ class PortalWidget:
             self._after_id = None
             self._after_master = None
 
+    # ── GIF loop (портал виден и не анимируется) ──────────────────────────────
+
+    def _start_gif_loop(self) -> None:
+        """Запустить бесконечный цикл GIF-кадров (портал открыт)."""
+        self._stop_gif_loop()
+        self._gif_loop_idx = 0
+        self._gif_loop_tick()
+
+    def _stop_gif_loop(self) -> None:
+        if self._gif_loop_id is not None:
+            try:
+                master = self.main_app if (self.main_app and hasattr(self.main_app, "after")) else self.root
+                master.after_cancel(self._gif_loop_id)
+            except Exception:
+                pass
+            self._gif_loop_id = None
+
+    def _gif_loop_tick(self) -> None:
+        if not self.animation_running or self.is_opening or self.is_closing:
+            return
+        if not self.gif_frames:
+            return
+        cx, cy = self.size // 2, self.size // 2
+        self.canvas.delete("all")
+        img = self.gif_frames[self._gif_loop_idx % len(self.gif_frames)]
+        self.canvas.create_image(cx, cy, image=img, anchor=tk.CENTER)
+        self._gif_loop_idx += 1
+        master = self.main_app if (self.main_app and hasattr(self.main_app, "after")) else self.root
+        self._gif_loop_id = master.after(self._gif_duration_ms, self._gif_loop_tick)
+
+    # ── helpers для scaled-кадра при открытии/закрытии ───────────────────────
+
+    def _draw_scaled_gif_frame(self, scale: float) -> None:
+        """Нарисовать текущий кадр GIF, масштабированный от 0 до 1."""
+        cx, cy = self.size // 2, self.size // 2
+        self.canvas.delete("all")
+        if self.gif_pil_frames:
+            idx = int(self._gif_anim_idx) % len(self.gif_pil_frames)
+            self._gif_anim_idx += 0.7   # чуть быстрее одного кадра за шаг
+            pil = self.gif_pil_frames[idx]
+            scaled_sz = max(4, int(self.size * scale))
+            scaled = pil.resize((scaled_sz, scaled_sz), Image.Resampling.LANCZOS)
+            canvas_img = Image.new("RGBA", (self.size, self.size), CHROMA_KEY)
+            x = (self.size - scaled_sz) // 2
+            y = (self.size - scaled_sz) // 2
+            canvas_img.paste(scaled, (x, y), scaled)
+            self._tmp_photo = ImageTk.PhotoImage(canvas_img)
+            self.canvas.create_image(cx, cy, image=self._tmp_photo, anchor=tk.CENTER)
+        else:
+            # Запасной вариант — нарисованный круг
+            max_r = self.size // 2 - 18
+            r = max(6.0, max_r * scale)
+            self.draw_portal(cx, cy, min(r, max_r), angle=0.0)
+
+    # ── открытие / закрытие ───────────────────────────────────────────────────
+
     def start_opening_animation(self) -> None:
         """Раскрытие при показе виджета (хоткей)."""
-        self._widget_log(
-            f"Анимация ОТКРЫТИЯ старт (масштаб={self.opening_scale:.2f})"
-        )
+        self._widget_log(f"Анимация ОТКРЫТИЯ старт (масштаб={self.opening_scale:.2f})")
+        self._stop_gif_loop()
         self._cancel_scheduled_animation()
         self.is_opening = True
         self.is_closing = False
-        # Если закрывали на полпути — продолжаем открытие с текущего масштаба
+        self._gif_anim_idx = 0.0
         self.opening_scale = min(1.0, max(0.0, self.opening_scale))
         self._animate_step()
 
     def start_closing_animation(self) -> None:
         """Схлопывание перед скрытием."""
-        self._widget_log(
-            f"Анимация ЗАКРЫТИЯ старт (масштаб={self.opening_scale:.2f})"
-        )
+        self._widget_log(f"Анимация ЗАКРЫТИЯ старт (масштаб={self.opening_scale:.2f})")
+        self._stop_gif_loop()
         self._cancel_scheduled_animation()
         self.is_opening = False
         self.is_closing = True
+        self._gif_anim_idx = 0.0
         self.opening_scale = min(1.0, max(0.0, self.opening_scale))
         self._animate_step()
 
     def _animate_step(self) -> None:
-        """Один кадр открытия/закрытия; без постоянного цикла в фоне."""
+        """Один кадр открытия/закрытия."""
         if not self.animation_running:
             return
 
-        self.canvas.delete("all")
-        cx, cy = self.size // 2, self.size // 2
-        max_r = self.size // 2 - 18
-
         if self.is_opening:
-            self.opening_scale = min(1.0, self.opening_scale + 0.11)
-            # Минимальный радиус, иначе первые кадры почти не видны (особенно с прозрачностью)
-            r = max(6.0, max_r * self.opening_scale)
-            self.draw_portal(cx, cy, min(r, max_r), angle=0.0)
+            self.opening_scale = min(1.0, self.opening_scale + 0.10)
+            self._draw_scaled_gif_frame(self.opening_scale)
             if self.opening_scale >= 1.0:
                 self.is_opening = False
                 self.opening_scale = 1.0
-                self._widget_log("Анимация открытия завершена → статичный кадр")
-                self.draw_portal_static()
                 self._after_id = None
                 self._after_master = None
+                self._widget_log("Открытие завершено → запускаю GIF-цикл")
+                self._start_gif_loop()   # <── ПОРТАЛ ОСТАЁТСЯ И ИГРАЕТ
                 return
             self._schedule_after(42, self._animate_step)
             return
 
         if self.is_closing:
             self.opening_scale = max(0.0, self.opening_scale - 0.13)
-            r = max(0.0, max_r * self.opening_scale)
-            if r > 4:
-                self.draw_portal(cx, cy, min(r, max_r), angle=0.0)
+            self._draw_scaled_gif_frame(self.opening_scale)
             if self.opening_scale <= 0.0:
                 self.is_closing = False
                 self.opening_scale = 0.0
                 self._after_id = None
                 self._after_master = None
-                self._widget_log("Анимация закрытия завершена → виджет скрыт")
+                self._widget_log("Закрытие завершено → виджет скрыт")
                 try:
                     self.root.withdraw()
                 except Exception:
@@ -471,22 +532,6 @@ class PortalWidget:
                 return
             self._schedule_after(42, self._animate_step)
             return
-
-    def draw_portal_static(self) -> None:
-        """Статичный портал после раскрытия (без циклической анимации)."""
-        if not self.animation_running:
-            return
-        self.canvas.delete("all")
-        cx, cy = self.size // 2, self.size // 2
-        if self.gif_frames:
-            # Средний кадр — часто красивее, чем первый (чёрный кадр в начале видео)
-            idx = max(0, len(self.gif_frames) // 2)
-            img = self.gif_frames[idx]
-            self.canvas.create_image(cx, cy, image=img, anchor=tk.CENTER)
-        else:
-            r_full = self.size // 2 - 18
-            self.draw_portal(cx, cy, r_full, angle=0.0)
-        self.opening_scale = 1.0
 
     def draw_portal(self, cx, cy, radius, angle: Optional[float] = None):
         self.canvas.create_oval(
@@ -604,6 +649,7 @@ class PortalWidget:
 
     def destroy(self):
         self.animation_running = False
+        self._stop_gif_loop()
         self._cancel_scheduled_animation()
         try:
             self.root.destroy()
