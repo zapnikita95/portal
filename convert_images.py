@@ -88,5 +88,5 @@ if os.path.exists(webp_path):
     print("\n✅ Готово! Поместите GIF файлы в папку assets/")
 
 if os.path.exists(video_path):
-    print(f"\n⚠️ Видео файл найден: {video_path}")
-    print("Для конвертации видео в GIF установите moviepy: pip install moviepy")
+    print(f"\n💡 Видео портала: {video_path}")
+    print("   Используй: python import_portal_from_mp4.py \"<путь к .mp4>\"")

@@ -3,6 +3,14 @@
 через Tailscale сеть с красивым UI в стиле портала
 """
 
+import sys
+
+# Проверка версии Python (Python 3.13 может иметь проблемы с некоторыми библиотеками)
+if sys.version_info >= (3, 13):
+    print("⚠️  Python 3.13+ обнаружен. Некоторые библиотеки могут работать нестабильно.")
+    print("   Рекомендуется Python 3.11 или 3.12 для стабильности.")
+    print("   Если видите ошибки, попробуйте: pyenv install 3.12.7 && pyenv local 3.12.7\n")
+
 import customtkinter as ctk
 import socket
 import threading
@@ -14,12 +22,53 @@ import time
 from pathlib import Path
 from typing import Optional, List
 import subprocess
+import platform
 
 import portal_config
+
+# Порт протокола Портала (должен совпадать на всех машинах)
+PORTAL_PORT = 12345
+# Как часто обновлять статус «пара онлайн?» (мс)
+PEER_STATUS_POLL_MS = 20000
 
 # Настройка темы
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
+
+
+def probe_portal_peer(host: str, port: int = PORTAL_PORT, timeout: float = 3.0) -> tuple[bool, str]:
+    """
+    Проверка, что на host действительно отвечает Портал (ping → pong).
+    Возвращает (успех, код): код — ok | refused | timeout | bad_reply | dns | error
+    """
+    host = (host or "").strip()
+    if not host:
+        return False, "no_host"
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect((host, port))
+        s.sendall(json.dumps({"type": "ping"}, ensure_ascii=False).encode("utf-8"))
+        data = s.recv(4096)
+        s.close()
+        if not data:
+            return False, "bad_reply"
+        msg = json.loads(data.decode("utf-8", errors="replace"))
+        if msg.get("type") == "pong":
+            return True, "ok"
+        return False, "bad_reply"
+    except ConnectionRefusedError:
+        return False, "refused"
+    except socket.timeout:
+        return False, "timeout"
+    except socket.gaierror:
+        return False, "dns"
+    except OSError:
+        return False, "error"
+    except json.JSONDecodeError:
+        return False, "bad_reply"
+    except Exception:
+        return False, "error"
 
 
 class PortalApp(ctk.CTk):
@@ -45,6 +94,9 @@ class PortalApp(ctk.CTk):
         
         # Создание UI
         self.create_ui()
+        
+        # Drag & Drop в главном окне
+        self.setup_main_window_drag_drop()
         
         # Запуск мониторинга буфера обмена
         self.start_clipboard_monitor()
@@ -175,6 +227,12 @@ class PortalApp(ctk.CTk):
             text="Сохраняется на диск. Отправка файлов/буфера и виджет используют его без повторных вопросов.",
             font=ctk.CTkFont(size=11),
             text_color="gray",
+        ).pack(anchor="w", padx=12, pady=(0, 4))
+        ctk.CTkLabel(
+            peer_frame,
+            text=f"💡 Указывай только IP (например 100.65.63.84), порт :{PORTAL_PORT} добавляется автоматически.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray70",
         ).pack(anchor="w", padx=12, pady=(0, 8))
         row = ctk.CTkFrame(peer_frame, fg_color="transparent")
         row.pack(fill="x", padx=12, pady=(0, 12))
@@ -182,6 +240,7 @@ class PortalApp(ctk.CTk):
         self.peer_ip_entry.pack(side="left", padx=(0, 10))
         if self.remote_peer_ip:
             self.peer_ip_entry.insert(0, self.remote_peer_ip)
+        self.peer_ip_entry.bind("<KeyRelease>", self._on_peer_ip_edited)
         ctk.CTkButton(
             row,
             text="Сохранить IP",
@@ -189,6 +248,82 @@ class PortalApp(ctk.CTk):
             command=self.save_peer_ip_from_ui,
             font=ctk.CTkFont(size=13),
         ).pack(side="left")
+        self.ip_saved_feedback = ctk.CTkLabel(
+            row,
+            text="",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color="#3dd68c",
+        )
+        self.ip_saved_feedback.pack(side="left", padx=(10, 0))
+
+        # Подсказки по хоткеям (виджет + общий буфер)
+        hotkey_frame = ctk.CTkFrame(peer_frame, fg_color="transparent")
+        hotkey_frame.pack(fill="x", padx=12, pady=(0, 10))
+        if platform.system() == "Darwin":
+            hotkey_text = (
+                "🔑 Быстрые клавиши (запуск с «Виджет на рабочем столе» / --widget):\n"
+                "   Показать или скрыть портал — Cmd+Option+P\n"
+                "   Отправить буфер на другой ПК — Cmd+Shift+C\n"
+                "   Вставить буфер с другого ПК — Cmd+Shift+V"
+            )
+        else:
+            hotkey_text = (
+                "🔑 Быстрые клавиши:\n"
+                "   Показать или скрыть портал — Ctrl+Alt+P (запас: Win+Shift+P)\n"
+                "   Отправить буфер на другой ПК — Ctrl+Alt+C\n"
+                "   Вставить буфер с другого ПК — Ctrl+Alt+V"
+            )
+        ctk.CTkLabel(
+            hotkey_frame,
+            text=hotkey_text,
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+            justify="left",
+            anchor="w",
+        ).pack(anchor="w")
+
+        # Статус связи с парой (ping/pong к Порталу на другом ПК)
+        self._peer_poll_job = None
+        conn_frame = ctk.CTkFrame(peer_frame, fg_color="transparent")
+        conn_frame.pack(fill="x", padx=12, pady=(4, 10))
+        ctk.CTkLabel(
+            conn_frame,
+            text="📡 Статус связи",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", pady=(0, 4))
+        self.local_link_status_label = ctk.CTkLabel(
+            conn_frame,
+            text="⏸ Локальный приём: неизвестно",
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+            justify="left",
+            anchor="w",
+        )
+        self.local_link_status_label.pack(anchor="w")
+        self.peer_link_status_label = ctk.CTkLabel(
+            conn_frame,
+            text="⚪ Пара: укажи IP и нажми «Сохранить IP»",
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+            justify="left",
+            anchor="w",
+        )
+        self.peer_link_status_label.pack(anchor="w", pady=(2, 6))
+        probe_row = ctk.CTkFrame(conn_frame, fg_color="transparent")
+        probe_row.pack(anchor="w", fill="x")
+        ctk.CTkButton(
+            probe_row,
+            text="🔄 Проверить связь",
+            width=160,
+            command=lambda: self.check_peer_connection_async(silent=False),
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left")
+        ctk.CTkLabel(
+            probe_row,
+            text=f"авто каждые {PEER_STATUS_POLL_MS // 1000} с, если указан IP",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+        ).pack(side="left", padx=(12, 0))
         
         # Кнопки управления
         button_frame = ctk.CTkFrame(main_frame)
@@ -247,15 +382,300 @@ class PortalApp(ctk.CTk):
         self.log_text.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self.log_text.insert("1.0", "Готов к работе...\n")
         self.log_text.configure(state="disabled")
-    
+
+        self._refresh_local_link_status_label()
+        self.after(800, lambda: self.check_peer_connection_async(silent=True))
+        self._arm_peer_poll()
+
+    def setup_main_window_drag_drop(self):
+        """Drag & Drop файлов в главное окно (не только в виджет)."""
+        if platform.system() == "Windows":
+            try:
+                import windnd
+
+                def on_drop(files):
+                    paths = []
+                    enc = sys.getfilesystemencoding() or "utf-8"
+                    for b in files:
+                        if isinstance(b, str):
+                            paths.append(b)
+                            continue
+                        try:
+                            paths.append(b.decode("utf-8"))
+                        except Exception:
+                            try:
+                                paths.append(b.decode(enc))
+                            except Exception:
+                                paths.append(b.decode("mbcs", errors="replace"))
+                    if paths:
+                        self.log(f"📥 Получено {len(paths)} файл(ов) через drag & drop в главное окно")
+                        for fp in paths:
+                            if os.path.exists(fp):
+                                self.log(f"   📄 {Path(fp).name}")
+                                if self.remote_peer_ip:
+                                    threading.Thread(
+                                        target=self.send_file,
+                                        args=(fp, self.remote_peer_ip),
+                                        daemon=True,
+                                    ).start()
+                                else:
+                                    self.log("⚠️ Сначала укажите IP выше и нажмите «Сохранить IP»")
+                                    self.send_file_to_dialog(fp)
+
+                # windnd работает на Tk окне (CTk наследует Tk)
+                windnd.hook_dropfiles(self, on_drop)
+                self.log("✅ Drag & Drop включён в главном окне (Windows)")
+            except Exception as e:
+                self.log(f"⚠️ Drag & Drop (Windows): {e}")
+        else:
+            try:
+                from tkinterdnd2 import TkinterDnD, DND_FILES
+
+                # CTk наследует Tk, можно использовать TkinterDnD
+                TkinterDnD._require(self)
+                self.drop_target_register(DND_FILES)
+                self.dnd_bind("<<Drop>>", self._on_main_window_drop)
+                self.log("✅ Drag & Drop включён в главном окне (macOS/Linux)")
+            except Exception as e:
+                self.log(f"⚠️ Drag & Drop (macOS/Linux): {e}")
+
+    def _on_main_window_drop(self, event):
+        """Обработка drop в главном окне (tkinterdnd2)."""
+        import re
+
+        data = event.data
+        files = []
+        if data.startswith("{") and data.endswith("}"):
+            files = re.findall(r"\{([^}]+)\}", data)
+        elif " " in data:
+            files = data.split()
+        else:
+            files = [data]
+        if files:
+            self.log(f"📥 Получено {len(files)} файл(ов) через drag & drop")
+            for fp in files:
+                fp = fp.strip()
+                if os.path.exists(fp):
+                    self.log(f"   📄 {Path(fp).name}")
+                    if self.remote_peer_ip:
+                        threading.Thread(
+                            target=self.send_file,
+                            args=(fp, self.remote_peer_ip),
+                            daemon=True,
+                        ).start()
+                    else:
+                        self.log("⚠️ Сначала укажите IP выше и нажмите «Сохранить IP»")
+                        self.send_file_to_dialog(fp)
+
+    def _on_peer_ip_edited(self, _event=None):
+        """Сбросить зелёную галочку, если пользователь снова правит IP."""
+        if hasattr(self, "ip_saved_feedback"):
+            self.ip_saved_feedback.configure(text="")
+
+    def _peer_ip_entry_set_silent(self, text: str) -> None:
+        """Обновить поле IP без срабатывания KeyRelease (иначе сбросится «✅ Сохранено»)."""
+        if not hasattr(self, "peer_ip_entry"):
+            return
+        try:
+            self.peer_ip_entry.unbind("<KeyRelease>")
+            self.peer_ip_entry.delete(0, "end")
+            if text:
+                self.peer_ip_entry.insert(0, text)
+        finally:
+            self.peer_ip_entry.bind("<KeyRelease>", self._on_peer_ip_edited)
+
     def save_peer_ip_from_ui(self):
         """Сохранить IP второго ПК из поля ввода (в файл + в память)."""
         ip = self.peer_ip_entry.get().strip()
-        self.set_remote_peer_ip(ip if ip else None)
-        if ip:
-            self.log(f"✅ IP второго ПК сохранён: {ip}")
+        if not ip:
+            self.log("⚠️ Введите IP адрес перед сохранением")
+            if hasattr(self, "ip_saved_feedback"):
+                self.ip_saved_feedback.configure(text="❌ Введите IP", text_color="#e74c3c")
+            return
+        
+        if hasattr(self, "ip_saved_feedback"):
+            self.ip_saved_feedback.configure(text="⏳ …", text_color="gray")
+        self.log(f"💾 Сохранение IP: {ip}...")
+        
+        # Сохраняем напрямую через portal_config для проверки результата
+        try:
+            success = portal_config.save_remote_ip(ip)
+        except Exception as e:
+            self.log(f"❌ ИСКЛЮЧЕНИЕ при сохранении: {str(e)}")
+            import traceback
+            self.log(f"   {traceback.format_exc()}")
+            success = False
+        
+        if success:
+            # Обновляем в памяти
+            self.remote_peer_ip = ip
+            config_file = portal_config.config_path()
+            # Двойная проверка - читаем сразу после сохранения
+            verify = portal_config.load_remote_ip()
+            if verify == ip:
+                self.log(f"✅ IP второго ПК сохранён: {ip}")
+                self.log(f"💾 Файл: {config_file}")
+                if hasattr(self, "ip_saved_feedback"):
+                    self.ip_saved_feedback.configure(
+                        text="✅ Сохранено",
+                        text_color="#3dd68c",
+                    )
+                # Обновляем поле (чтобы показать что сохранилось)
+                try:
+                    self._peer_ip_entry_set_silent(ip)
+                except Exception as e:
+                    self.log(f"⚠️ Не удалось обновить поле ввода: {e}")
+                self.check_peer_connection_async(silent=False)
+                self._arm_peer_poll()
+            else:
+                self.log(f"❌ ОШИБКА: IP не сохранился!")
+                self.log(f"   Введено: {ip}")
+                self.log(f"   Проверка после сохранения: {verify or '(пусто)'}")
+                self.log(f"   Файл: {config_file}")
+                if hasattr(self, "ip_saved_feedback"):
+                    self.ip_saved_feedback.configure(
+                        text="❌ Не записалось",
+                        text_color="#e74c3c",
+                    )
         else:
-            self.log("ℹ️ IP второго ПК очищен")
+            # Проверяем что в файле
+            saved = portal_config.load_remote_ip()
+            config_file = portal_config.config_path()
+            self.log(f"❌ ОШИБКА СОХРАНЕНИЯ!")
+            self.log(f"   Введено: {ip}")
+            self.log(f"   Прочитано из файла: {saved or '(пусто)'}")
+            self.log(f"   Файл: {config_file}")
+            self.log(f"   Файл существует: {config_file.exists()}")
+            if config_file.exists():
+                try:
+                    content = config_file.read_text(encoding="utf-8")
+                    self.log(f"   Содержимое: {content[:200]}")
+                except Exception as e:
+                    self.log(f"   Не удалось прочитать файл: {e}")
+            else:
+                self.log(f"   Папка существует: {config_file.parent.exists()}")
+                self.log(f"   Папка: {config_file.parent}")
+            if hasattr(self, "ip_saved_feedback"):
+                self.ip_saved_feedback.configure(
+                    text="❌ Ошибка записи",
+                    text_color="#e74c3c",
+                )
+
+    def _peer_ip_for_probe(self) -> Optional[str]:
+        """IP для ручной проверки: сначала поле ввода, иначе сохранённый."""
+        if hasattr(self, "peer_ip_entry"):
+            t = self.peer_ip_entry.get().strip()
+            if t:
+                return t
+        return self.remote_peer_ip
+
+    def _format_peer_probe_result(self, ip: str, ok: bool, code: str) -> tuple[str, str]:
+        """Текст и цвет для строки статуса пары."""
+        if not ip:
+            return "⚪ Пара: укажи IP и «Сохранить IP»", "gray"
+        if ok:
+            return (
+                f"🟢 Пара ({ip}): Портал на :{PORTAL_PORT} отвечает",
+                "#3dd68c",
+            )
+        if code == "refused":
+            return (
+                f"🔌 Пара ({ip}): порт {PORTAL_PORT} закрыт — на том ПК «Запустить портал»",
+                "#e74c3c",
+            )
+        if code == "timeout":
+            return (
+                f"⏱ Пара ({ip}): таймаут — Tailscale, IP или файрвол",
+                "#e67e22",
+            )
+        if code == "dns":
+            return f"❓ Пара ({ip}): адрес не найден (DNS)", "#e74c3c"
+        if code == "bad_reply":
+            return (
+                f"⚠ Пара ({ip}): порт открыт, но ответ не Портал",
+                "#f39c12",
+            )
+        if code == "no_host":
+            return "⚪ Пара: укажи IP", "gray"
+        return f"❌ Пара ({ip}): ошибка ({code})", "#e74c3c"
+
+    def _refresh_local_link_status_label(self) -> None:
+        if not hasattr(self, "local_link_status_label"):
+            return
+        if self.is_server_running:
+            ip = self.tailscale_ip or "?"
+            self.local_link_status_label.configure(
+                text=(
+                    f"🟢 Этот ПК принимает: {ip}:{PORTAL_PORT} "
+                    "(второй комп шлёт сюда файлы/буфер)"
+                ),
+                text_color="#3dd68c",
+            )
+        else:
+            self.local_link_status_label.configure(
+                text=(
+                    f"⏸ Этот ПК не принимает — нажми «Запустить портал» "
+                    f"(слушать :{PORTAL_PORT})"
+                ),
+                text_color="#95a5a6",
+            )
+
+    def _cancel_peer_poll(self) -> None:
+        if getattr(self, "_peer_poll_job", None) is not None:
+            try:
+                self.after_cancel(self._peer_poll_job)
+            except Exception:
+                pass
+            self._peer_poll_job = None
+
+    def _arm_peer_poll(self) -> None:
+        self._cancel_peer_poll()
+        if not self.remote_peer_ip:
+            return
+        self._peer_poll_job = self.after(PEER_STATUS_POLL_MS, self._peer_poll_tick)
+
+    def _peer_poll_tick(self) -> None:
+        self._peer_poll_job = None
+        if self.remote_peer_ip:
+            self.check_peer_connection_async(silent=True)
+        if self.remote_peer_ip:
+            self._arm_peer_poll()
+
+    def check_peer_connection_async(self, silent: bool = False) -> None:
+        """Фоновый ping → pong к Порталу на другой машине; обновляет подпись под IP."""
+        ip = self._peer_ip_for_probe()
+        if not ip:
+            self.after(
+                0,
+                lambda: self.peer_link_status_label.configure(
+                    text="⚪ Пара: укажи IP и «Сохранить IP»",
+                    text_color="gray",
+                ),
+            )
+            return
+
+        def worker():
+            ok, code = probe_portal_peer(ip)
+            msg_t, msg_c = self._format_peer_probe_result(ip, ok, code)
+
+            def apply():
+                if hasattr(self, "peer_link_status_label"):
+                    self.peer_link_status_label.configure(text=msg_t, text_color=msg_c)
+                if not silent:
+                    if ok:
+                        self.log(
+                            f"📡 Связь с парой: OK — {ip}:{PORTAL_PORT} "
+                            f"(это Портал, ответ pong)"
+                        )
+                    else:
+                        self.log(f"📡 Связь с парой: нет — {ip} ({code})")
+
+            try:
+                self.after(0, apply)
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
     
     def log(self, message: str):
         """Добавление сообщения в лог"""
@@ -281,7 +701,7 @@ class PortalApp(ctk.CTk):
         try:
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.server_socket.bind(("0.0.0.0", 12345))
+            self.server_socket.bind(("0.0.0.0", PORTAL_PORT))
             self.server_socket.listen(5)
             self.is_server_running = True
             
@@ -292,10 +712,12 @@ class PortalApp(ctk.CTk):
             self.send_button.configure(state="normal")
             self.clipboard_button.configure(state="normal")
             self.status_label.configure(
-                text=f"✅ Портал активен на {self.tailscale_ip}:12345",
+                text=f"✅ Портал активен на {self.tailscale_ip}:{PORTAL_PORT}",
                 text_color="green"
             )
-            self.log(f"✅ Портал запущен на {self.tailscale_ip}:12345")
+            self.log(f"✅ Портал запущен на {self.tailscale_ip}:{PORTAL_PORT}")
+            self._refresh_local_link_status_label()
+            self._arm_peer_poll()
         except Exception as e:
             self.log(f"❌ Ошибка запуска: {str(e)}")
             self.is_server_running = False
@@ -317,6 +739,8 @@ class PortalApp(ctk.CTk):
             text_color="gray"
         )
         self.log("⏸ Портал остановлен")
+        self._cancel_peer_poll()
+        self._refresh_local_link_status_label()
     
     def server_loop(self):
         """Основной цикл сервера"""
@@ -350,6 +774,13 @@ class PortalApp(ctk.CTk):
                 self.receive_clipboard(message)
             elif message.get("type") == "get_clipboard":
                 self.send_clipboard_response(client_socket)
+            elif message.get("type") == "ping":
+                # Лёгкая проверка «это наш Портал» для индикатора связи
+                pong = json.dumps(
+                    {"type": "pong", "ok": True, "version": 1},
+                    ensure_ascii=False,
+                )
+                client_socket.sendall(pong.encode("utf-8"))
             
         except Exception as e:
             self.log(f"❌ Ошибка обработки клиента: {str(e)}")
@@ -408,12 +839,19 @@ class PortalApp(ctk.CTk):
     
     def set_remote_peer_ip(self, ip: Optional[str]):
         """Сохранить IP второго компьютера (файл + поле в главном окне)."""
-        self.remote_peer_ip = (ip or "").strip() or None
-        portal_config.save_remote_ip(self.remote_peer_ip)
-        if hasattr(self, "peer_ip_entry"):
-            self.peer_ip_entry.delete(0, "end")
-            if self.remote_peer_ip:
-                self.peer_ip_entry.insert(0, self.remote_peer_ip)
+        ip_clean = (ip or "").strip() or None
+        self.remote_peer_ip = ip_clean
+        success = portal_config.save_remote_ip(ip_clean)
+        if not success and ip_clean:
+            if hasattr(self, "log"):
+                self.log(f"⚠️ Не удалось сохранить IP в файл! Проверь права на запись")
+            else:
+                print(f"[Portal] Не удалось сохранить IP: {ip_clean}")
+        # Обновляем поле ввода
+        try:
+            self._peer_ip_entry_set_silent(self.remote_peer_ip or "")
+        except Exception as e:
+            print(f"[Portal] Ошибка обновления поля IP: {e}")
     
     def push_shared_clipboard_hotkey(self):
         """Ctrl+Alt+C / Cmd+Shift+C — отправить локальный буфер на удалённый ПК"""
@@ -443,7 +881,8 @@ class PortalApp(ctk.CTk):
             _log(f"📥 Запрос буфера с {target_ip}...")
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client_socket.settimeout(30)
-            client_socket.connect((target_ip, 12345))
+            client_socket.connect((target_ip, PORTAL_PORT))
+            _log(f"✅ Подключение установлено: {target_ip}:{PORTAL_PORT}")
             client_socket.send(json.dumps({"type": "get_clipboard"}).encode("utf-8"))
             buf = b""
             message = None
@@ -477,12 +916,16 @@ class PortalApp(ctk.CTk):
     def send_file_dialog(self):
         """Выбор файла; IP берётся из сохранённых настроек (без лишних окон)."""
         from tkinter import filedialog
+        self.log("📂 Открыт диалог выбора файла...")
         filepath = filedialog.askopenfilename(
             title="Выберите файл для отправки"
         )
         if not filepath:
+            self.log("❌ Файл не выбран (отменено)")
             return
+        self.log(f"✅ Файл выбран: {Path(filepath).name} ({Path(filepath).stat().st_size / 1024 / 1024:.2f} MB)")
         if self.remote_peer_ip:
+            self.log(f"📤 Отправка на {self.remote_peer_ip}...")
             threading.Thread(
                 target=self.send_file,
                 args=(filepath, self.remote_peer_ip),
@@ -576,7 +1019,28 @@ class PortalApp(ctk.CTk):
             self.log(f"📤 Отправка файла на {target_ip}...")
             
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client_socket.connect((target_ip, 12345))
+            client_socket.settimeout(10)  # Таймаут 10 секунд
+            try:
+                client_socket.connect((target_ip, PORTAL_PORT))
+                self.log(f"✅ Подключение установлено: {target_ip}:{PORTAL_PORT}")
+            except socket.timeout:
+                self.log(f"❌ Таймаут подключения к {target_ip}")
+                self.log("💡 Проверь:")
+                self.log("   1. На втором ПК нажат «Запустить портал»")
+                self.log("   2. IP адрес правильный")
+                self.log("   3. Оба ПК в одной сети (Tailscale или LAN)")
+                return
+            except ConnectionRefusedError:
+                self.log(f"❌ Подключение отклонено: {target_ip}:{PORTAL_PORT}")
+                self.log("💡 На втором ПК должен быть нажат «Запустить портал»")
+                return
+            except OSError as e:
+                if "No route to host" in str(e) or "Network is unreachable" in str(e):
+                    self.log(f"❌ Нет пути к {target_ip}")
+                    self.log("💡 Проверь что оба ПК в одной сети (Tailscale или LAN)")
+                else:
+                    self.log(f"❌ Ошибка сети: {str(e)}")
+                return
             
             filename = os.path.basename(filepath)
             filesize = os.path.getsize(filepath)
@@ -607,8 +1071,19 @@ class PortalApp(ctk.CTk):
             else:
                 self.log(f"⚠️ Неопределенный ответ от получателя")
                 
+        except socket.timeout:
+            self.log(f"❌ Таймаут при отправке на {target_ip}")
+            self.log("💡 Файл слишком большой или медленное соединение")
         except Exception as e:
-            self.log(f"❌ Ошибка отправки: {str(e)}")
+            err_msg = str(e)
+            if "timed out" in err_msg.lower() or "timeout" in err_msg.lower():
+                self.log(f"❌ Таймаут: {target_ip} не отвечает")
+                self.log("💡 Убедись что на втором ПК запущен портал")
+            elif "refused" in err_msg.lower():
+                self.log(f"❌ Подключение отклонено: портал на {target_ip} не запущен")
+                self.log("💡 На втором ПК нажми «Запустить портал»")
+            else:
+                self.log(f"❌ Ошибка отправки: {err_msg}")
     
     def send_clipboard(self, target_ip: str):
         """Отправка буфера обмена"""
@@ -621,7 +1096,20 @@ class PortalApp(ctk.CTk):
             self.log(f"📤 Отправка буфера обмена на {target_ip}...")
             
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client_socket.connect((target_ip, 12345))
+            client_socket.settimeout(10)
+            try:
+                client_socket.connect((target_ip, PORTAL_PORT))
+                self.log(f"✅ Подключение установлено: {target_ip}:{PORTAL_PORT}")
+            except (socket.timeout, ConnectionRefusedError, OSError) as e:
+                if isinstance(e, socket.timeout):
+                    self.log(f"❌ Таймаут подключения к {target_ip}")
+                elif isinstance(e, ConnectionRefusedError):
+                    self.log(f"❌ Подключение отклонено: портал на {target_ip} не запущен")
+                    self.log("💡 На втором ПК нажми «Запустить портал»")
+                else:
+                    self.log(f"❌ Нет пути к {target_ip}")
+                    self.log("💡 Проверь что оба ПК в одной сети")
+                return
             
             # Отправка метаданных
             message = {
@@ -634,7 +1122,15 @@ class PortalApp(ctk.CTk):
             self.log(f"✅ Буфер обмена отправлен ({len(clipboard_text)} символов)")
                 
         except Exception as e:
-            self.log(f"❌ Ошибка отправки буфера: {str(e)}")
+            err_msg = str(e)
+            if "timed out" in err_msg.lower() or "timeout" in err_msg.lower():
+                self.log(f"❌ Таймаут: {target_ip} не отвечает")
+                self.log("💡 Убедись что на втором ПК запущен портал")
+            elif "refused" in err_msg.lower():
+                self.log(f"❌ Подключение отклонено: портал на {target_ip} не запущен")
+                self.log("💡 На втором ПК нажми «Запустить портал»")
+            else:
+                self.log(f"❌ Ошибка отправки буфера: {err_msg}")
     
     def start_clipboard_monitor(self):
         """Запуск мониторинга буфера обмена"""
@@ -668,22 +1164,33 @@ class PortalApp(ctk.CTk):
 if __name__ == "__main__":
     import sys
     
-    # Проверяем аргументы командной строки
-    show_widget = "--widget" in sys.argv or "-w" in sys.argv
+    # По умолчанию ВСЕГДА запускаем виджет (если не указан --no-widget)
+    show_widget = "--no-widget" not in sys.argv and "-nw" not in sys.argv
     
     app = PortalApp()
-    
-    # Если запрошен виджет, создаем его
+
+    # Виджет запускается всегда (если не отключен явно)
     if show_widget:
+        from portal_widget import PortalWidget, GlobalHotkeyManager, debug_log_path
+
+        app.log(f"📝 Лог хоткеев (файл): {debug_log_path()}")
         try:
             app.update_idletasks()
-            from portal_widget import PortalWidget, GlobalHotkeyManager
+
             widget = PortalWidget(app)
             GlobalHotkeyManager(widget, app).start()
             widget.root.withdraw()
             app.log("✅ Виджет скрыт по умолчанию — Ctrl+Alt+P (Win) / Cmd+Option+P (Mac) чтобы показать")
             app.log("💡 IP второго ПК вводится один раз в поле выше → «Сохранить IP»")
+            app.log("⌨️ Смотри строки «⌨️ …» ниже: если жмёшь хоткей — должны появляться сообщения.")
+            app.log(
+                "📡 Под IP — блок «Статус связи»: зелёный = второй ПК отвечает как Портал; "
+                "серый/красный = там не запущен приём или неверный адрес."
+            )
         except Exception as e:
             app.log(f"⚠️ Не удалось создать виджет: {str(e)}")
-    
+            import traceback
+
+            app.log(traceback.format_exc())
+
     app.mainloop()
