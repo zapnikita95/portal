@@ -240,19 +240,34 @@ def _log_to_file(line: str) -> None:
 
 
 def portal_thread_log(main_app: Any, message: str, prefix: str = "⌨️") -> None:
-    """Лог из любого потока: консоль + файл + журнал GUI (thread-safe через after)."""
+    """
+    Лог из любого потока: консоль + файл + журнал GUI.
+
+    ВАЖНО (Python 3.13 + Tk): не вызывать main_app.after(0, ...) из главного потока,
+    когда уже внутри колбэка Tk (bind / fileevent) — даёт PyEval_RestoreThread / SIGABRT.
+    На главном потоке пишем в журнал напрямую.
+    """
     ts = time.strftime("%H:%M:%S")
     full = f"[{ts}] {prefix} {message}"
     print(f"[Portal] {full}", flush=True)
     _log_to_file(f"[Portal] {full}")
     try:
-        if main_app is not None and hasattr(main_app, "after") and hasattr(main_app, "log"):
-            def _do():
-                try:
-                    main_app.log(f"{prefix} {message}")
-                except Exception:
-                    pass
+        if main_app is None or not hasattr(main_app, "log"):
+            return
+        line = f"{prefix} {message}"
+
+        def _do() -> None:
+            try:
+                main_app.log(line)
+            except Exception:
+                pass
+
+        if threading.current_thread() is threading.main_thread():
+            _do()
+        elif hasattr(main_app, "after"):
             main_app.after(0, _do)
+        else:
+            _do()
     except Exception:
         pass
 
@@ -1921,20 +1936,25 @@ class GlobalHotkeyManager:
                         daemon=True,
                         name="portal-mac-hotkey-helper",
                     ).start()
-                    # В фокусе на окне Portal глобальный монитор чужого процесса клавиши не шлёт;
-                    # bind_all с CTk иногда не срабатывает — подключаем NSEvent local monitor (главный поток Tk).
-                    try:
-                        self.main_app.after(350, self._setup_nslocal_monitor)
-                    except Exception as e:
-                        self._log(f"after(local monitor 3.13+): {e}")
+                    # NSEvent local monitor + Tk 3.13 давали SIGABRT (PyEval_RestoreThread) при хоткее.
+                    # Включай вручную, если bind_all в окне Portal совсем молчит: PORTAL_MAC_NSLOCAL_MONITOR=1
+                    if os.environ.get("PORTAL_MAC_NSLOCAL_MONITOR", "").strip().lower() in (
+                        "1",
+                        "true",
+                        "yes",
+                    ):
+                        try:
+                            self.main_app.after(350, self._setup_nslocal_monitor)
+                        except Exception as e:
+                            self._log(f"after(local monitor 3.13+): {e}")
                     try:
                         self.main_app.after(2800, self._hotkey_helper_healthcheck)
                     except Exception:
                         pass
                     self._log(
                         "⌛ macOS 3.13+: снаружи окна — helper (CGEventTap→NSEvent→pipe); "
-                        "внутри окна Portal — NSEvent local + Tk bind_all. "
-                        "Права «Мониторинг ввода»: "
+                        "внутри окна — Tk bind_all. Local NSEvent (если bind пустой): "
+                        "PORTAL_MAC_NSLOCAL_MONITOR=1. Права «Мониторинг ввода»: "
                         + _mac_privacy_target_hint()
                     )
         else:
@@ -2273,7 +2293,7 @@ class GlobalHotkeyManager:
         self._log(
             "⏳ Глобальный helper жив, но ещё не подтвердил монитор — подожди 1–2 с или нажми Cmd+Ctrl+P "
             "**вне** окна Portal. Строка «✅ Глобальные хоткеи: NSEvent/CGEventTap» значит снаружи окна уже ок. "
-            "Внутри окна — NSEvent local + Tk; права TCC: "
+            "Внутри окна — Tk bind_all (local NSEvent: PORTAL_MAC_NSLOCAL_MONITOR=1, нестабильно на 3.13). Права TCC: "
             + _mac_privacy_target_hint()
         )
 

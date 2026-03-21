@@ -23,7 +23,12 @@
 ## Снаружи окна vs внутри окна Portal
 
 - **Другое приложение в фокусе** — клавиши ловит **helper** (CGEventTap или NSEvent) → pipe → Portal.  
-- **Фокус внутри Portal** — macOS **не дублирует** те же события в «глобальный» монитор; в приложении работают **NSEvent local monitor** + **Tk bind_all** (Python 3.13+).
+- **Фокус внутри Portal** — **Tk bind_all** (и русские з/с/м из [коммита с раскладкой](https://github.com/zapnikita95/portal/commit/7dacbe6f70979c4fa8e6733a413120c14c61fd25)).  
+  Опционально: `PORTAL_MAC_NSLOCAL_MONITOR=1` — экспериментальный NSEvent local (на Python **3.13** давал **краш** при хоткее в связке с Tk — по умолчанию **выкл**).
+
+## Краш при нажатии хоткея (Python 3.13)
+
+Если в отчёте `PyEval_RestoreThread` / `PythonCmd` — обновись до версии, где `portal_thread_log` **не** делает `after(0)` из главного потока, и **не** включай `PORTAL_MAC_NSLOCAL_MONITOR` без необходимости.
 
 ## Если глобально не ловит, но в окне Portal работает
 
