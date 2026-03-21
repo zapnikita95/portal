@@ -4,12 +4,22 @@
 
 ## Сборка в облаке (GitHub Actions)
 
-В репозитории включён workflow **«Portal Desktop Build»** (`.github/workflows/portal-desktop-release.yml`):
+Шаблон workflow лежит в корне: **`github-workflow-portal-desktop.yml`**. Скопируй в репозиторий:
 
-- **Вручную:** GitHub → **Actions** → выбери workflow → **Run workflow** → скачай артефакты `Portal-macOS` / `Portal-Windows` (ZIP).
-- **Релиз:** запушь тег `v1.2.0` (формат `v*`) — к релизу прикрепятся `Portal-macOS.zip` и `Portal-Windows.zip`.
+```bash
+mkdir -p .github/workflows
+cp github-workflow-portal-desktop.yml .github/workflows/portal-desktop-release.yml
+git add .github/workflows/portal-desktop-release.yml && git commit -m "ci: desktop build" && git push
+```
 
-Скилл для агента Cursor: `.cursor/skills/portal-desktop-release/SKILL.md`.
+*(Если push с Personal Access Token падает с ошибкой про `workflow` — у токена в GitHub → Settings → Developer settings нужен scope **workflow**, либо добавь файл через веб-интерфейс GitHub.)*
+
+После появления workflow в `.github/workflows/`:
+
+- **Вручную:** Actions → **Portal Desktop Build** → **Run workflow** → артефакты `Portal-macOS` / `Portal-Windows`.
+- **Релиз:** `git tag v1.2.0 && git push origin v1.2.0` — к релизу прикрепятся оба ZIP.
+
+Скилл Cursor: `.cursor/skills/portal-desktop-release/SKILL.md`.
 
 ## 1. Подготовка
 

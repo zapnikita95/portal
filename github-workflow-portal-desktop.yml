@@ -1,8 +1,11 @@
+# Скопируй в репозиторий как: .github/workflows/portal-desktop-release.yml
+# (шаблон в корне — чтобы push с PAT без scope `workflow` не блокировался.)
+#
 # Сборка Portal для macOS (.app) и Windows (.exe) через PyInstaller.
 # Артефакты: Portal-macOS.zip, Portal-Windows.zip
-# Релиз GitHub: при push тега v* (например v1.2.0) — вложения к релизу.
-#
+# Релиз: push тега v* (например v1.2.0).
 # Ручной запуск: Actions → «Portal Desktop Build» → Run workflow.
+
 name: Portal Desktop Build
 
 on:
@@ -59,7 +62,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller pillow pywin32
 
-      - name: Иконка .ico (без .icns на Windows — скрипт пропустит)
+      - name: Иконка .ico
         run: python scripts/generate_branding_icons.py
 
       - name: PyInstaller (Portal.exe + папка)

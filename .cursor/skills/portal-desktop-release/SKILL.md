@@ -22,10 +22,10 @@ pyinstaller pyinstaller_portal.spec
 
 ## GitHub Actions (без своей машины)
 
-Workflow: **`.github/workflows/portal-desktop-release.yml`**
+Шаблон в корне репо: **`github-workflow-portal-desktop.yml`** → скопируй в **`.github/workflows/portal-desktop-release.yml`** (см. **BUILD_DESKTOP.md**). Push workflow-файла с GitHub PAT требует scope **`workflow`**.
 
-1. **Артефакты без релиза:** в репозитории → **Actions** → **Portal Desktop Build** → **Run workflow**. После сборки скачай **Portal-macOS** / **Portal-Windows** из артефактов job.
-2. **Релиз с вложениями:** создай и запушь тег вида `v1.0.0`:
+1. **Артефакты без релиза:** **Actions** → **Portal Desktop Build** → **Run workflow** → скачай **Portal-macOS** / **Portal-Windows**.
+2. **Релиз с вложениями:** запушь тег `v1.0.0`:
    ```bash
    git tag v1.0.0
    git push origin v1.0.0
