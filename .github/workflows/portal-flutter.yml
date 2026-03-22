@@ -36,6 +36,10 @@ jobs:
         working-directory: portal_flutter
         run: python3 tool/patch_android_manifest.py
 
+      - name: Патч Gradle (compileSdk 35, JVM 17 для плагинов)
+        working-directory: portal_flutter
+        run: python3 tool/patch_android_gradle.py
+
       - name: flutter pub get + analyze
         working-directory: portal_flutter
         run: |
