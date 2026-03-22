@@ -41,8 +41,8 @@ gradle.projectsEvaluated {{
             jc.options.release = 17
         }}
         p.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {{
-            kotlinOptions {{
-                jvmTarget = "17"
+            compilerOptions {{
+                jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
             }}
         }}
     }}
@@ -50,7 +50,7 @@ gradle.projectsEvaluated {{
 {MARK_END}
 """
 
-# Kotlin DSL (Flutter 3.35+)
+# Kotlin DSL (Flutter 3.35+); Kotlin 2.2+ forbids kotlinOptions on KotlinCompile — use compilerOptions.
 ROOT_SNIPPET_KTS = f"""
 {MARK_BEGIN}
 gradle.projectsEvaluated {{
@@ -69,13 +69,26 @@ gradle.projectsEvaluated {{
             targetCompatibility = JavaVersion.VERSION_17.toString()
             options.release.set(17)
         }}
-        sub.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile::class.java).configureEach {{
-            kotlinOptions.jvmTarget = "17"
+        sub.tasks.withType(KotlinCompile::class.java).configureEach {{
+            compilerOptions {{
+                jvmTarget.set(JvmTarget.JVM_17)
+            }}
         }}
     }}
 }}
 {MARK_END}
 """
+
+KTS_KOTLIN_COMPILE_IMPORTS = """import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+
+"""
+
+
+def _ensure_kts_kotlin_imports(text: str) -> str:
+    if "import org.jetbrains.kotlin.gradle.tasks.KotlinCompile" in text:
+        return text
+    return KTS_KOTLIN_COMPILE_IMPORTS + text.lstrip("\n")
 
 
 def _pick_app_gradle() -> Path:
@@ -130,8 +143,10 @@ def _patch_root_kts(text: str) -> str:
     if MARK_BEGIN in text:
         a = text.index(MARK_BEGIN)
         b = text.index(MARK_END) + len(MARK_END)
-        return text[:a] + ROOT_SNIPPET_KTS.strip() + text[b:]
-    return text.rstrip() + "\n" + ROOT_SNIPPET_KTS
+        out = text[:a] + ROOT_SNIPPET_KTS.strip() + text[b:]
+    else:
+        out = text.rstrip() + "\n" + ROOT_SNIPPET_KTS
+    return _ensure_kts_kotlin_imports(out)
 
 
 def main() -> None:

@@ -1,3 +1,6 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+
 allprojects {
     repositories {
         google()
@@ -40,8 +43,10 @@ gradle.projectsEvaluated {
             targetCompatibility = JavaVersion.VERSION_17.toString()
             options.release.set(17)
         }
-        sub.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile::class.java).configureEach {
-            kotlinOptions.jvmTarget = "17"
+        sub.tasks.withType(KotlinCompile::class.java).configureEach {
+            compilerOptions {
+                jvmTarget.set(JvmTarget.JVM_17)
+            }
         }
     }
 }

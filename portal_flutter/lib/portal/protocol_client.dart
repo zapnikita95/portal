@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:portal_flutter/config.dart';
 import 'package:portal_flutter/portal/framing.dart';
+import 'package:portal_flutter/util/portal_host.dart';
 
 Map<String, dynamic> _withSecret(Map<String, dynamic> msg, String secret) {
   final s = secret.trim();
@@ -19,7 +20,7 @@ Future<bool> pingPortal(
   Duration readTimeout = const Duration(seconds: 5),
 }) async {
   final h = host.trim();
-  if (h.isEmpty) return false;
+  if (h.isEmpty || !isPlausiblePortalHost(h)) return false;
   Socket? socket;
   try {
     final addr = InternetAddress.tryParse(h);
@@ -72,6 +73,12 @@ Future<(bool ok, String err)> sendFileToPeer(
   final h = host.trim();
   if (h.isEmpty || !await File(filePath).exists()) {
     return (false, 'bad_args');
+  }
+  if (!isPlausiblePortalHost(h)) {
+    return (
+      false,
+      'некорректный адрес — введи полный IP ПК (например 192.168.1.5), не одну цифру',
+    );
   }
   Socket? socket;
   try {
@@ -128,6 +135,12 @@ Future<(bool ok, String err)> sendTextToPeer(
 }) async {
   final h = host.trim();
   if (h.isEmpty) return (false, 'bad_host');
+  if (!isPlausiblePortalHost(h)) {
+    return (
+      false,
+      'некорректный адрес — введи полный IP ПК (например 192.168.1.5), не одну цифру',
+    );
+  }
   Socket? socket;
   try {
     final hdr = _withSecret(
