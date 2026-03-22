@@ -33,7 +33,7 @@ def _prepare_portal_frame_rgba(frame, out_size: int = _ICON_PX):
     try:
         from PIL import Image, ImageFilter
     except ImportError:
-        print("Нужен Pillow: pip install pillow", file=sys.stderr)
+        print("Need Pillow: pip install pillow", file=sys.stderr)
         raise
 
     img = frame.convert("RGBA")
@@ -97,7 +97,7 @@ def _render_icon_png_from_gif() -> Path | None:
     _OUT_DIR.mkdir(parents=True, exist_ok=True)
     out = _OUT_DIR / "portal_icon.png"
     rgba.save(out, format="PNG")
-    print("OK:", out, "(из portal_main.gif, кадр 0)")
+    print("OK:", out, "(from portal_main.gif frame 0)")
     return out
 
 
@@ -105,7 +105,7 @@ def _png_to_ico(png_path: Path, ico_path: Path) -> bool:
     try:
         from PIL import Image
     except ImportError:
-        print("Нужен Pillow: pip install pillow", file=sys.stderr)
+        print("Need Pillow: pip install pillow", file=sys.stderr)
         return False
     im = Image.open(png_path).convert("RGBA")
     try:
@@ -128,12 +128,15 @@ def _png_to_ico(png_path: Path, ico_path: Path) -> bool:
 
 def _png_to_icns_mac(png_path: Path, icns_path: Path) -> bool:
     if sys.platform != "darwin":
-        print("Пропуск .icns (только macOS; на Windows/Linux собери .app на Mac или положи готовый portal.icns)")
+        print(
+            "Skip .icns (macOS only; build .app on Mac or add portal.icns)",
+            file=sys.stderr,
+        )
         return False
     sips = shutil.which("sips")
     iconutil = shutil.which("iconutil")
     if not sips or not iconutil:
-        print("Нет sips/iconutil", file=sys.stderr)
+        print("Missing sips/iconutil", file=sys.stderr)
         return False
     import tempfile
 
@@ -191,12 +194,12 @@ def main() -> int:
     if png_src is None:
         if _FALLBACK_SRC.is_file():
             print(
-                f"Нет {_GIF_SRC.name} — используется запасной {_FALLBACK_SRC}",
+                f"Missing {_GIF_SRC.name}, using fallback {_FALLBACK_SRC}",
                 file=sys.stderr,
             )
             png_src = _FALLBACK_SRC
         else:
-            print(f"Нет ни {_GIF_SRC}, ни {_FALLBACK_SRC}", file=sys.stderr)
+            print(f"Missing both {_GIF_SRC} and {_FALLBACK_SRC}", file=sys.stderr)
             return 1
 
     ico = _OUT_DIR / "portal.ico"
@@ -213,7 +216,7 @@ def main() -> int:
     gif_app = and_assets / "portal_main.gif"
     if _GIF_SRC.is_file():
         shutil.copyfile(_GIF_SRC, gif_app)
-        print("OK:", gif_app, "(шапка Android)")
+        print("OK:", gif_app, "(Android assets copy)")
     return 0
 
 

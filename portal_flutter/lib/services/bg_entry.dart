@@ -23,38 +23,73 @@ void portalBackgroundMain(ServiceInstance service) async {
     server = null;
     final prefs = await SharedPreferences.getInstance();
     final st = await SettingsRepository.loadFromPrefs(prefs);
-    final dir = await resolveReceiveDir(st.receiveDir);
-    final ss = await ServerSocket.bind(
-      InternetAddress.anyIPv4,
-      portalPort,
-      shared: true,
-    );
-    server = ss;
-    ss.listen((Socket client) {
-      handlePortalSocket(
-        client,
-        receiveDir: dir,
-        secret: st.secret,
-        onEvent: (k, msg, p) async {
-          service.invoke('log', {'t': msg});
-          if (Platform.isAndroid) {
-            final line =
-                msg.length > 96 ? '${msg.substring(0, 96)}…' : msg;
-            try {
-              // AndroidServiceInstance без импорта android-артефакта (iOS-сборка).
-              // ignore: avoid_dynamic_calls
-              (service as dynamic).setForegroundNotificationInfo(
-                title: 'Portal · приём',
-                content: line,
-              );
-            } catch (_) {}
-          }
-        },
+    String dir;
+    try {
+      dir = await resolveReceiveDir(st.receiveDir);
+    } catch (e) {
+      service.invoke('log', {
+        't': 'Папка приёма: $e — проверь настройки.',
+      });
+      rethrow;
+    }
+    late ServerSocket ss;
+    try {
+      ss = await ServerSocket.bind(
+        InternetAddress.anyIPv4,
+        portalPort,
+        shared: true,
       );
-    });
+    } catch (e) {
+      service.invoke('log', {
+        't': 'Не удалось занять порт $portalPort: $e '
+            '(занят другим приложением или запрет ОС).',
+      });
+      rethrow;
+    }
+    server = ss;
+    service.invoke('log', {'t': 'Слушаю :$portalPort (приём с ПК)'});
+    ss.listen(
+      (Socket client) {
+        handlePortalSocket(
+          client,
+          receiveDir: dir,
+          secret: st.secret,
+          onEvent: (k, msg, p) async {
+            service.invoke('log', {'t': msg});
+            if (Platform.isAndroid) {
+              final line =
+                  msg.length > 96 ? '${msg.substring(0, 96)}…' : msg;
+              try {
+                // AndroidServiceInstance без импорта android-артефакта (iOS-сборка).
+                // ignore: avoid_dynamic_calls
+                (service as dynamic).setForegroundNotificationInfo(
+                  title: 'Portal · приём',
+                  content: line,
+                );
+              } catch (_) {}
+            }
+          },
+        );
+      },
+      onError: (Object e, StackTrace st) {
+        service.invoke('log', {'t': 'Ошибка сокета: $e'});
+      },
+      cancelOnError: false,
+    );
   }
 
-  await startServer();
+  try {
+    await startServer();
+  } catch (e, st) {
+    try {
+      service.invoke('log', {'t': 'Фон Portal: $e'});
+    } catch (_) {}
+    assert(() {
+      // ignore: avoid_print
+      print('portalBackgroundMain startServer: $e\n$st');
+      return true;
+    }());
+  }
 
   service.on('stopIt').listen((_) async {
     try {
@@ -65,7 +100,11 @@ void portalBackgroundMain(ServiceInstance service) async {
   });
 
   service.on('reload').listen((_) async {
-    await startServer();
+    try {
+      await startServer();
+    } catch (e) {
+      service.invoke('log', {'t': 'Reload: $e'});
+    }
   });
 }
 

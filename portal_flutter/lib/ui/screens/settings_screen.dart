@@ -17,7 +17,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _animPreset = 'pulse';
 
   static const _animLabels = <String, String>{
-    'pulse': 'Пульс (по умолчанию)',
+    'branding': 'GIF portal_main (как на ПК)',
+    'pulse': 'Пульс (вектор)',
     'static': 'Статичный портал',
     'rings': 'Кольца / орбита',
   };
@@ -33,7 +34,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _secret.text = st.secret;
     _recvDir.text = st.receiveDir;
     final a = st.portalAnimPreset.trim().toLowerCase();
-    _animPreset = _animLabels.containsKey(a) ? a : 'pulse';
+    _animPreset = _animLabels.containsKey(a) ? a : 'branding';
     if (mounted) setState(() => _loading = false);
   }
 
@@ -58,6 +59,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       secret: _secret.text.trim(),
       receiveDir: _recvDir.text.trim(),
       portalAnimPreset: _animPreset,
+      peerGroups: st.peerGroups,
     ));
     await PortalServiceController.reloadReceiveIfRunning();
     if (!mounted) return;

@@ -29,14 +29,29 @@ class PortalServiceController {
   static Future<bool> androidRunning() async =>
       FlutterBackgroundService().isRunning();
 
+  /// Дожидаемся, пока плагин увидит сервис (иначе тумблер остаётся «выкл» сразу после старта).
   static Future<void> startAndroidReceive() async {
-    await Permission.notification.request();
+    final n = await Permission.notification.request();
+    if (n != PermissionStatus.granted) {
+      throw StateError(
+        'Нужны уведомления для фонового приёма (разреши в настройках).',
+      );
+    }
     final s = FlutterBackgroundService();
     if (!await s.isRunning()) {
       await s.startService();
     } else {
       s.invoke('reload');
     }
+    for (var i = 0; i < 50; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      if (await s.isRunning()) {
+        return;
+      }
+    }
+    throw StateError(
+      'Foreground service не поднялся за ~5 с. Проверь разрешения, батарею (без ограничений) и logcat.',
+    );
   }
 
   static Future<void> stopAndroidReceive() async {

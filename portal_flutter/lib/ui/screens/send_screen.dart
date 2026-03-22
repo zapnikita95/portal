@@ -47,7 +47,7 @@ class _SendScreenState extends State<SendScreen> {
 
   Future<List<PeerDto>> _targets() async {
     final st = await SettingsRepository.load();
-    return st.peers.where((p) => p.send && p.ip.trim().isNotEmpty).toList();
+    return st.peersForSending();
   }
 
   Future<void> _pickFile() async {
@@ -65,7 +65,7 @@ class _SendScreenState extends State<SendScreen> {
     }
     final tg = await _targets();
     if (tg.isEmpty) {
-      setState(() => _status = 'Нет получателей (Пиры → галочка)');
+      setState(() => _status = 'Нет получателей: пиры с галочкой или группа с «Отправка на группу»');
       return;
     }
     setState(() {
@@ -112,7 +112,7 @@ class _SendScreenState extends State<SendScreen> {
     }
     final tg = await _targets();
     if (tg.isEmpty) {
-      setState(() => _status = 'Нет получателей');
+      setState(() => _status = 'Нет получателей: пиры / группы');
       return;
     }
     setState(() {

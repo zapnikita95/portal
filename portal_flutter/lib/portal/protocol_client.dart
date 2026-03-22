@@ -14,6 +14,8 @@ Future<bool> pingPortal(
   String host, {
   String secret = '',
   int port = portalPort,
+  Duration? connectTimeout,
+  Duration readTimeout = const Duration(seconds: 5),
 }) async {
   final h = host.trim();
   if (h.isEmpty) return false;
@@ -22,15 +24,14 @@ Future<bool> pingPortal(
     socket = await Socket.connect(
       h,
       port,
-      timeout: portalConnectTimeout,
+      timeout: connectTimeout ?? portalConnectTimeout,
     );
     final raw = jsonEncode(_withSecret({'type': 'ping'}, secret));
     socket.add(utf8.encode('$raw\n'));
     await socket.flush();
     // Ответ может прийти несколькими TCP-пакетами — копим буфер, как на десктопе.
     final buf = BytesBuilder(copy: false);
-    await for (final data
-        in socket.timeout(const Duration(seconds: 5))) {
+    await for (final data in socket.timeout(readTimeout)) {
       if (data.isEmpty) break;
       buf.add(data);
       final text = utf8.decode(buf.toBytes(), allowMalformed: true);

@@ -15,11 +15,18 @@ class IosReceiveRunner {
     await stop();
     final st = await SettingsRepository.load();
     final dir = await resolveReceiveDir(st.receiveDir);
-    _server = await ServerSocket.bind(
-      InternetAddress.anyIPv4,
-      portalPort,
-      shared: true,
-    );
+    try {
+      _server = await ServerSocket.bind(
+        InternetAddress.anyIPv4,
+        portalPort,
+        shared: true,
+      );
+    } catch (e) {
+      throw StateError(
+        'Не удалось слушать :$portalPort на iPhone ($e). '
+        'Порт занят или запрещён; закрой другие копии / VPN.',
+      );
+    }
     _server!.listen((Socket client) {
       handlePortalSocket(
         client,

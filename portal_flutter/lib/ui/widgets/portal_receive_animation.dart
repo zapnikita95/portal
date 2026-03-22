@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 /// Пресеты анимации на экране «Приём» (настройка `portal_anim` в JSON).
@@ -41,6 +42,33 @@ class _PortalReceiveAnimationState extends State<PortalReceiveAnimation>
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final p = widget.preset.trim().toLowerCase();
+    final useGif = p == 'branding' || p == 'gif' || p == 'portal_main';
+    if (useGif) {
+      final img = Image.asset(
+        'assets/portal_main.gif',
+        width: widget.size,
+        height: widget.size,
+        fit: BoxFit.contain,
+        gaplessPlayback: true,
+        errorBuilder: (_, __, ___) =>
+            _StaticPortal(size: widget.size, color: cs.primary),
+      );
+      if (!widget.active) {
+        return Opacity(
+          opacity: 0.4,
+          child: ColorFiltered(
+            colorFilter: const ColorFilter.matrix(<double>[
+              0.2126, 0.7152, 0.0722, 0, 0,
+              0.2126, 0.7152, 0.0722, 0, 0,
+              0.2126, 0.7152, 0.0722, 0, 0,
+              0, 0, 0, 1, 0,
+            ]),
+            child: img,
+          ),
+        );
+      }
+      return img;
+    }
     if (!widget.active || p == 'static' || p == 'calm') {
       return _StaticPortal(size: widget.size, color: cs.primary);
     }

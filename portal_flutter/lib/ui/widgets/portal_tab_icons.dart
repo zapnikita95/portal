@@ -37,9 +37,10 @@ class _PortalTabPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final cx = size.width / 2;
     final cy = size.height / 2;
-    final rx = size.width * 0.42;
-    final ry = size.height * 0.36;
-    final sw = math.max(2.0, size.shortestSide * 0.12);
+    final scale = size.shortestSide / 24.0;
+    final rx = size.width * 0.40;
+    final ry = size.height * 0.34;
+    final sw = math.max(2.0, 2.4 * scale);
 
     final ring = Paint()
       ..style = PaintingStyle.stroke
@@ -48,7 +49,7 @@ class _PortalTabPainter extends CustomPainter {
 
     canvas.save();
     canvas.translate(cx, cy);
-    canvas.rotate(-0.15);
+    canvas.rotate(-0.12);
 
     final rect = Rect.fromCenter(
       center: Offset.zero,
@@ -59,64 +60,67 @@ class _PortalTabPainter extends CustomPainter {
 
     final inner = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = sw * 0.55
-      ..color = color.withOpacity(0.55);
+      ..strokeWidth = sw * 0.5
+      ..color = color.withOpacity(0.5);
     canvas.drawOval(
-      Rect.fromCenter(center: Offset.zero, width: rx * 1.35, height: ry * 1.2),
+      Rect.fromCenter(center: Offset.zero, width: rx * 1.38, height: ry * 1.18),
       inner,
     );
 
     final stroke = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = math.max(1.5, size.shortestSide * 0.08)
+      ..strokeWidth = math.max(1.6, 1.8 * scale)
       ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
       ..color = color;
 
     switch (kind) {
       case PortalTabKind.receive:
-        canvas.drawLine(const Offset(-1, 2), const Offset(-1, 7), stroke);
-        canvas.drawLine(const Offset(-4, 5), const Offset(-1, 7), stroke);
-        canvas.drawLine(const Offset(2, 5), const Offset(-1, 7), stroke);
+        // Стрелка вниз к центру (приём)
+        canvas.drawLine(Offset(0, -5 * scale), Offset(0, 6 * scale), stroke);
+        canvas.drawLine(Offset(-4 * scale, 2 * scale), Offset(0, 6 * scale), stroke);
+        canvas.drawLine(Offset(4 * scale, 2 * scale), Offset(0, 6 * scale), stroke);
         break;
       case PortalTabKind.peers:
         final fill = Paint()..style = PaintingStyle.fill..color = color;
-        canvas.drawCircle(const Offset(-5, -1), 2.2, fill);
-        canvas.drawCircle(const Offset(5, -1), 2.2, fill);
-        canvas.drawLine(const Offset(-2.5, 1), const Offset(2.5, 1), stroke);
+        canvas.drawCircle(Offset(-5 * scale, -0.5 * scale), 2.0 * scale, fill);
+        canvas.drawCircle(Offset(5 * scale, -0.5 * scale), 2.0 * scale, fill);
+        canvas.drawLine(Offset(-2 * scale, 2.5 * scale), Offset(2 * scale, 2.5 * scale), stroke);
         break;
       case PortalTabKind.send:
-        canvas.drawLine(const Offset(-1, -2), const Offset(-1, -7), stroke);
-        canvas.drawLine(const Offset(-4, -5), const Offset(-1, -7), stroke);
-        canvas.drawLine(const Offset(2, -5), const Offset(-1, -7), stroke);
+        // Стрелка вверх от центра (отправка)
+        canvas.drawLine(Offset(0, 5 * scale), Offset(0, -6 * scale), stroke);
+        canvas.drawLine(Offset(-4 * scale, -2 * scale), Offset(0, -6 * scale), stroke);
+        canvas.drawLine(Offset(4 * scale, -2 * scale), Offset(0, -6 * scale), stroke);
         break;
       case PortalTabKind.history:
+        final arcRect = Rect.fromCircle(center: Offset.zero, radius: 5.2 * scale);
         canvas.drawArc(
-          Rect.fromCircle(center: Offset.zero, radius: 5),
-          -math.pi * 0.1,
-          -math.pi * 1.3,
+          arcRect,
+          -math.pi * 0.05,
+          -math.pi * 1.45,
           false,
           stroke,
         );
-        const arcStart = -0.3141592653589793; // -pi * 0.1
-        final a = arcStart;
+        const a = -math.pi * 0.05;
         canvas.drawLine(
-          Offset(3 * math.cos(a), 3 * math.sin(a)),
-          Offset(5 * math.cos(a), 5 * math.sin(a)),
+          Offset(4.8 * scale * math.cos(a), 4.8 * scale * math.sin(a)),
+          Offset(6.2 * scale * math.cos(a), 6.2 * scale * math.sin(a)),
           stroke,
         );
         break;
       case PortalTabKind.settings:
         final dot = Paint()..style = PaintingStyle.fill..color = color;
         for (var i = 0; i < 6; i++) {
-          final a = i * math.pi / 3;
-          final o = Offset(5.5 * math.cos(a), 5.5 * math.sin(a));
-          canvas.drawCircle(o, 1.1, dot);
+          final a = i * math.pi / 3 - math.pi / 2;
+          final o = Offset(5.2 * scale * math.cos(a), 5.2 * scale * math.sin(a));
+          canvas.drawCircle(o, 1.0 * scale, dot);
         }
         final hub = Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = stroke.strokeWidth
           ..color = color;
-        canvas.drawCircle(Offset.zero, 2.2, hub);
+        canvas.drawCircle(Offset.zero, 2.0 * scale, hub);
         break;
     }
 
