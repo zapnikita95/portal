@@ -295,14 +295,27 @@ class ReceiveServer:
         self.secret = secret
         self.saf_tree_uri = (saf_tree_uri or "").strip()
 
-    def _emit(self, kind: str, msg: str) -> None:
+    def _emit(
+        self,
+        kind: str,
+        msg: str,
+        local_path: Optional[str] = None,
+    ) -> None:
         if not self.on_event:
             return
         if self._use_kivy_clock:
-            Clock.schedule_once(lambda _dt, k=kind, m=msg: self.on_event(k, m), 0)
+            Clock.schedule_once(
+                lambda _dt, k=kind, m=msg, p=local_path: self.on_event(k, m, p),
+                0,
+            )
         else:
             try:
-                self.on_event(kind, msg)
+                self.on_event(kind, msg, local_path)
+            except TypeError:
+                try:
+                    self.on_event(kind, msg)
+                except Exception:
+                    pass
             except Exception:
                 pass
 
@@ -494,6 +507,7 @@ class ReceiveServer:
                 self._emit(
                     "receive_file",
                     f"[+] Получен файл от {peer_ip}: {safe} ({kb} КБ) -> папка (проводник)",
+                    None,
                 )
                 try:
                     portal_history.append_event(
@@ -554,6 +568,7 @@ class ReceiveServer:
                 self._emit(
                     "receive_file",
                     f"[+] Получен файл от {peer_ip}: {safe} ({kb} КБ) -> {save_dir}",
+                    out_path,
                 )
                 try:
                     portal_history.append_event(
@@ -1371,6 +1386,15 @@ class PortalAndroidApp(App):
     # ── on_start / on_stop ──────────────────────────────────────────────────
 
     def on_start(self):
+        if kivy_platform == "android" and is_android_runtime():
+            try:
+                from android_notifier import request_post_notifications_permission
+
+                Clock.schedule_once(
+                    lambda _dt: request_post_notifications_permission(), 0.6
+                )
+            except Exception:
+                pass
         # ВАЖНО: при старте из Share Sheet раньше не поднимали ReceiveServer - исправлено.
         Clock.schedule_once(lambda _dt: self._start_receive_server(), 0.05)
         if self._share_boot:
@@ -1428,7 +1452,12 @@ class PortalAndroidApp(App):
         )
         self._recv_server.start()
 
-    def _on_server_event(self, kind: str, msg: str) -> None:
+    def _on_server_event(
+        self,
+        kind: str,
+        msg: str,
+        _local_path: Optional[str] = None,
+    ) -> None:
         self._log(msg)
         if kind in ("receive_file", "receive_text"):
             if self._status_lbl:

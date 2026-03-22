@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:portal_flutter/screens/home_screen.dart';
+import 'package:portal_flutter/services/portal_service_controller.dart';
+import 'package:portal_flutter/ui/main_scaffold.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await PortalServiceController.initialize();
   runApp(const PortalApp());
 }
 
@@ -16,7 +19,7 @@ class PortalApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
       ),
-      home: const HomeScreen(),
+      home: const MainScaffold(),
     );
   }
 }

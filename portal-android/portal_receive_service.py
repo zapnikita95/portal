@@ -31,12 +31,12 @@ def _run() -> None:
     else:
         recv_dir = recv_dir or _default_receive_dir()
 
-    def on_event(kind: str, msg: str) -> None:
+    def on_event(kind: str, msg: str, local_path=None) -> None:
         try:
             from android_notifier import show_event_notification
 
             if kind in ("receive_file", "receive_text"):
-                show_event_notification(kind, msg)
+                show_event_notification(kind, msg, local_path)
         except Exception:
             pass
         print(f"[PortalReceive] {kind}: {msg}")

@@ -32,23 +32,19 @@ jobs:
             flutter create . --project-name portal_flutter --org org.portal --platforms=android
           fi
 
-      - name: Разрешить cleartext TCP (LAN / Tailscale без TLS на 12345)
+      - name: Патч AndroidManifest (cleartext, FGS, POST_NOTIFICATIONS)
         working-directory: portal_flutter
-        run: |
-          python3 << 'PY'
-          from pathlib import Path
-          p = Path("android/app/src/main/AndroidManifest.xml")
-          t = p.read_text(encoding="utf-8")
-          if "usesCleartextTraffic" not in t:
-              t = t.replace("<application", '<application android:usesCleartextTraffic="true"', 1)
-              p.write_text(t, encoding="utf-8")
-          PY
+        run: python3 tool/patch_android_manifest.py
 
-      - name: flutter pub get + build apk
+      - name: flutter pub get + analyze
         working-directory: portal_flutter
         run: |
           flutter pub get
-          flutter build apk --release
+          flutter analyze --no-fatal-infos
+
+      - name: flutter build apk
+        working-directory: portal_flutter
+        run: flutter build apk --release
 
       - name: Стабильное имя для релиза
         working-directory: portal_flutter
@@ -62,7 +58,7 @@ jobs:
           tag: portal-flutter-latest
           name: Portal Flutter (CI)
           body: |
-            Release APK из ветки main (Flutter). Отдельно от Kivy **Portal-Android.apk**.
+            **Основной мобильный клиент Portal** (Flutter). Kivy **Portal-Android.apk** — legacy/опционально.
             Установка: скачать `Portal-Flutter.apk` → разрешить установку из неизвестных источников.
           artifacts: portal_flutter/Portal-Flutter.apk
           allowUpdates: true

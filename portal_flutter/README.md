@@ -1,30 +1,29 @@
 # Portal Flutter
 
-Один проект **Android + iOS** (один код). Это **отдельное приложение** от Kivy **Portal-Android.apk** до полной миграции; на GitHub два артефакта: `Portal-Android.apk` (Python) и `Portal-Flutter.apk` (этот клиент).
+**Основной мобильный клиент Portal** — один проект **Android + iOS** (один код). Kivy **Portal-Android.apk** в репозитории остаётся как legacy.
 
-## App Store
+## Возможности
 
-Не обязателен на старте: APK вручную, TestFlight после подписи iOS.
+- **Приём** файлов и текста с ПК по TCP `:12345` (тот же протокол, что у десктопа): на Android — foreground service в фоне; на iOS — пока приложение активно.
+- **Отправка** файла (в т.ч. через **Share** в приложение) и текста на отмеченные пиры.
+- **Пиры**, **пароль сети**, папка приёма; **история** (SQLite) с повтором файла и копированием пути/текста.
 
-## Локальная сборка
+## Сборка локально
 
 ```bash
 cd portal_flutter
 flutter create . --project-name portal_flutter --org org.portal --platforms=android,ios   # один раз
+python3 tool/patch_android_manifest.py   # cleartext LAN + FGS + POST_NOTIFICATIONS
 flutter pub get
 flutter run
 ```
 
-В `android/app/src/main/AndroidManifest.xml` для LAN/TCP без TLS на `:12345` нужен `android:usesCleartextTraffic="true"` у `<application>` (в CI это делает workflow).
-
-## Что уже есть
-
-- Экран с IP, паролем и **Ping** — проверка `pong` как на десктопе (`lib/services/portal_client.dart`).
-
-## Дальше
-
-- Отправка файла/текста (JSON + поток байт), приём в isolate, список пиров, SQLite-история по образцу `portal_history.py`.
+`tool/patch_android_manifest.py` дублируется в CI после `flutter create`.
 
 ## CI
 
-Workflow **Portal Flutter Build**: артефакт `portal-flutter-apk`, релиз `portal-flutter-latest` с `Portal-Flutter.apk`. iOS: job `ios-nosign` — zip `Runner.app` без подписи.
+Workflow **Portal Flutter Build**: артефакт `portal-flutter-apk`, релиз `portal-flutter-latest` с `Portal-Flutter.apk`. iOS: job `ios-nosign` — zip `Runner.app` без подписи (TestFlight — локальная подпись).
+
+## App Store
+
+Не обязателен на старте: APK вручную, TestFlight после подписи iOS.

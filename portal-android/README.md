@@ -1,4 +1,6 @@
-# Portal для Android (Kivy + Buildozer)
+# Portal для Android (Kivy + Buildozer) — **legacy**
+
+Для новых установок предпочтителен **Flutter**: [`../portal_flutter/README.md`](../portal_flutter/README.md) → релиз `portal-flutter-latest`. Этот каталог — прежняя сборка **Portal-Android.apk** (`portal-android-latest`).
 
 Тот же **TCP-протокол**, что у desktop [`portal.py`](../portal.py): порт **12345**, поле **`secret`** в первом JSON.
 
