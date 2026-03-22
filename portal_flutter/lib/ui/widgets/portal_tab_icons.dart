@@ -60,7 +60,7 @@ class _PortalTabPainter extends CustomPainter {
     final inner = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = sw * 0.55
-      ..color = color.withValues(alpha: 0.55);
+      ..color = color.withOpacity(0.55);
     canvas.drawOval(
       Rect.fromCenter(center: Offset.zero, width: rx * 1.35, height: ry * 1.2),
       inner,

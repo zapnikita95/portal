@@ -38,25 +38,16 @@
 
 В **⚙ Настройки → Общее** выбери **Русский** или **English**, нажми «Сохранить язык» и **перезапусти** Портал. В `config.json`: `"ui_language": "ru"` или `"en"`. Тексты собраны в **`portal_i18n.py`** (два словаря в одном файле — без внешних JSON, чтобы PyInstaller не терял ресурсы). Виджет и macOS (заголовок окна, поиск NSWindow) учитывают оба языка.
 
-## Безопасность и сеть
+## Зачем Portal и чем удобнее «облака» и мессенджеров
 
-### VPN / Tailscale (и аналоги)
+- **Прямая связь устройство ↔ устройство** по TCP — без загрузки в чужой сервер и без лимитов «облака».
+- **Общий пароль сети (shared secret)** — лишний без пароля к твоему Порталу не подключится (первый JSON каждого запроса).
+- **Tailscale / VPN** — шифрование на пути; в связке с паролем это нормальная модель для своих машин.
+- **Буфер обмена + файлы + история** в одном месте, горячие клавиши, виджет на столе.
 
-Между устройствами трафик часто идёт через оверлейную сеть (Tailscale, ZeroTier, WireGuard и т.д.) — **по пути** его обычно шифрует сам VPN. Это **не заменяет** контроль доступа к приложению: любой участник той же tailnet, кто знает твой IP и порт **12345**, может попытаться подключиться к Порталу.
+## Безопасность (кратко)
 
-### Локальная сеть (LAN, 192.168.x.x или 10.x.x.x)
-
-Здесь гораздо хуже.
-
-Любой девайс в той же Wi‑Fi/локалке (гости, соседи по роутеру, если Wi‑Fi взломан, корпоративная сеть и т.д.) может узнать/просканировать твой IP и подключиться к порту **12345**.
-
-Возможные риски:
-
-- Отправка очень больших файлов → DoS (забивание диска).
-- Нежелательное содержимое в буфере обмена (текст/картинки и т.д.).
-- Если позже появятся сценарии с исполняемым содержимым — растёт ущерб.
-
-**Вывод:** на «голом» LAN без дополнительных мер — **опасно**, особенно если сеть не полностью твоя (кофейня, офис, общий дом).
+На **LAN без VPN** теоретически виден твой IP: кто-то из той же сети может **попытаться** достучаться до порта **12345**. **Пароль сети** в Portal закрывает это на уровне приложения: без совпадения `secret` запрос отклоняется. Для публичных Wi‑Fi и чужих сетей разумно **Tailscale** (или не слушать Portal вне доверенной сети / файрвол).
 
 ### Внешний вид виджета
 
@@ -88,113 +79,44 @@
 
 В приложении: **📱 APP** — вкладки **Android** (скачать **`Загрузки/Portal-Flutter.apk`**, релиз **`portal-flutter-latest`**) и **iOS** (ссылка на инструкцию и Actions; это не «тот же файл, что APK»).
 
-**Как выложить APK на GitHub (один раз настроить CI):** в репо уже есть **[`.github/workflows/portal-android-apk.yml`](.github/workflows/portal-android-apk.yml)** — после push запусти workflow вручную (**Actions → Portal Android APK → Run workflow**) или дождись сборки по push в `portal-android/**`. Успешный run публикует **`Portal-Android.apk`** в релиз с тегом `portal-android-latest` (обновляется при каждой сборке). Дополнительно остаётся артефакт **portal-debug-apk**.
+**Сборки в GitHub:** Actions → **Portal Android APK** (legacy Kivy), **Portal Flutter Build** (основной APK). Релизы: теги `portal-android-latest`, `portal-flutter-latest`.
 
-Опционально **`PORTAL_GITHUB_TOKEN`** — тогда **«Собрать на GitHub»** в окне APK шлёт `workflow_dispatch` без браузера. **`PORTAL_GITHUB_REPO`**, **`PORTAL_GITHUB_BRANCH`** — если не хочешь менять `owner/repo` в настройках.
+Для кнопки **«Собрать на GitHub»** из приложения нужен токен — см. **[docs/DEVELOPER_GITHUB.md](docs/DEVELOPER_GITHUB.md)** (только для разработчиков).
 
-### Где взять `PORTAL_GITHUB_TOKEN`
+## Установка для пользователей (без терминала)
 
-1. Зайди на GitHub → **аватар (справа сверху) → Settings**.
-2. Внизу слева **Developer settings** → **Personal access tokens**.
-3. Удобнее всего **Tokens (classic)** → **Generate new token (classic)**.
-4. Включи галочки:
-   - **`repo`** (полный доступ к репо) — чтобы API видел релизы; для **приватного** репо обязательно.
-   - **`workflow`** — чтобы из Портала дергать «запусти сборку» и чтобы **git push** мог обновлять файлы в `.github/workflows/` (без `workflow` GitHub отклонит пуш workflow).
-5. Сгенерируй, **скопируй токен один раз** (потом его не покажут).
+Скачай **[Releases](https://github.com/zapnikita95/portal/releases)**:
 
-**Как передать Порталу (macOS):** разово в терминале перед запуском:
+| Платформа | Что взять |
+|-----------|-----------|
+| **Windows** | Установщик **PortalSetup** (если выложен в релизе) или архив **Portal-Windows.zip** → распаковать → **Portal.exe**. |
+| **macOS** | Образ **Portal.dmg** (если выложен в релизе) или **Portal-macOS.zip** → **Portal.app** перетащить в «Программы». |
 
-```bash
-export PORTAL_GITHUB_TOKEN="ghp_xxxxxxxx"
-./start_portal.command
-```
+Подробности упаковки и quarantine: **[DISTRIBUTION.md](DISTRIBUTION.md)**, сборка из исходников: **[BUILD_DESKTOP.md](BUILD_DESKTOP.md)**.
 
-Или добавь строку `export PORTAL_GITHUB_TOKEN=...` в `~/.zshrc` / `~/.bash_profile` (не коммить токен в репозиторий).
+## Сборка .exe / .app из исходников (разработчикам)
 
-**Если пушишь репо по HTTPS тем же токеном** — у PAT **обязательно** scope **`workflow`**, иначе ошибка вроде: *refusing to allow a Personal Access Token to create or update workflow … without `workflow` scope*. Либо пуш через **SSH** (`git@github.com:...`), тогда для workflow-файлов отдельный PAT не нужен.
+См. **[BUILD_DESKTOP.md](BUILD_DESKTOP.md)** и `pyinstaller_portal.spec`. Кратко: `pip install -r requirements.txt`, `pyinstaller -y pyinstaller_portal.spec` → `dist/`.
 
-**Обход без токена в git:** открой на GitHub **Add file → Create new file**, путь `.github/workflows/portal-android-apk.yml`, вставь содержимое из репозитория и сохрани — workflow появится на сайте, остальной код можно пушить обычным PAT без `workflow`.
+## Обновление установленного приложения
 
-Шаблон-копия workflow: **[`portal-android/github-workflow-portal-android-apk.yml`](portal-android/github-workflow-portal-android-apk.yml)**.
+Поставь новую версию из **Releases** (поверх или заменой папки/`.app`), либо встроенный механизм обновления, если он есть в твоей сборке. Обновление через `git pull` нужно только если ты ведёшь проект как репозиторий с Python.
 
-Локальная сборка: **Docker** — [`portal-android/Dockerfile`](portal-android/Dockerfile).
+### macOS после скачивания из интернета
 
-## Сборка .exe / .app (PyInstaller)
-
-Черновой spec: [`pyinstaller_portal.spec`](pyinstaller_portal.spec).
-
-```bash
-cd /path/to/portal
-pip install pyinstaller -r requirements.txt
-pyinstaller -y pyinstaller_portal.spec
-```
-
-Артефакты в `dist/`. На macOS при «повреждении» приложения: `xattr -dr com.apple.quarantine dist/Portal.app`.  
-**Nuitka** и автосборки — в планах, см. [ROADMAP.md](ROADMAP.md).
-
-## 🔄 Обновление (на **каждом** компьютере отдельно)
-
-Папка с проектом на **Windows** и папка на **Mac** — это две копии. После правок на GitHub на **каждой** машине:
-
-**Windows** (в папке `Portal`):
-```bat
-cd /d "C:\путь\к\Portal"
-git pull
-start_portal.bat
-```
-
-**macOS** (в папке `portal`):
-```bash
-cd ~/путь/к/portal
-git pull
-chmod +x Portal.command start_portal.command
-./Portal.command
-```
-
-Если не используешь git — скачай заново ZIP с GitHub и замени папку.
-
-## 🚀 Быстрая установка
-
-### Windows:
-1. Скачайте проект
-2. Дважды кликните `start_portal.bat` - всё установится автоматически!
-
-### macOS (итог — что сделать):
-```bash
-git clone https://github.com/zapnikita95/portal.git
-cd portal
-pip3 install -r requirements.txt
-chmod +x Portal.command fix.sh
-# если ошибка _tkinter:
-./fix.sh
-# запуск двойным кликом по Portal.command или:
-python3 portal.py
-```
-Виджет **по умолчанию скрыт** — **`Cmd+Ctrl+P`** чтобы показать/скрыть (`PORTAL_MAC_HOTKEY_LEGACY=1` — как раньше `Cmd+Option+P`).  
-**Горячие клавиши:** см. **[MAC_ACCESSIBILITY.md](MAC_ACCESSIBILITY.md)** — «Универсальный доступ» для **Терминала** / **Cursor** / **Python** (кто запускает скрипт).
+Если система ругается на приложение: `xattr -dr com.apple.quarantine /Applications/Portal.app` (или путь к твоему `.app`). См. [DISTRIBUTION.md](DISTRIBUTION.md).
 
 **Прозрачный фон вокруг портала (macOS):** по умолчанию хромакей **магента `#FF00FF`** (не съедает тёмные края огня). Свой цвет: `export PORTAL_WIDGET_CHROMA=#010101`. Полностью отключить «дырявое» окно: `PORTAL_WIDGET_NO_MAC_TRANSPARENT=1`.
 
-**Виджет «окошком» с рамкой (macOS, по умолчанию):** GIF рисуется на тёмной подложке `#2a2d35`, без магенты на весь стол — `PORTAL_WIDGET_FRAMED=1` или не задавать. Вернуть прежний полноэкранный хромакей: `PORTAL_WIDGET_FRAMED=0`.
+**Виджет «окошком» с рамкой (macOS, по умолчанию):** фон подложки — в **⚙ Настройки → Виджет → «Применить фон»** (или `widget_mac_panel_bg` в `config.json`). Старое поведение «хромакей на весь стол»: `PORTAL_WIDGET_FRAMED=0`.
 
 **Приём файлов:** в настройках список **режима** — на диск и в буфер / только папка / только буфер (+ файл в папке). Отправка «как из буфера» (`portal_clipboard`) по-прежнему всегда кладёт в буфер на принимающей стороне. **Отдельная папка по IP:** вкладка «Папка и приём» — текстовое поле «IP → путь» (совпадение **строго** с IP в логе, например `100.x.x.x`); если строки для IP нет — используется общая папка. В режиме **«только в буфер»** файлы пишутся во временную папку, маппинг по IP не применяется.
 
 **Drag & Drop файла на виджет (macOS):** включён через `tkinterdnd2`. Если на Python 3.13+ падает при старте — запуск с `PORTAL_NO_MAC_DND=1` (DnD только из главного окна).
 
-### macOS (tkinter):
-1. Скачайте проект
-2. Если видите ошибку `ModuleNotFoundError: No module named '_tkinter'`:
-   ```bash
-   chmod +x fix.sh
-   ./fix.sh
-   ```
-3. Запустите: `python3 portal.py` или **`Portal.command`** (виджет по умолчанию; отключить: `--no-widget`)
+### Запуск из клонированного репозитория (разработка)
 
-### Linux:
-```bash
-pip install -r requirements.txt
-python3 portal.py
-```
+Нужны Python 3.8+ и `pip install -r requirements.txt`. На macOS при ошибке `_tkinter` — `./fix.sh`. Запуск: `python3 portal.py` или `Portal.command` (виджет по умолчанию; `--no-widget` — без виджета).
 
 ## 📖 Использование
 

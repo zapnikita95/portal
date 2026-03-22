@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:portal_flutter/config.dart';
 
@@ -26,12 +27,21 @@ Future<bool> pingPortal(
     final raw = jsonEncode(_withSecret({'type': 'ping'}, secret));
     socket.add(utf8.encode('$raw\n'));
     await socket.flush();
-    final data = await socket.timeout(const Duration(seconds: 5)).first;
-    if (data.isEmpty) return false;
-    final text = utf8.decode(data, allowMalformed: true);
-    if (text.contains('portal_auth_failed')) return false;
-    final obj = _firstJsonObject(text);
-    return obj != null && obj['type'] == 'pong';
+    // Ответ может прийти несколькими TCP-пакетами — копим буфер, как на десктопе.
+    final buf = BytesBuilder(copy: false);
+    await for (final data
+        in socket.timeout(const Duration(seconds: 5))) {
+      if (data.isEmpty) break;
+      buf.add(data);
+      final text = utf8.decode(buf.toBytes(), allowMalformed: true);
+      if (text.contains('portal_auth_failed')) return false;
+      final obj = _firstJsonObject(text);
+      if (obj != null) {
+        return obj['type'] == 'pong';
+      }
+      if (buf.length > 16384) break;
+    }
+    return false;
   } catch (_) {
     return false;
   } finally {

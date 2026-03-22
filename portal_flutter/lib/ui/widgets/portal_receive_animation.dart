@@ -106,8 +106,8 @@ class _StaticPortalPainter extends CustomPainter {
     final bg = Paint()
       ..shader = RadialGradient(
         colors: [
-          color.withValues(alpha: 0.15 + glow * 0.2),
-          color.withValues(alpha: 0.02),
+          color.withOpacity(0.15 + glow * 0.2),
+          color.withOpacity(0.02),
         ],
       ).createShader(Rect.fromCircle(center: Offset(cx, cy), radius: size.shortestSide * 0.55));
 
@@ -154,7 +154,7 @@ class _RingsPainter extends CustomPainter {
     final paint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = math.max(2.5, size.shortestSide * 0.045)
-      ..color = color.withValues(alpha: 0.85);
+      ..color = color.withOpacity(0.85);
 
     canvas.save();
     canvas.translate(cx, cy);
@@ -163,13 +163,17 @@ class _RingsPainter extends CustomPainter {
       canvas.save();
       canvas.rotate(rot * (i.isEven ? 1 : -1));
       final s = 0.65 + i * 0.12;
+      final ringPaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = paint.strokeWidth
+        ..color = color.withOpacity((0.55 - i * 0.12).clamp(0.12, 1.0));
       canvas.drawOval(
         Rect.fromCenter(
           center: Offset.zero,
           width: size.width * 0.5 * s,
           height: size.height * 0.42 * s,
         ),
-        paint..color = color.withValues(alpha: 0.55 - i * 0.12),
+        ringPaint,
       );
       canvas.restore();
     }

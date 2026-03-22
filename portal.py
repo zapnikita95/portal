@@ -1534,6 +1534,50 @@ class PortalApp(ctk.CTk):
             command=self.save_widget_geometry_from_ui,
             font=ctk.CTkFont(size=12),
         ).pack(side="left", padx=(4, 0))
+        if platform.system() == "Darwin":
+            mac_bg_row = ctk.CTkFrame(t_widget, fg_color="transparent")
+            mac_bg_row.pack(fill="x", padx=8, pady=(6, 2))
+            ctk.CTkLabel(
+                mac_bg_row,
+                text=i18n.tr("widget.mac_bg_title"),
+                font=ctk.CTkFont(size=12),
+            ).pack(side="left", padx=(0, 8))
+            presets = portal_config.widget_mac_panel_bg_presets()
+            self._widget_mac_bg_label_to_hex: Dict[str, str] = {}
+            labels: List[str] = []
+            for hx, key in presets:
+                lab = i18n.tr(f"widget.mac_bg.{key}")
+                labels.append(lab)
+                self._widget_mac_bg_label_to_hex[lab] = hx
+            self.widget_mac_bg_menu = ctk.CTkOptionMenu(
+                mac_bg_row,
+                values=labels,
+                width=300,
+                font=ctk.CTkFont(size=12),
+            )
+            self.widget_mac_bg_menu.pack(side="left", padx=(0, 8))
+            cur = portal_config.load_widget_mac_panel_bg_hex().lower()
+            cur_lab = labels[0]
+            for hx, key in presets:
+                if hx.lower() == cur:
+                    cur_lab = i18n.tr(f"widget.mac_bg.{key}")
+                    break
+            self.widget_mac_bg_menu.set(cur_lab)
+            ctk.CTkButton(
+                mac_bg_row,
+                text=i18n.tr("widget.mac_bg_save"),
+                width=140,
+                command=self.save_widget_mac_panel_bg_from_ui,
+                font=ctk.CTkFont(size=12),
+            ).pack(side="left")
+            ctk.CTkLabel(
+                t_widget,
+                text=i18n.tr("widget.mac_bg_hint"),
+                font=ctk.CTkFont(size=11),
+                text_color="gray",
+                wraplength=680,
+                justify="left",
+            ).pack(anchor="w", padx=8, pady=(0, 2))
         ctk.CTkLabel(
             t_widget,
             text=i18n.tr("widget.hint_geo"),
@@ -3110,6 +3154,32 @@ class PortalApp(ctk.CTk):
             self._apply_widget_geometry_live()
         else:
             self.log("⚠️ Не удалось записать настройки геометрии")
+
+    def save_widget_mac_panel_bg_from_ui(self) -> None:
+        if platform.system() != "Darwin":
+            return
+        if not hasattr(self, "widget_mac_bg_menu"):
+            return
+        lab = self.widget_mac_bg_menu.get()
+        hx_map = getattr(self, "_widget_mac_bg_label_to_hex", {})
+        hx = hx_map.get(lab)
+        if not hx:
+            self.log("⚠️ Неизвестный пресет фона виджета")
+            return
+        if not portal_config.save_widget_mac_panel_bg_hex(hx):
+            self.log("⚠️ Не удалось сохранить цвет фона")
+            return
+        self.log("✅ Фон виджета (macOS) сохранён")
+        w = getattr(self, "portal_widget_ref", None)
+        if w is not None and hasattr(w, "apply_mac_panel_background"):
+            try:
+                self.after(0, w.apply_mac_panel_background)
+            except Exception as ex:
+                self.log(f"⚠️ Обновление виджета: {ex}")
+        else:
+            self.log(
+                "💡 Виджет ещё не открыт — цвет применится при следующем показе (Cmd+Ctrl+P)."
+            )
 
     def _widget_preset_labels_and_ids(self) -> Tuple[List[str], List[str]]:
         cat = portal_config.load_widget_presets_catalog()

@@ -459,8 +459,8 @@ class PortalWidget:
         self.root.title(i18n.tr("widget.desktop_title"))
 
         self.size = portal_config.load_widget_size()
-        # Тёмная подложка режима «окошко» (macOS): GIF композится на неё, без дыры в стол через -transparentcolor
-        self._frame_panel_rgb = (42, 45, 53)  # #2a2d35
+        # Подложка режима «окошко» (macOS): цвет из настроек (config.json widget_mac_panel_bg)
+        self._frame_panel_rgb = portal_config.load_widget_mac_panel_bg_rgb()
         self._mac_framed_window: bool = self._widget_framed_mode()
         self._mac_using_rgba_window: bool = False  # True = реальная альфа, без хромакей-менты в PhotoImage
         self._mac_nswindow_fixed: bool = False  # лог успеха Cocoa один раз
@@ -501,8 +501,9 @@ class PortalWidget:
 
         self.setup_window()
 
+        _panel_hex = portal_config.load_widget_mac_panel_bg_hex()
         _cbg = (
-            "#2a2d35"
+            _panel_hex
             if platform.system() == "Darwin" and getattr(self, "_mac_framed_window", False)
             else self._chroma_hex
         )
@@ -560,7 +561,9 @@ class PortalWidget:
     def setup_window(self):
         """Позиция, поверх остальных окон, без рамки"""
         framed = platform.system() == "Darwin" and getattr(self, "_mac_framed_window", False)
-        bg_use = "#2a2d35" if framed else self._chroma_hex
+        bg_use = (
+            portal_config.load_widget_mac_panel_bg_hex() if framed else self._chroma_hex
+        )
         try:
             ht = 1 if framed else 0
             hb = "#555555" if framed else self._chroma_hex
@@ -1022,6 +1025,40 @@ class PortalWidget:
         composed = self._purge_magenta_screen_rgb(composed, r, g, b)
         return ImageTk.PhotoImage(composed, master=self.canvas)
 
+    def _fit_rgba_to_widget_canvas(self, rgba: Image.Image) -> Image.Image:
+        """Вписать кадр в квадрат окна с сохранением пропорций (letterbox)."""
+        rgba = rgba.convert("RGBA")
+        s = max(8, int(self.size))
+        iw, ih = rgba.size
+        if iw < 1 or ih < 1:
+            return Image.new("RGBA", (s, s), (0, 0, 0, 0))
+        sc = min(s / float(iw), s / float(ih))
+        nw = max(1, int(round(iw * sc)))
+        nh = max(1, int(round(ih * sc)))
+        resized = rgba.resize((nw, nh), Image.Resampling.LANCZOS)
+        if platform.system() == "Darwin" and getattr(self, "_mac_framed_window", False):
+            bg = (*self._frame_panel_rgb, 255)
+        else:
+            bg = (*self._chroma_rgb, 255)
+        out = Image.new("RGBA", (s, s), bg)
+        x = (s - nw) // 2
+        y = (s - nh) // 2
+        out.paste(resized, (x, y), resized)
+        return out
+
+    def apply_mac_panel_background(self) -> None:
+        """После смены цвета подложки в config — обновить Tk и пересобрать PhotoImage."""
+        if platform.system() != "Darwin" or not getattr(self, "_mac_framed_window", False):
+            return
+        self._frame_panel_rgb = portal_config.load_widget_mac_panel_bg_rgb()
+        hx = portal_config.load_widget_mac_panel_bg_hex()
+        try:
+            self.canvas.configure(bg=hx)
+            self.root.configure(bg=hx)
+        except tk.TclError:
+            pass
+        self.reload_portal_media()
+
     def load_portal_gif(self):
         """Загрузить GIF/PNG/WebP: путь из config (widget_media_path) или assets/, режим — widget_media_mode."""
         asset_path = self._find_portal_asset()
@@ -1050,6 +1087,8 @@ class PortalWidget:
             if not raw_frames:
                 print("[Portal] Файл без кадров — рисованный портал")
                 return
+
+            raw_frames = [self._fit_rgba_to_widget_canvas(f) for f in raw_frames]
 
             wmode = portal_config.load_widget_media_mode()
             if wmode == "static":
@@ -1102,7 +1141,7 @@ class PortalWidget:
                 for f in raw_frames:
                     self.gif_frames.append(self._photo_from_rgba_chroma(f))
                 if platform.system() == "Darwin" and getattr(self, "_mac_framed_window", False):
-                    mode_note = "macOS: окно с рамкой, GIF на #2a2d35"
+                    mode_note = f"macOS: окно с рамкой, фон {portal_config.load_widget_mac_panel_bg_hex()}"
                 else:
                     mode_note = f"хромакей {self._chroma_hex}"
             else:

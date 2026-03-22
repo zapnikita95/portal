@@ -679,6 +679,60 @@ def save_widget_geometry_settings(
     return _write_all(data)
 
 
+# macOS: фон «окошка» виджета (режим с рамкой), #RRGGBB
+_DEFAULT_WIDGET_MAC_PANEL_BG = "#2a2d35"
+
+# (hex, ключ i18n widget.mac_bg.*)
+WIDGET_MAC_PANEL_BG_PRESETS: List[Tuple[str, str]] = [
+    ("#2a2d35", "dark_default"),
+    ("#1c1c1e", "dark_system"),
+    ("#3a3a3c", "graphite"),
+    ("#48484a", "elevated_dark"),
+    ("#e5e5ea", "light_gray"),
+    ("#f2f2f7", "light_system"),
+    ("#ffffff", "white"),
+]
+
+
+def _normalize_widget_mac_panel_hex(raw: str) -> Optional[str]:
+    s = str(raw or "").strip()
+    if not s.startswith("#"):
+        s = "#" + s
+    if len(s) != 7:
+        return None
+    try:
+        int(s[1:], 16)
+    except ValueError:
+        return None
+    return s.lower()
+
+
+def load_widget_mac_panel_bg_hex() -> str:
+    data = _load_all()
+    norm = _normalize_widget_mac_panel_hex(str(data.get("widget_mac_panel_bg") or ""))
+    if norm:
+        return norm
+    return _DEFAULT_WIDGET_MAC_PANEL_BG
+
+
+def load_widget_mac_panel_bg_rgb() -> Tuple[int, int, int]:
+    h = load_widget_mac_panel_bg_hex().lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def save_widget_mac_panel_bg_hex(hex_raw: str) -> bool:
+    norm = _normalize_widget_mac_panel_hex(hex_raw)
+    if not norm:
+        return False
+    data = _load_all()
+    data["widget_mac_panel_bg"] = norm
+    return _write_all(data)
+
+
+def widget_mac_panel_bg_presets() -> List[Tuple[str, str]]:
+    return list(WIDGET_MAC_PANEL_BG_PRESETS)
+
+
 # ── Пресеты портала (анимация по событию и IP) ───────────────────────
 
 WIDGET_PRESET_EVENT_LABELS_RU: Dict[str, str] = {
