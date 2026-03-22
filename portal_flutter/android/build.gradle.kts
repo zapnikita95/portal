@@ -34,9 +34,10 @@ subprojects {
         // BaseExtension в KTS не даёт compileSdk — только LibraryExtension / ApplicationExtension.
         extensions.findByType(LibraryExtension::class.java)?.apply {
             compileSdk = 36
+            // Java 21: sqflite_android и др. используют Locale.of / Thread.threadId (не входят в --release 17).
             compileOptions {
-                sourceCompatibility = JavaVersion.VERSION_17
-                targetCompatibility = JavaVersion.VERSION_17
+                sourceCompatibility = JavaVersion.VERSION_21
+                targetCompatibility = JavaVersion.VERSION_21
             }
         }
     }
@@ -44,13 +45,13 @@ subprojects {
 gradle.projectsEvaluated {
     rootProject.subprojects.forEach { sub ->
         sub.tasks.withType(org.gradle.api.tasks.compile.JavaCompile::class.java).configureEach {
-            sourceCompatibility = JavaVersion.VERSION_17.toString()
-            targetCompatibility = JavaVersion.VERSION_17.toString()
-            options.release.set(17)
+            sourceCompatibility = JavaVersion.VERSION_21.toString()
+            targetCompatibility = JavaVersion.VERSION_21.toString()
+            options.release.set(21)
         }
         sub.tasks.withType(KotlinCompile::class.java).configureEach {
             compilerOptions {
-                jvmTarget.set(JvmTarget.JVM_17)
+                jvmTarget.set(JvmTarget.JVM_21)
             }
         }
     }

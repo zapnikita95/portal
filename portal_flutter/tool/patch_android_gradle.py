@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-После `flutter create`: compileSdk 36 и JVM 17 для app + Android-модулей (плагины).
+После `flutter create`: compileSdk 36 и Java/Kotlin 21 для app + плагинов (sqflite_android и др. требуют JDK 21 API).
 Поддерживает шаблон Flutter 3.41+: android/app/build.gradle.kts и android/build.gradle.kts.
 """
 from __future__ import annotations
@@ -21,8 +21,8 @@ subprojects {{ subproject ->
         if (ext != null) {{
             ext.compileSdk = 36
             ext.compileOptions {{
-                sourceCompatibility JavaVersion.VERSION_17
-                targetCompatibility JavaVersion.VERSION_17
+                sourceCompatibility JavaVersion.VERSION_21
+                targetCompatibility JavaVersion.VERSION_21
             }}
         }}
     }}
@@ -30,13 +30,13 @@ subprojects {{ subproject ->
 gradle.projectsEvaluated {{
     rootProject.subprojects.each {{ p ->
         p.tasks.withType(JavaCompile).configureEach {{ jc ->
-            jc.sourceCompatibility = JavaVersion.VERSION_17
-            jc.targetCompatibility = JavaVersion.VERSION_17
-            jc.options.release = 17
+            jc.sourceCompatibility = JavaVersion.VERSION_21
+            jc.targetCompatibility = JavaVersion.VERSION_21
+            jc.options.release = 21
         }}
         p.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {{
             compilerOptions {{
-                jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+                jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
             }}
         }}
     }}
@@ -54,8 +54,8 @@ subprojects {{
         extensions.findByType(LibraryExtension::class.java)?.apply {{
             compileSdk = 36
             compileOptions {{
-                sourceCompatibility = JavaVersion.VERSION_17
-                targetCompatibility = JavaVersion.VERSION_17
+                sourceCompatibility = JavaVersion.VERSION_21
+                targetCompatibility = JavaVersion.VERSION_21
             }}
         }}
     }}
@@ -63,13 +63,13 @@ subprojects {{
 gradle.projectsEvaluated {{
     rootProject.subprojects.forEach {{ sub ->
         sub.tasks.withType(org.gradle.api.tasks.compile.JavaCompile::class.java).configureEach {{
-            sourceCompatibility = JavaVersion.VERSION_17.toString()
-            targetCompatibility = JavaVersion.VERSION_17.toString()
-            options.release.set(17)
+            sourceCompatibility = JavaVersion.VERSION_21.toString()
+            targetCompatibility = JavaVersion.VERSION_21.toString()
+            options.release.set(21)
         }}
         sub.tasks.withType(KotlinCompile::class.java).configureEach {{
             compilerOptions {{
-                jvmTarget.set(JvmTarget.JVM_17)
+                jvmTarget.set(JvmTarget.JVM_21)
             }}
         }}
     }}
@@ -122,15 +122,22 @@ def _patch_app_gradle(text: str) -> str:
     )
     text = text.replace("compileSdk = 35", "compileSdk = 36")
     text = text.replace("compileSdkVersion 35", "compileSdkVersion 36")
-    text = text.replace("JavaVersion.VERSION_1_8", "JavaVersion.VERSION_17")
-    text = text.replace("JavaVersion.VERSION_11", "JavaVersion.VERSION_17")
-    text = text.replace("JavaVersion.VERSION_1_11", "JavaVersion.VERSION_17")
+    text = text.replace("JavaVersion.VERSION_1_8", "JavaVersion.VERSION_21")
+    text = text.replace("JavaVersion.VERSION_11", "JavaVersion.VERSION_21")
+    text = text.replace("JavaVersion.VERSION_1_11", "JavaVersion.VERSION_21")
+    text = text.replace("JavaVersion.VERSION_17", "JavaVersion.VERSION_21")
     text = re.sub(
         r"jvmTarget\s*=\s*JavaVersion\.VERSION_1_8\.toString\(\)",
-        'jvmTarget = "17"',
+        'jvmTarget = "21"',
         text,
     )
-    text = re.sub(r"jvmTarget\s*=\s*['\"]1\.8['\"]", 'jvmTarget = "17"', text)
+    text = re.sub(r"jvmTarget\s*=\s*['\"]1\.8['\"]", 'jvmTarget = "21"', text)
+    text = re.sub(
+        r"jvmTarget\s*=\s*JavaVersion\.VERSION_17\.toString\(\)",
+        'jvmTarget = JavaVersion.VERSION_21.toString()',
+        text,
+    )
+    text = re.sub(r'jvmTarget\s*=\s*["\']17["\']', 'jvmTarget = JavaVersion.VERSION_21.toString()', text)
     return text
 
 

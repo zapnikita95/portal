@@ -20,6 +20,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Gradle/javac для плагинов (sqflite_android и др.) — API JDK 21; иначе падает compileReleaseJavaWithJavac.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -37,7 +43,7 @@ jobs:
         working-directory: portal_flutter
         run: python3 tool/patch_android_manifest.py
 
-      - name: Патч Gradle (compileSdk 36, JVM 17 для плагинов)
+      - name: Патч Gradle (compileSdk 36, Java/Kotlin 21 для плагинов)
         working-directory: portal_flutter
         run: python3 tool/patch_android_gradle.py
 
