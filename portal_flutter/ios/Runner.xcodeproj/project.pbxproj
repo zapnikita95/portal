@@ -329,7 +329,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\nset -u\nsource \"${SRCROOT}/Flutter/flutter_export_environment.sh\"\n/bin/sh \"$FLUTTER_ROOT/packages/flutter_tools/bin/xcode_backend.sh\" embed_and_thin\n";
+			shellScript = "set -e\n# objective_c native-asset hook runs `xcrun --show-sdk-path`; needs full Xcode on PATH (CLT/shims -> empty stdout -> \"Bad state: No element\").\nexport PATH=\"/usr/bin:/bin:/usr/sbin:/sbin:${PATH}\"\nif [ -n \"${DEVELOPER_DIR:-}\" ] && [[ \"${DEVELOPER_DIR}\" != *CommandLineTools* ]]; then\n  :\nelse\n  _XS=\"$(xcode-select -p 2>/dev/null || true)\"\n  if [[ \"${_XS}\" == *CommandLineTools* ]] || [[ -z \"${_XS}\" ]]; then\n    if [ -d \"/Applications/Xcode.app/Contents/Developer\" ]; then export DEVELOPER_DIR=\"/Applications/Xcode.app/Contents/Developer\"; fi\n  else\n    export DEVELOPER_DIR=\"${_XS}\"\n  fi\nfi\nset -u\nsource \"${SRCROOT}/Flutter/flutter_export_environment.sh\"\n/bin/sh \"$FLUTTER_ROOT/packages/flutter_tools/bin/xcode_backend.sh\" embed_and_thin\n";
 		};
 		9740EEB61CF901F6004384FC /* Run Script */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -344,7 +344,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\nset -u\nsource \"${SRCROOT}/Flutter/flutter_export_environment.sh\"\n/bin/sh \"$FLUTTER_ROOT/packages/flutter_tools/bin/xcode_backend.sh\" build\n";
+			shellScript = "set -e\n# objective_c native-asset hook runs `xcrun --show-sdk-path`; needs full Xcode on PATH (CLT/shims -> empty stdout -> \"Bad state: No element\").\nexport PATH=\"/usr/bin:/bin:/usr/sbin:/sbin:${PATH}\"\nif [ -n \"${DEVELOPER_DIR:-}\" ] && [[ \"${DEVELOPER_DIR}\" != *CommandLineTools* ]]; then\n  :\nelse\n  _XS=\"$(xcode-select -p 2>/dev/null || true)\"\n  if [[ \"${_XS}\" == *CommandLineTools* ]] || [[ -z \"${_XS}\" ]]; then\n    if [ -d \"/Applications/Xcode.app/Contents/Developer\" ]; then export DEVELOPER_DIR=\"/Applications/Xcode.app/Contents/Developer\"; fi\n  else\n    export DEVELOPER_DIR=\"${_XS}\"\n  fi\nfi\nset -u\nsource \"${SRCROOT}/Flutter/flutter_export_environment.sh\"\n/bin/sh \"$FLUTTER_ROOT/packages/flutter_tools/bin/xcode_backend.sh\" build\n";
 		};
 		9ABDBF6EDB6C9AA302369394 /* [CP] Check Pods Manifest.lock */ = {
 			isa = PBXShellScriptBuildPhase;

@@ -62,6 +62,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       portalAnimPreset: _animPreset,
       peerGroups: st.peerGroups,
       lanScanMode: st.lanScanMode,
+      lanSeedHintIp: st.lanSeedHintIp,
     ));
     await PortalServiceController.reloadReceiveIfRunning();
     if (!mounted) return;
@@ -88,6 +89,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     return SafeArea(
       child: ListView(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         padding: const EdgeInsets.all(20),
         children: [
           Text('Настройки', style: Theme.of(context).textTheme.titleLarge),

@@ -34,10 +34,11 @@ void portalBackgroundMain(ServiceInstance service) async {
     }
     late ServerSocket ss;
     try {
+      // Android: shared:true часто даёт краш/конфликт с другим процессом; на iOS оставляем shared.
       ss = await ServerSocket.bind(
         InternetAddress.anyIPv4,
         portalPort,
-        shared: true,
+        shared: !Platform.isAndroid,
       );
     } catch (e) {
       service.invoke('log', {

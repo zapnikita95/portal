@@ -429,15 +429,18 @@ def peer_display_label(ip: str) -> str:
 
 def load_peer_send_targets() -> List[str]:
     """
-    IP, на которые идёт одновременная отправка.
-    Пустой список в конфиге или все невалидны → все из peer_ips.
+    IP, на которые идёт одновременная отправка (галочки на главной).
+    Ключ peer_send_targets отсутствует → «все пиры» (старое поведение).
+    Ключ есть и [] → явно ни один пир (остаются только группы, см. load_effective_send_ips).
     """
     all_ips = load_peer_ips()
     if not all_ips:
         return []
     data = _load_all()
+    if "peer_send_targets" not in data:
+        return list(all_ips)
     sel = data.get("peer_send_targets")
-    if not isinstance(sel, list) or not sel:
+    if not isinstance(sel, list):
         return list(all_ips)
     allowed = set(all_ips)
     seen = set()
@@ -447,7 +450,7 @@ def load_peer_send_targets() -> List[str]:
         if s in allowed and s not in seen:
             seen.add(s)
             out.append(s)
-    return out if out else list(all_ips)
+    return out
 
 
 def save_peer_send_targets(targets: List[str]) -> bool:
@@ -455,11 +458,148 @@ def save_peer_send_targets(targets: List[str]) -> bool:
     allowed = set(all_ips)
     clean = [str(x).strip() for x in targets if str(x).strip() in allowed]
     data = _load_all()
-    if not clean or set(clean) == allowed:
+    if clean and set(clean) == allowed:
         data.pop("peer_send_targets", None)
     else:
         data["peer_send_targets"] = clean
     return _write_all(data)
+
+
+def load_peer_network_kinds() -> Dict[str, str]:
+    """IP → auto | lan | tailscale (для мобильного/десктоп UI)."""
+    data = _load_all()
+    raw = data.get("peer_network_kinds")
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, str] = {}
+    for k, v in raw.items():
+        ip = str(k).strip()
+        s = str(v).strip().lower()
+        if not ip or s not in ("auto", "lan", "tailscale"):
+            continue
+        out[ip] = s
+    return out
+
+
+def save_peer_network_kinds(mapping: Dict[str, str]) -> bool:
+    data = _load_all()
+    clean: Dict[str, str] = {}
+    allowed = set(load_peer_ips())
+    for k, v in (mapping or {}).items():
+        ip = str(k).strip()
+        s = str(v).strip().lower()
+        if ip in allowed and s in ("auto", "lan", "tailscale"):
+            clean[ip] = s
+    if clean:
+        data["peer_network_kinds"] = clean
+    else:
+        data.pop("peer_network_kinds", None)
+    return _write_all(data)
+
+
+def load_peer_groups() -> List[Dict[str, Any]]:
+    """Группы IP: id, name, member_ips (как во Flutter)."""
+    data = _load_all()
+    raw = data.get("peer_groups")
+    if not isinstance(raw, list):
+        return []
+    out: List[Dict[str, _Any]] = []
+    for x in raw:
+        if not isinstance(x, dict):
+            continue
+        gid = str(x.get("id", "")).strip()
+        if not gid:
+            continue
+        name = str(x.get("name", "Группа")).strip() or "Группа"
+        mips = x.get("member_ips")
+        ips: List[str] = []
+        if isinstance(mips, list):
+            for z in mips:
+                t = str(z).strip()
+                if t and _is_ipv4(t) and t not in ips:
+                    ips.append(t)
+        out.append({"id": gid, "name": name, "member_ips": ips})
+    return out
+
+
+def save_peer_groups(groups: List[Dict[str, Any]]) -> bool:
+    data = _load_all()
+    clean: List[Dict[str, Any]] = []
+    seen_id = set()
+    for g in groups or []:
+        if not isinstance(g, dict):
+            continue
+        gid = str(g.get("id", "")).strip()
+        if not gid or gid in seen_id:
+            continue
+        seen_id.add(gid)
+        name = str(g.get("name", "")).strip() or "Группа"
+        mips = g.get("member_ips")
+        ips: List[str] = []
+        if isinstance(mips, list):
+            for z in mips:
+                t = str(z).strip()
+                if t and _is_ipv4(t) and t not in ips:
+                    ips.append(t)
+        clean.append({"id": gid, "name": name, "member_ips": ips})
+    if clean:
+        data["peer_groups"] = clean
+    else:
+        data.pop("peer_groups", None)
+    return _write_all(data)
+
+
+def load_peer_send_group_ids() -> List[str]:
+    data = _load_all()
+    raw = data.get("peer_send_group_ids")
+    if not isinstance(raw, list):
+        return []
+    known = {g["id"] for g in load_peer_groups()}
+    out: List[str] = []
+    seen = set()
+    for x in raw:
+        s = str(x).strip()
+        if s and s in known and s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
+
+
+def save_peer_send_group_ids(ids: List[str]) -> bool:
+    data = _load_all()
+    known = {g["id"] for g in load_peer_groups()}
+    clean: List[str] = []
+    seen = set()
+    for x in ids or []:
+        s = str(x).strip()
+        if s in known and s not in seen:
+            seen.add(s)
+            clean.append(s)
+    if clean:
+        data["peer_send_group_ids"] = clean
+    else:
+        data.pop("peer_send_group_ids", None)
+    return _write_all(data)
+
+
+def load_effective_send_ips() -> List[str]:
+    """
+    Итоговые получатели: отмеченные пиры + IP из отмеченных групп (без дубликатов).
+    """
+    indiv = load_peer_send_targets()
+    seen = set(indiv)
+    out: List[str] = list(indiv)
+    groups_by_id = {g["id"]: g for g in load_peer_groups()}
+    for gid in load_peer_send_group_ids():
+        g = groups_by_id.get(gid)
+        if not g:
+            continue
+        for ip in g.get("member_ips", []):
+            s = str(ip).strip()
+            if _is_ipv4(s) and s not in seen:
+                seen.add(s)
+                out.append(s)
+    return out
 
 
 # Совместимость со старым кодом (один IP)

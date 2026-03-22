@@ -135,8 +135,15 @@ List<String> seedsForScope(
   LanSeedBundle bundle,
   LanScanScope scope, {
   List<String> extraHints = const [],
+
+  /// Явный IP «моей Wi‑Fi сети» из настроек телефона — первый кандидат для /24.
+  List<String> manualWifiHints = const [],
 }) {
-  final hints = extraHints
+  final manual = manualWifiHints
+      .map((s) => s.trim())
+      .where(_validIpv4)
+      .toList();
+  final hints = <String>[...manual, ...extraHints]
       .map((s) => s.trim())
       .where(_validIpv4)
       .toList();
@@ -199,11 +206,22 @@ Future<List<String>> scanLanForPortalHosts({
   required String secret,
   LanScanScope scope = LanScanScope.wifi,
   List<String> peerHints = const [],
+
+  /// IP из настроек Wi‑Fi телефона (или прошлый сохранённый) — усиливает скан домашней /24.
+  String manualLanSeedIp = '',
   Duration connectTimeout = const Duration(milliseconds: 900),
   int workers = 48,
 }) async {
   final bundle = await collectLanSeedBundle();
-  final seeds = seedsForScope(bundle, scope, extraHints: peerHints);
+  final manualWifi = <String>[];
+  final one = manualLanSeedIp.trim();
+  if (one.isNotEmpty) manualWifi.add(one);
+  final seeds = seedsForScope(
+    bundle,
+    scope,
+    extraHints: peerHints,
+    manualWifiHints: manualWifi,
+  );
   final prefixes = <String>{};
   for (final s in seeds) {
     final pre = subnet24Prefix(s);

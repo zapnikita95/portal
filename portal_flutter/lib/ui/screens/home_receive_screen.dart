@@ -220,6 +220,8 @@ class _HomeReceiveScreenState extends State<HomeReceiveScreen>
             const SizedBox(height: 8),
             Expanded(
               child: SingleChildScrollView(
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
                 child: Text(
                   _log.isEmpty ? '—' : _log,
                   style: Theme.of(context).textTheme.bodyMedium,

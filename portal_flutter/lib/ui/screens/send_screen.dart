@@ -149,6 +149,7 @@ class _SendScreenState extends State<SendScreen> {
   Widget build(BuildContext context) {
     return SafeArea(
       child: ListView(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         padding: const EdgeInsets.all(16),
         children: [
           Text('Отправить', style: Theme.of(context).textTheme.titleLarge),

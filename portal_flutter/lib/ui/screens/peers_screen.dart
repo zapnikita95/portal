@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:portal_flutter/data/settings_repository.dart';
 import 'package:portal_flutter/portal/lan_scan.dart';
@@ -15,9 +13,8 @@ class PeersScreen extends StatefulWidget {
 class _PeersScreenState extends State<PeersScreen> {
   final _rows = <_PeerRow>[];
   final _groups = <_GroupEdit>[];
+  final _lanSeed = TextEditingController();
   bool _loading = true;
-  Timer? _debounce;
-  bool _saving = false;
   LanScanScope _lanScope = LanScanScope.wifi;
 
   @override
@@ -26,111 +23,167 @@ class _PeersScreenState extends State<PeersScreen> {
     _load();
   }
 
-  Future<void> _load() async {
-    final st = await SettingsRepository.load();
+  void _disposeRows() {
     for (final r in _rows) {
-      r.ip.removeListener(_scheduleAutosave);
-      r.name.removeListener(_scheduleAutosave);
-      r.ip.dispose();
-      r.name.dispose();
+      r.dispose();
     }
     _rows.clear();
+  }
+
+  void _disposeGroups() {
     for (final g in _groups) {
-      g.name.removeListener(_scheduleAutosave);
-      g.ipsCsv.removeListener(_scheduleAutosave);
-      g.name.dispose();
-      g.ipsCsv.dispose();
+      g.dispose();
     }
     _groups.clear();
+  }
+
+  /// Строка-черновик в конце списка (пустой IP).
+  _PeerRow _newDraftRow() {
+    return _PeerRow(
+      ip: TextEditingController(),
+      name: TextEditingController(),
+      send: true,
+      networkKind: _defaultKindForTab(),
+    );
+  }
+
+  String _defaultKindForTab() {
+    switch (_lanScope) {
+      case LanScanScope.wifi:
+        return 'lan';
+      case LanScanScope.tailscale:
+        return 'tailscale';
+      case LanScanScope.all:
+        return 'auto';
+    }
+  }
+
+  void _ensureDraftRowAtEnd() {
+    if (_rows.isEmpty) {
+      _rows.add(_newDraftRow());
+      return;
+    }
+    final last = _rows.last;
+    if (last.ip.text.trim().isNotEmpty) {
+      _rows.add(_newDraftRow());
+    }
+  }
+
+  void _applyFromSettings(PortalSettings st) {
+    _disposeRows();
+    _disposeGroups();
 
     for (final p in st.peers) {
-      final row = _PeerRow(
+      _rows.add(_PeerRow(
         ip: TextEditingController(text: p.ip),
         name: TextEditingController(text: p.name),
         send: p.send,
-      );
-      _wireRow(row);
-      _rows.add(row);
+        networkKind: p.networkKind,
+      ));
     }
-    if (_rows.isEmpty) {
-      final row = _PeerRow(
-        ip: TextEditingController(),
-        name: TextEditingController(),
-        send: true,
-      );
-      _wireRow(row);
-      _rows.add(row);
-    }
+    _ensureDraftRowAtEnd();
 
     _lanScope = lanScanScopeFromStorage(st.lanScanMode);
+    _lanSeed.text = st.lanSeedHintIp;
 
     for (final g in st.peerGroups) {
-      final ge = _GroupEdit(
+      _groups.add(_GroupEdit(
         id: g.id.isNotEmpty ? g.id : _newId(),
         name: TextEditingController(text: g.name),
         ipsCsv: TextEditingController(text: g.memberIps.join(', ')),
         sendToGroup: g.sendToGroup,
-      );
-      ge.name.addListener(_scheduleAutosave);
-      ge.ipsCsv.addListener(_scheduleAutosave);
-      _groups.add(ge);
+      ));
     }
-
-    if (mounted) setState(() => _loading = false);
   }
 
-  void _wireRow(_PeerRow row) {
-    row.ip.addListener(_scheduleAutosave);
-    row.name.addListener(_scheduleAutosave);
+  Future<void> _load() async {
+    final st = await SettingsRepository.load();
+    if (!mounted) return;
+    setState(() {
+      _applyFromSettings(st);
+      _loading = false;
+    });
   }
 
   String _newId() =>
       'g_${DateTime.now().microsecondsSinceEpoch}_${UniqueKey().hashCode}';
 
-  void _scheduleAutosave() {
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 450), _flushSave);
-  }
-
-  Future<void> _flushSave() async {
-    if (!mounted || _saving) return;
-    _saving = true;
-    try {
-      final st0 = await SettingsRepository.load();
-      final peers = <PeerDto>[];
-      for (final r in _rows) {
-        final ip = r.ip.text.trim();
-        if (ip.isEmpty) continue;
-        final nm = r.name.text.trim();
-        peers.add(PeerDto(
-          ip: ip,
-          name: nm.isEmpty ? ip : nm,
-          send: r.send,
-        ));
-      }
-      final groups = <PeerGroupDto>[];
-      for (final g in _groups) {
-        final raw = g.ipsCsv.text.split(RegExp(r'[,\s;]+'));
-        final ips = raw.map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
-        groups.add(PeerGroupDto(
-          id: g.id,
-          name: g.name.text.trim().isEmpty ? 'Группа' : g.name.text.trim(),
-          memberIps: ips,
-          sendToGroup: g.sendToGroup,
-        ));
-      }
-      await SettingsRepository.save(PortalSettings(
-        peers: peers,
-        secret: st0.secret,
-        receiveDir: st0.receiveDir,
-        portalAnimPreset: st0.portalAnimPreset,
-        peerGroups: groups,
-        lanScanMode: lanScanScopeStorageValue(_lanScope),
-      ));
-    } finally {
-      _saving = false;
+  bool _peerRowMatchesTab(_PeerRow r) {
+    final ip = r.ip.text.trim();
+    if (ip.isEmpty) return true;
+    final kind = r.networkKind;
+    switch (_lanScope) {
+      case LanScanScope.wifi:
+        if (kind == 'lan') return true;
+        if (kind == 'tailscale') return false;
+        return isPrivateLanIpv4(ip) && !isTailscaleCgNatIpv4(ip);
+      case LanScanScope.tailscale:
+        if (kind == 'tailscale') return true;
+        if (kind == 'lan') return false;
+        return isTailscaleCgNatIpv4(ip);
+      case LanScanScope.all:
+        return true;
     }
   }
+
+  Iterable<int> _visibleRowIndices() sync* {
+    for (var i = 0; i < _rows.length; i++) {
+      if (_peerRowMatchesTab(_rows[i])) yield i;
+    }
+  }
+
+  PortalSettings _buildPortalSettingsFromUi(PortalSettings base) {
+    final peers = <PeerDto>[];
+    for (final r in _rows) {
+      final ip = r.ip.text.trim();
+      if (ip.isEmpty) continue;
+      final nm = r.name.text.trim();
+      peers.add(PeerDto(
+        ip: ip,
+        name: nm.isEmpty ? ip : nm,
+        send: r.send,
+        networkKind: r.networkKind,
+      ));
+    }
+    final groups = <PeerGroupDto>[];
+    for (final g in _groups) {
+      final raw = g.ipsCsv.text.split(RegExp(r'[,\s;]+'));
+      final ips = raw.map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+      groups.add(PeerGroupDto(
+        id: g.id,
+        name: g.name.text.trim().isEmpty ? 'Группа' : g.name.text.trim(),
+        memberIps: ips,
+        sendToGroup: g.sendToGroup,
+      ));
+    }
+    return PortalSettings(
+      peers: peers,
+      secret: base.secret,
+      receiveDir: base.receiveDir,
+      portalAnimPreset: base.portalAnimPreset,
+      peerGroups: groups,
+      lanScanMode: lanScanScopeStorageValue(_lanScope),
+      lanSeedHintIp: _lanSeed.text.trim(),
+    );
+  }
+
+  Future<void> _persist({bool showSnack = true}) async {
+    final st0 = await SettingsRepository.load();
+    final next = _buildPortalSettingsFromUi(st0);
+    await SettingsRepository.save(next);
+    if (!mounted) return;
+    setState(() {
+      _applyFromSettings(next);
+    });
+    if (!mounted) return;
+    if (showSnack) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Сохранено')),
+      );
+    }
+  }
+
+  Future<void> _saveNow() async => _persist(showSnack: true);
 
   Future<void> _ping(int index) async {
     if (index < 0 || index >= _rows.length) return;
@@ -162,13 +215,79 @@ class _PeersScreenState extends State<PeersScreen> {
   Future<void> _lanScan() async {
     final st = await SettingsRepository.load();
     if (!mounted) return;
-    // Подсказки из пиров — fallback, если ОС не отдаёт Wi-Fi IP (старый APK без разрешений).
+
+    final hintCtrl = TextEditingController(
+      text: _lanSeed.text.trim().isNotEmpty
+          ? _lanSeed.text.trim()
+          : st.lanSeedHintIp.trim(),
+    );
+
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Поиск в локальной сети'),
+          content: SingleChildScrollView(
+            keyboardDismissBehavior:
+                ScrollViewKeyboardDismissBehavior.onDrag,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Укажи IPv4 телефона в Wi‑Fi (как в «Настройки → Сеть»). '
+                  'По нему берётся подсеть /24 для скана. Можно оставить пустым — '
+                  'тогда используются интерфейсы ОС и IP из списка пиров.',
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: hintCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'IP в твоей Wi‑Fi сети (необязательно)',
+                    hintText: '192.168.0.105',
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: TextInputType.url,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Отмена'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Сканировать'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (go != true) {
+      hintCtrl.dispose();
+      return;
+    }
+
+    _lanSeed.text = hintCtrl.text.trim();
+    hintCtrl.dispose();
+
     final peerHints = _rows
         .map((r) => r.ip.text.trim())
         .where((s) => s.isNotEmpty)
         .toList();
+
+    final manual = _lanSeed.text.trim();
     final bundle = await collectLanSeedBundle();
-    final seeds = seedsForScope(bundle, _lanScope, extraHints: peerHints);
+    final seeds = seedsForScope(
+      bundle,
+      _lanScope,
+      extraHints: peerHints,
+      manualWifiHints: manual.isNotEmpty ? [manual] : const [],
+    );
     if (seeds.isEmpty) {
       final w = bundle.wifiIp ?? '—';
       if (!mounted) return;
@@ -177,10 +296,9 @@ class _PeersScreenState extends State<PeersScreen> {
           content: Text(
             'Нет IPv4 для режима «${lanScanScopeLabel(_lanScope)}». '
             'Wi‑Fi IP (система): $w. '
-            'Добавь IP пира вручную хотя бы одного — он станет seed для скана. '
-            'Или попробуй «Tailscale» / «Все».',
+            'Заполни поле «IP в твоей Wi‑Fi сети» в диалоге скана или добавь LAN‑пира вручную.',
           ),
-          duration: const Duration(seconds: 8),
+          duration: const Duration(seconds: 9),
         ),
       );
       return;
@@ -209,6 +327,7 @@ class _PeersScreenState extends State<PeersScreen> {
         secret: st.secret,
         scope: _lanScope,
         peerHints: peerHints,
+        manualLanSeedIp: manual,
       );
     } catch (e) {
       found = [];
@@ -245,6 +364,8 @@ class _PeersScreenState extends State<PeersScreen> {
                 width: double.maxFinite,
                 height: 320,
                 child: ListView(
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
                   children: found.map((ip) {
                     return CheckboxListTile(
                       title: Text(ip),
@@ -281,17 +402,19 @@ class _PeersScreenState extends State<PeersScreen> {
     final have = _rows.map((r) => r.ip.text.trim()).toSet();
     for (final ip in pick) {
       if (have.contains(ip)) continue;
+      final kind = isTailscaleCgNatIpv4(ip) ? 'tailscale' : 'lan';
       final row = _PeerRow(
         ip: TextEditingController(text: ip),
         name: TextEditingController(),
         send: true,
+        networkKind: kind,
       );
-      _wireRow(row);
       _rows.add(row);
       have.add(ip);
     }
+    _ensureDraftRowAtEnd();
     setState(() {});
-    await _flushSave();
+    await _persist(showSnack: false);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Добавлено: ${pick.length}')),
@@ -299,38 +422,26 @@ class _PeersScreenState extends State<PeersScreen> {
     }
   }
 
-  Future<void> _saveNow() async {
-    await _flushSave();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Сохранено')),
-      );
-    }
-  }
-
   @override
   void dispose() {
-    _debounce?.cancel();
-    for (final r in _rows) {
-      r.ip.removeListener(_scheduleAutosave);
-      r.name.removeListener(_scheduleAutosave);
-      r.ip.dispose();
-      r.name.dispose();
-    }
-    for (final g in _groups) {
-      g.name.removeListener(_scheduleAutosave);
-      g.ipsCsv.removeListener(_scheduleAutosave);
-      g.name.dispose();
-      g.ipsCsv.dispose();
-    }
+    _disposeRows();
+    _disposeGroups();
+    _lanSeed.dispose();
     super.dispose();
   }
+
+  static const _kindLabels = <String, String>{
+    'auto': 'Авто (по IP)',
+    'lan': 'Домашняя сеть',
+    'tailscale': 'Tailscale / VPN',
+  };
 
   @override
   Widget build(BuildContext context) {
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
     }
+    final visible = _visibleRowIndices().toList();
     return SafeArea(
       child: Column(
         children: [
@@ -348,15 +459,8 @@ class _PeersScreenState extends State<PeersScreen> {
                 IconButton(
                   onPressed: () {
                     setState(() {
-                      final row = _PeerRow(
-                        ip: TextEditingController(),
-                        name: TextEditingController(),
-                        send: true,
-                      );
-                      _wireRow(row);
-                      _rows.add(row);
+                      _rows.add(_newDraftRow());
                     });
-                    _scheduleAutosave();
                   },
                   icon: const Icon(Icons.add),
                 ),
@@ -366,21 +470,25 @@ class _PeersScreenState extends State<PeersScreen> {
           ),
           Expanded(
             child: ListView(
+              keyboardDismissBehavior:
+                  ScrollViewKeyboardDismissBehavior.onDrag,
               padding: const EdgeInsets.symmetric(horizontal: 12),
               children: [
                 Text(
-                  'Изменения подтягиваются в хранилище автоматически; «Сохранить» — явное подтверждение.',
+                  'Вкладки Wi‑Fi / TS / Все фильтруют список. Тип сети у строки задаётся вручную. '
+                  'Нажми «Сохранить», чтобы записать пиров, группы и подсказку для LAN-скана.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  'Поиск в LAN (иконка радара)',
+                  'Вкладка = фильтр списка и режим сканирования',
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  'Wi‑Fi — подсеть домашнего роутера (192.168.x и т.п.), без Tailscale. '
-                  'Tailscale — только 100.64–127.x. «Все» — Wi‑Fi + VPN сразу.',
+                  'Wi‑Fi — только пиры с типом «домашняя» или авто с LAN-IP. '
+                  'TS — только Tailscale (100.64–127.x) или явно помеченные. '
+                  '«Все» — весь список.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 8),
@@ -405,11 +513,21 @@ class _PeersScreenState extends State<PeersScreen> {
                   selected: <LanScanScope>{_lanScope},
                   onSelectionChanged: (Set<LanScanScope> next) {
                     setState(() => _lanScope = next.first);
-                    _scheduleAutosave();
                   },
                 ),
-                const SizedBox(height: 8),
-                ...List.generate(_rows.length, (i) {
+                const SizedBox(height: 12),
+                if (visible.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 24),
+                    child: Center(
+                      child: Text(
+                        'В этой вкладке нет пиров. Переключи Wi‑Fi / TS / Все или добавь строку «+».',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ),
+                  ),
+                ...visible.map((i) {
                   final r = _rows[i];
                   return Card(
                     margin: const EdgeInsets.only(bottom: 10),
@@ -425,6 +543,7 @@ class _PeersScreenState extends State<PeersScreen> {
                               border: OutlineInputBorder(),
                             ),
                             keyboardType: TextInputType.url,
+                            onChanged: (_) => setState(() {}),
                           ),
                           const SizedBox(height: 8),
                           TextField(
@@ -434,13 +553,36 @@ class _PeersScreenState extends State<PeersScreen> {
                               border: OutlineInputBorder(),
                             ),
                           ),
+                          const SizedBox(height: 8),
+                          DropdownButtonFormField<String>(
+                            value: r.networkKind == 'lan' ||
+                                    r.networkKind == 'tailscale' ||
+                                    r.networkKind == 'auto'
+                                ? r.networkKind
+                                : 'auto',
+                            decoration: const InputDecoration(
+                              labelText: 'Сеть',
+                              border: OutlineInputBorder(),
+                            ),
+                            items: _kindLabels.entries
+                                .map(
+                                  (e) => DropdownMenuItem(
+                                    value: e.key,
+                                    child: Text(e.value),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (v) {
+                              if (v == null) return;
+                              setState(() => r.networkKind = v);
+                            },
+                          ),
                           Row(
                             children: [
                               Checkbox(
                                 value: r.send,
                                 onChanged: (v) {
                                   setState(() => r.send = v ?? true);
-                                  _scheduleAutosave();
                                 },
                               ),
                               const Expanded(
@@ -454,13 +596,10 @@ class _PeersScreenState extends State<PeersScreen> {
                               IconButton(
                                 onPressed: () {
                                   setState(() {
-                                    r.ip.removeListener(_scheduleAutosave);
-                                    r.name.removeListener(_scheduleAutosave);
-                                    r.ip.dispose();
-                                    r.name.dispose();
+                                    _rows[i].dispose();
                                     _rows.removeAt(i);
+                                    _ensureDraftRowAtEnd();
                                   });
-                                  _scheduleAutosave();
                                 },
                                 icon: const Icon(Icons.delete_outline),
                               ),
@@ -482,17 +621,13 @@ class _PeersScreenState extends State<PeersScreen> {
                     TextButton.icon(
                       onPressed: () {
                         setState(() {
-                          final ge = _GroupEdit(
+                          _groups.add(_GroupEdit(
                             id: _newId(),
                             name: TextEditingController(text: 'Дом'),
                             ipsCsv: TextEditingController(),
                             sendToGroup: false,
-                          );
-                          ge.name.addListener(_scheduleAutosave);
-                          ge.ipsCsv.addListener(_scheduleAutosave);
-                          _groups.add(ge);
+                          ));
                         });
-                        _scheduleAutosave();
                       },
                       icon: const Icon(Icons.group_add, size: 20),
                       label: const Text('Группа'),
@@ -534,7 +669,6 @@ class _PeersScreenState extends State<PeersScreen> {
                             value: g.sendToGroup,
                             onChanged: (v) {
                               setState(() => g.sendToGroup = v ?? false);
-                              _scheduleAutosave();
                             },
                           ),
                           Align(
@@ -542,13 +676,9 @@ class _PeersScreenState extends State<PeersScreen> {
                             child: IconButton(
                               onPressed: () {
                                 setState(() {
-                                  g.name.removeListener(_scheduleAutosave);
-                                  g.ipsCsv.removeListener(_scheduleAutosave);
-                                  g.name.dispose();
-                                  g.ipsCsv.dispose();
+                                  g.dispose();
                                   _groups.remove(g);
                                 });
-                                _scheduleAutosave();
                               },
                               icon: const Icon(Icons.delete_outline),
                             ),
@@ -572,10 +702,17 @@ class _PeerRow {
     required this.ip,
     required this.name,
     required this.send,
+    this.networkKind = 'auto',
   });
   final TextEditingController ip;
   final TextEditingController name;
   bool send;
+  String networkKind;
+
+  void dispose() {
+    ip.dispose();
+    name.dispose();
+  }
 }
 
 class _GroupEdit {
@@ -589,4 +726,9 @@ class _GroupEdit {
   final TextEditingController name;
   final TextEditingController ipsCsv;
   bool sendToGroup;
+
+  void dispose() {
+    name.dispose();
+    ipsCsv.dispose();
+  }
 }

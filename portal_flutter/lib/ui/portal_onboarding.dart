@@ -24,6 +24,8 @@ Future<void> showPortalQuickStartSheet(BuildContext context) async {
           bottom: MediaQuery.paddingOf(ctx).bottom + 20,
         ),
         child: SingleChildScrollView(
+          keyboardDismissBehavior:
+              ScrollViewKeyboardDismissBehavior.onDrag,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,

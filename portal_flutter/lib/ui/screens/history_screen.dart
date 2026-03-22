@@ -104,6 +104,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView.builder(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         itemCount: _rows.length,
         itemBuilder: (ctx, i) {
           final r = _rows[i];

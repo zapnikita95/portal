@@ -3,22 +3,35 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class PeerDto {
-  PeerDto({required this.ip, required this.name, required this.send});
+  PeerDto({
+    required this.ip,
+    required this.name,
+    required this.send,
+    this.networkKind = 'auto',
+  });
   final String ip;
   final String name;
   final bool send;
+
+  /// auto | lan | tailscale — для фильтра вкладок Wi‑Fi / TS на экране «Пиры».
+  final String networkKind;
 
   Map<String, dynamic> toJson() => {
         'ip': ip,
         'name': name,
         'send': send,
+        'network_kind': networkKind,
       };
 
-  static PeerDto fromJson(Map<String, dynamic> m) => PeerDto(
-        ip: (m['ip'] ?? '').toString(),
-        name: (m['name'] ?? '').toString(),
-        send: m['send'] == true,
-      );
+  static PeerDto fromJson(Map<String, dynamic> m) {
+    final nk = (m['network_kind'] ?? 'auto').toString().trim().toLowerCase();
+    return PeerDto(
+      ip: (m['ip'] ?? '').toString(),
+      name: (m['name'] ?? '').toString(),
+      send: m['send'] == true,
+      networkKind: (nk == 'lan' || nk == 'tailscale') ? nk : 'auto',
+    );
+  }
 }
 
 /// Именованная группа IP: галочка «отправка на группу» включает все member_ips из сохранённых пиров.
@@ -68,6 +81,7 @@ class PortalSettings {
     this.portalAnimPreset = 'pulse',
     this.peerGroups = const [],
     this.lanScanMode = 'wifi',
+    this.lanSeedHintIp = '',
   });
 
   final List<PeerDto> peers;
@@ -82,6 +96,9 @@ class PortalSettings {
   /// wifi | tailscale | all — для кнопки «Найти в LAN» на экране пиров.
   final String lanScanMode;
 
+  /// Подсказка для LAN-скана: IP телефона в Wi‑Fi (как в настройках сети).
+  final String lanSeedHintIp;
+
   Map<String, dynamic> toJson() => {
         'peers': peers.map((e) => e.toJson()).toList(),
         'secret': secret,
@@ -89,6 +106,7 @@ class PortalSettings {
         'portal_anim': portalAnimPreset,
         'peer_groups': peerGroups.map((e) => e.toJson()).toList(),
         'lan_scan_mode': lanScanMode,
+        'lan_seed_hint_ip': lanSeedHintIp,
       };
 
   static PortalSettings fromJson(Map<String, dynamic> m) {
@@ -117,6 +135,7 @@ class PortalSettings {
       portalAnimPreset: (m['portal_anim'] ?? 'pulse').toString(),
       peerGroups: groups,
       lanScanMode: (m['lan_scan_mode'] ?? 'wifi').toString(),
+      lanSeedHintIp: (m['lan_seed_hint_ip'] ?? '').toString(),
     );
   }
 
@@ -127,6 +146,7 @@ class PortalSettings {
         portalAnimPreset: 'branding',
         peerGroups: [],
         lanScanMode: 'wifi',
+        lanSeedHintIp: '',
       );
 
   /// Кому слать: если у хотя бы одной группы sendToGroup — только IP из отмеченных групп (пересечение с peers).
@@ -144,8 +164,9 @@ class PortalSettings {
       }
     }
     if (anyGroupOn) {
-      final filtered =
-          peers.where((p) => fromGroups.contains(p.ip.trim())).toList();
+      final filtered = peers
+          .where((p) => p.send && fromGroups.contains(p.ip.trim()))
+          .toList();
       // Галочка «на группу» с пустым/непересекающимся списком IP резала всех — «ничего не работает».
       if (filtered.isNotEmpty) return filtered;
     }

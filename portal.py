@@ -30,6 +30,7 @@ import hmac
 import shutil
 import pyperclip
 import time
+import secrets
 import io
 import struct
 import ctypes
@@ -408,6 +409,30 @@ def subnet24_prefix_from_ipv4(ip: str) -> Optional[str]:
     return ".".join(parts[:3])
 
 
+def _config_peer_ips_for_lan_seeds() -> List[str]:
+    """
+    IP из config (пиры и группы) как дополнительные сиды /24.
+    Помогает, если ifconfig не попал в тот же интерфейс, что домашний Wi‑Fi.
+    """
+    out: List[str] = []
+    try:
+        for ip in portal_config.load_peer_ips():
+            s = (ip or "").strip()
+            if s:
+                out.append(s)
+        for g in portal_config.load_peer_groups():
+            raw = g.get("member_ips")
+            if not isinstance(raw, list):
+                continue
+            for x in raw:
+                s = str(x or "").strip()
+                if s:
+                    out.append(s)
+    except Exception:
+        pass
+    return out
+
+
 def collect_lan_scan_seed_ips(primary_ip: Optional[str]) -> List[str]:
     """
     IP для определения /24 подсетей: Tailscale/основной из UI + реальные LAN-интерфейсы.
@@ -491,6 +516,9 @@ def collect_lan_scan_seed_ips(primary_ip: Optional[str]) -> List[str]:
                 add(m.group(0))
         except Exception:
             pass
+
+    for ip in _config_peer_ips_for_lan_seeds():
+        add(ip)
 
     return ordered
 
@@ -1232,7 +1260,7 @@ class PortalApp(ctk.CTk):
         ).pack(anchor="w", padx=4, pady=(4, 0))
 
         self._peer_targets_heading.pack(anchor="w", padx=12, pady=(8, 4))
-        self.peer_select_frame = ctk.CTkFrame(peer_frame, fg_color="transparent", height=42)
+        self.peer_select_frame = ctk.CTkFrame(peer_frame, fg_color="transparent", height=96)
         self.peer_select_frame.pack(fill="x", padx=12, pady=(0, 4))
         try:
             self.peer_select_frame.pack_propagate(False)
@@ -1911,27 +1939,62 @@ class PortalApp(ctk.CTk):
 
         ctk.CTkLabel(
             t_peers,
-            text=i18n.tr("peers.list_title"),
-            font=ctk.CTkFont(size=13, weight="bold"),
+            text=i18n.tr("peers.rows_intro"),
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=720,
+            justify="left",
         ).pack(anchor="w", padx=8, pady=(8, 4))
-        ip_edit_row = ctk.CTkFrame(t_peers, fg_color="transparent")
-        ip_edit_row.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-        self.peer_ips_text = ctk.CTkTextbox(
-            ip_edit_row, width=440, height=180, font=ctk.CTkFont(size=13)
+        self._peer_setting_rows: List[Dict[str, Any]] = []
+        self._peer_group_setting_rows: List[Dict[str, Any]] = []
+        self._peers_settings_scroll = ctk.CTkScrollableFrame(
+            t_peers, height=220, fg_color="transparent"
         )
-        self.peer_ips_text.pack(side="left", padx=(0, 10), anchor="nw", fill="both", expand=True)
-        self._fill_peer_ips_textbox()
-        self.peer_ips_text.bind("<KeyRelease>", self._on_peer_ips_edited)
-        wire_ctk_textbox_paste(self.peer_ips_text)
-        btn_col = ctk.CTkFrame(ip_edit_row, fg_color="transparent")
-        btn_col.pack(side="left", fill="y")
+        self._peers_settings_scroll.pack(fill="both", expand=True, padx=8, pady=(0, 4))
+        peer_btn_row = ctk.CTkFrame(t_peers, fg_color="transparent")
+        peer_btn_row.pack(fill="x", padx=8, pady=(0, 6))
         ctk.CTkButton(
-            btn_col,
-            text=i18n.tr("peers.save_list"),
-            width=130,
-            command=self.save_peer_ips_from_ui,
+            peer_btn_row,
+            text=i18n.tr("peers.add_ip_row"),
+            width=120,
+            command=self._add_peer_settings_row_ui,
             font=ctk.CTkFont(size=12),
-        ).pack(pady=(0, 6))
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            peer_btn_row,
+            text=i18n.tr("peers.save_list"),
+            width=150,
+            command=self.save_peer_ips_from_ui,
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkLabel(
+            t_peers,
+            text=i18n.tr("peers.groups_title"),
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=8, pady=(10, 4))
+        ctk.CTkLabel(
+            t_peers,
+            text=i18n.tr("peers.groups_hint"),
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=720,
+            justify="left",
+        ).pack(anchor="w", padx=8, pady=(0, 4))
+        self._peer_groups_scroll = ctk.CTkScrollableFrame(
+            t_peers, height=140, fg_color="transparent"
+        )
+        self._peer_groups_scroll.pack(fill="both", expand=True, padx=8, pady=(0, 6))
+        grp_btn_row = ctk.CTkFrame(t_peers, fg_color="transparent")
+        grp_btn_row.pack(fill="x", padx=8, pady=(0, 8))
+        ctk.CTkButton(
+            grp_btn_row,
+            text=i18n.tr("peers.add_group_row"),
+            width=140,
+            command=self._add_peer_group_settings_row_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left")
+        self._peer_group_checkbox_vars: Dict[str, Any] = {}
+        self._reload_peer_settings_from_config()
 
         ctk.CTkLabel(
             t_secret,
@@ -2378,12 +2441,20 @@ class PortalApp(ctk.CTk):
                 self._lan_win = None
         w = ctk.CTkToplevel(self)
         w.title(i18n.tr("lan.title"))
-        w.geometry("500x460")
+        w.geometry("520x500")
         try:
             w.transient(self)
         except Exception:
             pass
         self._lan_win = w
+        ctk.CTkLabel(
+            w,
+            text=i18n.tr("lan.mobile_receive_hint"),
+            wraplength=460,
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            justify="left",
+        ).pack(anchor="w", padx=14, pady=(10, 0))
         st = ctk.CTkLabel(
             w,
             text=i18n.tr("lan.scanning_detail", subnets=subnet_labels or "…"),
@@ -2408,7 +2479,9 @@ class PortalApp(ctk.CTk):
                 ctk.CTkCheckBox(row, text=ip, variable=v).pack(side="left")
 
         def work() -> None:
-            found = scan_lan_subnets_merged(seeds, port=PORTAL_PORT, timeout=1.0, max_workers=72)
+            found = scan_lan_subnets_merged(
+                seeds, port=PORTAL_PORT, timeout=2.2, max_workers=48
+            )
             self.after(0, lambda: finish(found))
 
         threading.Thread(target=work, daemon=True).start()
@@ -2636,11 +2709,10 @@ class PortalApp(ctk.CTk):
                         self.send_file_to_dialog(fp)
 
     def get_target_ips(self) -> List[str]:
-        """IP получателей для одновременной отправки (галочки), без дубликатов."""
-        raw = portal_config.load_peer_send_targets()
+        """IP получателей: отмеченные пиры + IP из отмеченных групп, без дубликатов."""
         seen = set()
         out: List[str] = []
-        for x in raw:
+        for x in portal_config.load_effective_send_ips():
             s = str(x).strip()
             if s and s not in seen:
                 seen.add(s)
@@ -2651,57 +2723,205 @@ class PortalApp(ctk.CTk):
         if hasattr(self, "ip_saved_feedback"):
             self.ip_saved_feedback.configure(text="")
 
-    def _fill_peer_ips_textbox(self) -> None:
-        if not hasattr(self, "peer_ips_text"):
+    def _net_menu_values(self) -> Tuple[List[str], Dict[str, str], Dict[str, str]]:
+        """Подписи в меню и карты label↔key."""
+        labels = [
+            i18n.tr("peers.net_auto"),
+            i18n.tr("peers.net_lan"),
+            i18n.tr("peers.net_ts"),
+        ]
+        label_to_key = {
+            labels[0]: "auto",
+            labels[1]: "lan",
+            labels[2]: "tailscale",
+        }
+        key_to_label = {v: k for k, v in label_to_key.items()}
+        return labels, label_to_key, key_to_label
+
+    def _clear_peer_settings_widgets(self) -> None:
+        if hasattr(self, "_peers_settings_scroll"):
+            for w in self._peers_settings_scroll.winfo_children():
+                w.destroy()
+        self._peer_setting_rows.clear()
+
+    def _clear_peer_group_settings_widgets(self) -> None:
+        if hasattr(self, "_peer_groups_scroll"):
+            for w in self._peer_groups_scroll.winfo_children():
+                w.destroy()
+        self._peer_group_setting_rows.clear()
+
+    def _reload_peer_settings_from_config(self) -> None:
+        if not hasattr(self, "_peers_settings_scroll"):
             return
+        self._clear_peer_settings_widgets()
         ips = portal_config.load_peer_ips()
         al = portal_config.load_peer_aliases()
-        lines_out: List[str] = []
+        kinds = portal_config.load_peer_network_kinds()
+        _, _, key_to_label = self._net_menu_values()
         for ip in ips:
-            nm = al.get(ip, "").strip()
-            lines_out.append(f"{ip}  {nm}".rstrip() if nm else ip)
-        self.peer_ips_text.delete("1.0", "end")
-        self.peer_ips_text.insert("1.0", "\n".join(lines_out) if lines_out else "")
+            self._append_peer_settings_row_widget(
+                ip, al.get(ip, "").strip(), key_to_label.get(kinds.get(ip, "auto"), i18n.tr("peers.net_auto"))
+            )
+        self._append_peer_settings_row_widget("", "", i18n.tr("peers.net_auto"))
 
-    def save_peer_ips_from_ui(self) -> None:
-        raw = self.peer_ips_text.get("1.0", "end") if hasattr(self, "peer_ips_text") else ""
-        lines = [ln.strip() for ln in raw.replace("\r", "").split("\n")]
+        self._clear_peer_group_settings_widgets()
+        for g in portal_config.load_peer_groups():
+            self._append_peer_group_row_widget(
+                str(g.get("id", "")),
+                str(g.get("name", "")),
+                ", ".join(g.get("member_ips", []) or []),
+            )
+
+    def _append_peer_settings_row_widget(self, ip: str, name: str, net_label: str) -> None:
+        labels, label_to_key, _ = self._net_menu_values()
+        fr = ctk.CTkFrame(self._peers_settings_scroll, fg_color="transparent")
+        fr.pack(fill="x", pady=3)
+        ip_e = ctk.CTkEntry(fr, width=150, placeholder_text="192.168.x.x")
+        if ip:
+            ip_e.insert(0, ip)
+        nm_e = ctk.CTkEntry(fr, width=200, placeholder_text=i18n.tr("peers.name_ph"))
+        if name:
+            nm_e.insert(0, name)
+        net_m = ctk.CTkOptionMenu(fr, values=labels, width=150)
+        net_m.set(net_label if net_label in labels else labels[0])
+        ip_e.pack(side="left", padx=(0, 6))
+        nm_e.pack(side="left", padx=(0, 6))
+        net_m.pack(side="left", padx=(0, 6))
+
+        def _remove() -> None:
+            fr.destroy()
+            self._peer_setting_rows[:] = [r for r in self._peer_setting_rows if r["frame"] is not fr]
+
+        ctk.CTkButton(fr, text="✕", width=36, command=_remove, font=ctk.CTkFont(size=12)).pack(
+            side="left", padx=(4, 0)
+        )
+        self._peer_setting_rows.append(
+            {"frame": fr, "ip": ip_e, "name": nm_e, "net": net_m, "label_to_key": label_to_key}
+        )
+
+    def _add_peer_settings_row_ui(self) -> None:
+        if not hasattr(self, "_peers_settings_scroll"):
+            return
+        _, _, key_to_label = self._net_menu_values()
+        self._append_peer_settings_row_widget("", "", key_to_label["auto"])
+
+    def _append_peer_group_row_widget(self, gid: str, name: str, ips_csv: str) -> None:
+        fr = ctk.CTkFrame(self._peer_groups_scroll, fg_color="transparent")
+        fr.pack(fill="x", pady=3)
+        if not gid:
+            gid = f"g_{secrets.token_hex(6)}"
+        id_e = ctk.CTkEntry(fr, width=90)
+        id_e.insert(0, gid)
+        id_e.configure(state="disabled")
+        nm_e = ctk.CTkEntry(fr, width=140, placeholder_text=i18n.tr("peers.group_name_ph"))
+        if name:
+            nm_e.insert(0, name)
+        ips_e = ctk.CTkEntry(fr, width=360, placeholder_text="192.168.0.1, 100.x.x.x")
+        if ips_csv:
+            ips_e.insert(0, ips_csv)
+
+        def _remove_g() -> None:
+            fr.destroy()
+            self._peer_group_setting_rows[:] = [
+                r for r in self._peer_group_setting_rows if r["frame"] is not fr
+            ]
+
+        id_e.pack(side="left", padx=(0, 4))
+        nm_e.pack(side="left", padx=(0, 6))
+        ips_e.pack(side="left", padx=(0, 6), fill="x", expand=True)
+        ctk.CTkButton(fr, text="✕", width=36, command=_remove_g, font=ctk.CTkFont(size=12)).pack(
+            side="left"
+        )
+        self._peer_group_setting_rows.append(
+            {"frame": fr, "id_entry": id_e, "name": nm_e, "ips": ips_e}
+        )
+
+    def _add_peer_group_settings_row_ui(self) -> None:
+        if not hasattr(self, "_peer_groups_scroll"):
+            return
+        self._append_peer_group_row_widget("", "", "")
+
+    def _collect_peer_rows_from_settings_ui(
+        self,
+    ) -> Tuple[List[str], Dict[str, str], Dict[str, str], List[str]]:
+        """Возвращает ips, aliases, network_kinds, bad_ip_hints."""
+        labels, label_to_key, _ = self._net_menu_values()
         ips: List[str] = []
         aliases: Dict[str, str] = {}
-        bad_lines: List[str] = []
-        seen_ip = set()
-        for line in lines:
-            if not line or line.lstrip().startswith("#"):
+        kinds: Dict[str, str] = {}
+        bad: List[str] = []
+        seen: Set[str] = set()
+        for row in getattr(self, "_peer_setting_rows", []):
+            ip = row["ip"].get().strip()
+            if not ip:
                 continue
-            p = portal_config.parse_peer_line(line)
-            if not p:
-                bad_lines.append(line)
+            if not portal_config._is_ipv4(ip):
+                bad.append(ip)
                 continue
-            ip, name = p
-            if ip in seen_ip:
-                if name:
-                    aliases[ip] = name
+            if ip in seen:
                 continue
-            seen_ip.add(ip)
+            seen.add(ip)
             ips.append(ip)
-            if name:
-                aliases[ip] = name
+            nm = row["name"].get().strip()
+            if nm:
+                aliases[ip] = nm
+            lbl = row["net"].get()
+            k = label_to_key.get(lbl, "auto")
+            if k != "auto":
+                kinds[ip] = k
+        return ips, aliases, kinds, bad
+
+    def _collect_groups_from_settings_ui(self) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for row in getattr(self, "_peer_group_setting_rows", []):
+            gid = row["id_entry"].get().strip()
+            if not gid:
+                gid = f"g_{secrets.token_hex(6)}"
+            nm = row["name"].get().strip() or "Группа"
+            raw = row["ips"].get().strip()
+            parts = re.split(r"[\s,;]+", raw)
+            member_ips: List[str] = []
+            seen: Set[str] = set()
+            for p in parts:
+                t = p.strip()
+                if t and portal_config._is_ipv4(t) and t not in seen:
+                    seen.add(t)
+                    member_ips.append(t)
+            out.append({"id": gid, "name": nm, "member_ips": member_ips})
+        return out
+
+    def _fill_peer_ips_textbox(self) -> None:
+        """Совместимость: перерисовать вкладку «Пиры» из config.json."""
+        self._reload_peer_settings_from_config()
+
+    def save_peer_ips_from_ui(self) -> None:
+        if not hasattr(self, "_peer_setting_rows"):
+            return
+        ips, aliases, kinds, bad = self._collect_peer_rows_from_settings_ui()
+        groups = self._collect_groups_from_settings_ui()
         if hasattr(self, "ip_saved_feedback"):
             self.ip_saved_feedback.configure(text="⏳ …", text_color="gray")
         ok = portal_config.save_peer_ips(ips)
         if ok:
             portal_config.save_peer_aliases(aliases)
+            portal_config.save_peer_network_kinds(kinds)
+            portal_config.save_peer_groups(groups)
+            # Убрать галочки групп, которых больше нет
+            valid_g = {g["id"] for g in groups}
+            cur_g = portal_config.load_peer_send_group_ids()
+            portal_config.save_peer_send_group_ids([x for x in cur_g if x in valid_g])
         self.remote_peer_ip = portal_config.load_remote_ip()
         if ok:
-            if bad_lines:
+            if bad:
                 self.log(
-                    f"⚠️ Строки без корректного IPv4 пропущены: {bad_lines[:5]}"
-                    + (" …" if len(bad_lines) > 5 else "")
+                    f"⚠️ Некорректные IPv4 пропущены: {bad[:5]}"
+                    + (" …" if len(bad) > 5 else "")
                 )
             shown = [portal_config.peer_display_label(ip) for ip in ips]
             self.log(f"💾 Список пиров сохранён ({len(ips)}): {', '.join(shown) or '(пусто)'}")
             if hasattr(self, "ip_saved_feedback"):
                 self.ip_saved_feedback.configure(text="✅ Список сохранён", text_color="#3dd68c")
+            self._reload_peer_settings_from_config()
             self.rebuild_peer_checkboxes()
             self.check_peer_connection_async(silent=False)
             self._arm_peer_poll()
@@ -2720,9 +2940,14 @@ class PortalApp(ctk.CTk):
         for w in self.peer_select_frame.winfo_children():
             w.destroy()
         self._peer_checkbox_vars.clear()
+        if not hasattr(self, "_peer_group_checkbox_vars"):
+            self._peer_group_checkbox_vars = {}
+        self._peer_group_checkbox_vars.clear()
         ips = portal_config.load_peer_ips()
         targets_set = set(portal_config.load_peer_send_targets())
-        if not ips:
+        groups = portal_config.load_peer_groups()
+        group_targets = set(portal_config.load_peer_send_group_ids())
+        if not ips and not groups:
             ctk.CTkLabel(
                 self.peer_select_frame,
                 text=i18n.tr("peer.add_ip_hint"),
@@ -2732,27 +2957,73 @@ class PortalApp(ctk.CTk):
             return
         row = ctk.CTkFrame(self.peer_select_frame, fg_color="transparent")
         row.pack(fill="x", pady=2)
-        for ip in ips:
-            var = ctk.BooleanVar(value=ip in targets_set)
-            self._peer_checkbox_vars[ip] = var
-            ctk.CTkCheckBox(
+        ctk.CTkLabel(
+            row,
+            text=i18n.tr("peers.main_peers_colon"),
+            font=ctk.CTkFont(size=11, weight="bold"),
+            width=52,
+        ).pack(side="left", padx=(0, 6))
+        if ips:
+            for ip in ips:
+                var = ctk.BooleanVar(value=ip in targets_set)
+                self._peer_checkbox_vars[ip] = var
+                ctk.CTkCheckBox(
+                    row,
+                    text=portal_config.peer_display_label(ip),
+                    variable=var,
+                    font=ctk.CTkFont(size=11),
+                ).pack(side="left", padx=(0, 14), pady=0)
+        else:
+            ctk.CTkLabel(
                 row,
-                text=portal_config.peer_display_label(ip),
-                variable=var,
+                text="—",
                 font=ctk.CTkFont(size=11),
-            ).pack(side="left", padx=(0, 16), pady=0)
+                text_color="gray",
+            ).pack(side="left", padx=4)
+        if groups:
+            row2 = ctk.CTkFrame(self.peer_select_frame, fg_color="transparent")
+            row2.pack(fill="x", pady=(4, 2))
+            ctk.CTkLabel(
+                row2,
+                text=i18n.tr("peers.main_groups_colon"),
+                font=ctk.CTkFont(size=11, weight="bold"),
+                width=52,
+            ).pack(side="left", padx=(0, 6))
+            for g in groups:
+                gid = str(g.get("id", ""))
+                if not gid:
+                    continue
+                var = ctk.BooleanVar(value=gid in group_targets)
+                self._peer_group_checkbox_vars[gid] = var
+                gname = str(g.get("name", "Группа"))
+                n_ips = len(g.get("member_ips", []) or [])
+                ctk.CTkCheckBox(
+                    row2,
+                    text=f"{gname} ({n_ips} IP)",
+                    variable=var,
+                    font=ctk.CTkFont(size=11),
+                ).pack(side="left", padx=(0, 14), pady=0)
 
     def save_peer_selection_from_ui(self) -> None:
         ips = portal_config.load_peer_ips()
-        chosen = [ip for ip in ips if self._peer_checkbox_vars.get(ip) and self._peer_checkbox_vars[ip].get()]
-        if not chosen:
-            self.log("⚠️ Отметь хотя бы один IP или сохрани список IP")
+        chosen = [
+            ip for ip in ips if self._peer_checkbox_vars.get(ip) and self._peer_checkbox_vars[ip].get()
+        ]
+        g_chosen = [
+            gid
+            for gid, var in getattr(self, "_peer_group_checkbox_vars", {}).items()
+            if var.get()
+        ]
+        if not chosen and not g_chosen:
+            self.log("⚠️ Отметь хотя бы один IP или группу (или сохрани список в настройках)")
             if hasattr(self, "ip_saved_feedback"):
                 self.ip_saved_feedback.configure(text="❌ Нет галочек", text_color="#e74c3c")
             return
         portal_config.save_peer_send_targets(chosen)
-        labels = [portal_config.peer_display_label(ip) for ip in chosen]
-        self.log(f"💾 Отправка на выбранные ПК: {', '.join(labels)}")
+        portal_config.save_peer_send_group_ids(g_chosen)
+        eff = portal_config.load_effective_send_ips()
+        labels = [portal_config.peer_display_label(ip) for ip in eff]
+        self.log(f"💾 Отправка: {', '.join(labels) or '(пусто)'}")
         if hasattr(self, "ip_saved_feedback"):
             self.ip_saved_feedback.configure(text="✅ Выбор сохранён", text_color="#3dd68c")
         self.check_peer_connection_async(silent=False)
@@ -3764,28 +4035,26 @@ class PortalApp(ctk.CTk):
             run()
 
     def _parse_peer_ips_draft(self) -> List[str]:
-        if not hasattr(self, "peer_ips_text"):
-            return list(portal_config.load_peer_ips())
-        raw = self.peer_ips_text.get("1.0", "end")
-        lines = [ln.strip() for ln in raw.replace("\r", "").split("\n")]
-        out: List[str] = []
-        for line in lines:
-            if not line or line.lstrip().startswith("#"):
-                continue
-            p = portal_config.parse_peer_line(line)
-            if p:
-                out.append(p[0])
-        return out
+        if hasattr(self, "_peer_setting_rows") and self._peer_setting_rows:
+            out: List[str] = []
+            seen: Set[str] = set()
+            for row in self._peer_setting_rows:
+                ip = row["ip"].get().strip()
+                if ip and portal_config._is_ipv4(ip) and ip not in seen:
+                    seen.add(ip)
+                    out.append(ip)
+            return out if out else list(portal_config.load_peer_ips())
+        return list(portal_config.load_peer_ips())
 
     def _peer_ips_for_probe(self) -> List[str]:
         draft = self._parse_peer_ips_draft()
         return draft if draft else list(portal_config.load_peer_ips())
 
     def _peer_targets_for_probe(self) -> List[str]:
-        """IP только с отмеченными получателями (как при отправке файла)."""
+        """IP отмеченных получателей (пиры + группы), как при отправке."""
         seen: Set[str] = set()
         out: List[str] = []
-        for ip in portal_config.load_peer_send_targets():
+        for ip in portal_config.load_effective_send_ips():
             ip = (ip or "").strip()
             if not ip or ip in seen:
                 continue

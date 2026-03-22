@@ -97,10 +97,53 @@ class _MainScaffoldState extends State<MainScaffold>
       const SettingsScreen(),
     ];
     return Scaffold(
-      body: pages[_index],
+      resizeToAvoidBottomInset: true,
+      body: Builder(
+        builder: (context) {
+          final page = pages[_index];
+          if (!Platform.isIOS) return page;
+          final kb = MediaQuery.viewInsetsOf(context).bottom;
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              page,
+              if (kb > 0)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: Material(
+                    elevation: 10,
+                    color: Theme.of(context)
+                        .colorScheme
+                        .surfaceContainerHighest
+                        .withAlpha(247),
+                    child: SizedBox(
+                      height: 44,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () => FocusManager.instance.primaryFocus
+                                ?.unfocus(),
+                            child: const Text('Готово'),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
+        onDestinationSelected: (i) {
+          FocusManager.instance.primaryFocus?.unfocus();
+          setState(() => _index = i);
+        },
         destinations: const <NavigationDestination>[
           NavigationDestination(
             icon: PortalTabIcon(
