@@ -29,6 +29,7 @@ Future<bool> pingPortal(
     final data = await socket.timeout(const Duration(seconds: 5)).first;
     if (data.isEmpty) return false;
     final text = utf8.decode(data, allowMalformed: true);
+    if (text.contains('portal_auth_failed')) return false;
     final obj = _firstJsonObject(text);
     return obj != null && obj['type'] == 'pong';
   } catch (_) {

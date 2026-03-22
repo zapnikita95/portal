@@ -58,10 +58,10 @@ class _PeersScreenState extends State<PeersScreen> {
         content: Text(
           ok
               ? 'Pong: $ip'
-              : 'Нет ответа: $ip. На ПК «Запустить портал», порт 12345, тот же пароль; '
-                  'файрвол / Tailscale.',
+              : 'Нет ответа: $ip. На ПК «Запустить портал», порт 12345; пароль как в config.json '
+                  '(если на ПК пароль пустой — очисти поле в приложении); файрвол / Tailscale.',
         ),
-        duration: const Duration(seconds: 5),
+        duration: const Duration(seconds: 6),
       ),
     );
   }
