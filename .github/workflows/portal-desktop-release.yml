@@ -2,7 +2,7 @@
 # (шаблон в корне — чтобы push с PAT без scope `workflow` не блокировался.)
 #
 # Сборка Portal для macOS (.app) и Windows (.exe) через PyInstaller.
-# Артефакты: Portal-macOS.zip, Portal-Windows.zip
+# Артефакты: Portal-macOS.zip, Portal.dmg (перетащи .app в «Программы»), Portal-Windows.zip
 # Релиз: push тега v* (например v1.2.0).
 # Ручной запуск: Actions → «Portal Desktop Build» → Run workflow.
 
@@ -42,10 +42,28 @@ jobs:
       - name: ZIP для релиза
         run: cd dist && ditto -c -k --sequesterRsrc --keepParent Portal.app Portal-macOS.zip
 
+      - name: DMG (Portal.app + ярлык Applications → /Applications)
+        run: |
+          set -e
+          ST="dmg_stage"
+          rm -rf "$ST"
+          mkdir -p "$ST"
+          cp -R "dist/Portal.app" "$ST/"
+          ln -sf /Applications "$ST/Applications"
+          hdiutil create -volname "Portal" -srcfolder "$ST" -ov -format UDZO "dist/Portal.dmg"
+
+      # Плоские имена в корне job — иначе upload сохранит dist/… и релиз не найдёт файлы.
+      - name: Подготовить upload (ZIP + DMG)
+        run: |
+          cp dist/Portal-macOS.zip Portal-macOS.zip
+          cp dist/Portal.dmg Portal.dmg
+
       - uses: actions/upload-artifact@v4
         with:
           name: Portal-macOS
-          path: dist/Portal-macOS.zip
+          path: |
+            Portal-macOS.zip
+            Portal.dmg
 
   build-windows:
     runs-on: windows-latest
@@ -99,6 +117,7 @@ jobs:
           name: Portal Desktop ${{ github.ref_name }}
           files: |
             rel/Portal-macOS.zip
+            rel/Portal.dmg
             rel/Portal-Windows.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

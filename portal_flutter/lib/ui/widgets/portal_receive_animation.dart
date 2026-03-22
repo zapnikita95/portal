@@ -128,7 +128,7 @@ class _StaticPortalPainter extends CustomPainter {
     final inner = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = ring.strokeWidth * 0.5
-      ..color = color.withValues(alpha: 0.5);
+      ..color = color.withOpacity(0.5);
     canvas.drawOval(
       Rect.fromCenter(center: Offset.zero, width: rx * 1.45, height: ry * 1.25),
       inner,

@@ -12,6 +12,7 @@ import 'screens/peers_screen.dart';
 import 'screens/send_screen.dart';
 import 'screens/settings_screen.dart';
 import 'widgets/portal_tab_icons.dart';
+import 'portal_onboarding.dart';
 
 class MainScaffold extends StatefulWidget {
   const MainScaffold({super.key});
@@ -31,6 +32,10 @@ class _MainScaffoldState extends State<MainScaffold>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initShare();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      showPortalOnboardingIfNeeded(context);
+    });
   }
 
   @override

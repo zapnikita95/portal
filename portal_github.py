@@ -74,6 +74,12 @@ def flutter_release_page_url(owner_repo: str) -> str:
     return f"https://github.com/{o}/{r}/releases/tag/{FLUTTER_RELEASE_TAG}"
 
 
+def all_releases_page_url(owner_repo: str) -> str:
+    """Страница всех релизов (десктоп DMG/ZIP, Flutter APK и т.д.)."""
+    o, r = _split_owner_repo(owner_repo)
+    return f"https://github.com/{o}/{r}/releases"
+
+
 FLUTTER_WORKFLOW_FILE = "portal-flutter.yml"
 
 

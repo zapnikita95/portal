@@ -97,7 +97,8 @@ class _PortalTabPainter extends CustomPainter {
           false,
           stroke,
         );
-        final a = -math.pi * 0.1;
+        const arcStart = -0.3141592653589793; // -pi * 0.1
+        final a = arcStart;
         canvas.drawLine(
           Offset(3 * math.cos(a), 3 * math.sin(a)),
           Offset(5 * math.cos(a), 5 * math.sin(a)),

@@ -536,6 +536,21 @@ def save_github_repo(repo: Optional[str]) -> bool:
     return _write_all(data)
 
 
+# ── Онбординг (подсказка новым пользователям) ──────────────────────
+
+ONBOARDING_V1_KEY = "onboarding_v1_dismissed"
+
+
+def load_onboarding_v1_dismissed() -> bool:
+    return bool(_load_all().get(ONBOARDING_V1_KEY))
+
+
+def save_onboarding_v1_dismissed(v: bool = True) -> bool:
+    data = _load_all()
+    data[ONBOARDING_V1_KEY] = bool(v)
+    return _write_all(data)
+
+
 # ── Внешний вид виджета-портала (GIF/PNG и т.д.) ───────────────────
 
 

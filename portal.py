@@ -33,6 +33,7 @@ import time
 import io
 import struct
 import ctypes
+import re
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple, Any, Callable, Set
 import subprocess
@@ -344,20 +345,33 @@ def probe_portal_peer(host: str, port: int = PORTAL_PORT, timeout: float = 3.0) 
     host = (host or "").strip()
     if not host:
         return False, "no_host"
+    s: Optional[socket.socket] = None
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(timeout)
         s.connect((host, port))
         ping = merge_outgoing_shared_secret({"type": "ping"})
-        s.sendall(json.dumps(ping, ensure_ascii=False).encode("utf-8"))
-        data = s.recv(4096)
-        s.close()
-        if not data:
-            return False, "bad_reply"
-        msg = parse_portal_json_message(data)
+        _portal_sendall(s, json.dumps(ping, ensure_ascii=False).encode("utf-8"))
+        deadline = time.monotonic() + timeout
+        buf = b""
+        while time.monotonic() < deadline:
+            s.settimeout(max(0.05, min(0.5, deadline - time.monotonic())))
+            try:
+                chunk = s.recv(4096)
+            except socket.timeout:
+                continue
+            if not chunk:
+                break
+            buf += chunk
+            msg = parse_portal_json_message(buf)
+            if msg and msg.get("type") == "pong":
+                return True, "ok"
+            if len(buf) > 131072:
+                break
+        msg = parse_portal_json_message(buf)
         if msg and msg.get("type") == "pong":
             return True, "ok"
-        return False, "bad_reply"
+        return False, "bad_reply" if buf else "timeout"
     except ConnectionRefusedError:
         return False, "refused"
     except socket.timeout:
@@ -370,13 +384,122 @@ def probe_portal_peer(host: str, port: int = PORTAL_PORT, timeout: float = 3.0) 
         return False, "bad_reply"
     except Exception:
         return False, "error"
+    finally:
+        if s is not None:
+            try:
+                s.close()
+            except OSError:
+                pass
+
+
+def subnet24_prefix_from_ipv4(ip: str) -> Optional[str]:
+    """Возвращает 'a.b.c' для IPv4 или None."""
+    ip = (ip or "").strip()
+    parts = ip.split(".")
+    if len(parts) != 4:
+        return None
+    try:
+        for p in parts:
+            n = int(p)
+            if n < 0 or n > 255:
+                return None
+    except ValueError:
+        return None
+    return ".".join(parts[:3])
+
+
+def collect_lan_scan_seed_ips(primary_ip: Optional[str]) -> List[str]:
+    """
+    IP для определения /24 подсетей: Tailscale/основной из UI + реальные LAN-интерфейсы.
+    Раньше скан шёл только от primary (часто 100.x), из‑за чего телефон в 192.168.x не находился.
+    """
+    seen: Set[str] = set()
+    ordered: List[str] = []
+
+    def add(ip: Optional[str]) -> None:
+        s = (ip or "").strip()
+        if not s or s.startswith("127.") or s in seen:
+            return
+        seen.add(s)
+        ordered.append(s)
+
+    add(primary_ip)
+
+    if sys.platform == "darwin":
+        for iface in ("en0", "en1", "en2", "en3", "en4", "en5"):
+            try:
+                p = subprocess.run(
+                    ["ipconfig", "getifaddr", iface],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                    check=False,
+                )
+                add((p.stdout or "").strip())
+            except Exception:
+                pass
+    elif sys.platform.startswith("win"):
+        try:
+            p = subprocess.run(
+                ["ipconfig"],
+                capture_output=True,
+                text=True,
+                timeout=12,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            for line in (p.stdout or "").splitlines():
+                line = line.strip()
+                if "IPv4" in line and ":" in line:
+                    add(line.rsplit(":", 1)[-1].strip())
+        except Exception:
+            pass
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(1)
+            s.connect(("8.8.8.8", 80))
+            add(s.getsockname()[0])
+            s.close()
+        except Exception:
+            pass
+    else:
+        try:
+            p = subprocess.run(
+                ["hostname", "-I"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+            for part in (p.stdout or "").split():
+                add(part.strip())
+        except Exception:
+            pass
+        try:
+            p = subprocess.run(
+                ["ip", "-4", "-o", "addr", "show", "scope", "global"],
+                capture_output=True,
+                text=True,
+                timeout=4,
+                check=False,
+            )
+            for m in re.finditer(
+                r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b",
+                p.stdout or "",
+            ):
+                add(m.group(0))
+        except Exception:
+            pass
+
+    return ordered
 
 
 def scan_lan_subnet_for_portal_hosts(
     my_ip: str,
     *,
     port: int = PORTAL_PORT,
-    timeout: float = 0.2,
+    timeout: float = 1.0,
     max_workers: int = 56,
 ) -> List[str]:
     """
@@ -398,6 +521,51 @@ def scan_lan_subnet_for_portal_hosts(
         if ok:
             with lock:
                 found.append(host)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        list(ex.map(check, hosts))
+    found.sort(key=lambda ip: tuple(int(x) for x in ip.split(".")))
+    return found
+
+
+def scan_lan_subnets_merged(
+    seed_ips: List[str],
+    *,
+    port: int = PORTAL_PORT,
+    timeout: float = 1.0,
+    max_workers: int = 72,
+) -> List[str]:
+    """Скан нескольких /24 (по уникальным префиксам из seed_ips), результат объединён и отсортирован."""
+    prefixes: List[str] = []
+    seen_p: Set[str] = set()
+    for ip in seed_ips:
+        pfx = subnet24_prefix_from_ipv4(ip)
+        if pfx and pfx not in seen_p:
+            seen_p.add(pfx)
+            prefixes.append(pfx)
+    if not prefixes:
+        return []
+
+    hosts: List[str] = []
+    seen_h: Set[str] = set()
+    for pfx in prefixes:
+        for i in range(1, 255):
+            h = f"{pfx}.{i}"
+            if h not in seen_h:
+                seen_h.add(h)
+                hosts.append(h)
+
+    found: List[str] = []
+    found_set: Set[str] = set()
+    lock = threading.Lock()
+
+    def check(host: str) -> None:
+        ok, _code = probe_portal_peer(host, port=port, timeout=timeout)
+        if ok:
+            with lock:
+                if host not in found_set:
+                    found_set.add(host)
+                    found.append(host)
 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         list(ex.map(check, hosts))
@@ -945,6 +1113,51 @@ class PortalApp(ctk.CTk):
             font=ctk.CTkFont(size=13),
             text_color="gray",
         ).pack(pady=(10, 14))
+
+        if not portal_config.load_onboarding_v1_dismissed():
+            import portal_github
+
+            rel_url = portal_github.all_releases_page_url(portal_config.load_github_repo())
+
+            def _dismiss_onboarding(frame: ctk.CTkFrame) -> None:
+                portal_config.save_onboarding_v1_dismissed(True)
+                try:
+                    frame.destroy()
+                except Exception:
+                    pass
+
+            ob = ctk.CTkFrame(main_frame, fg_color=("gray20", "gray90"))
+            ob.pack(fill="x", padx=12, pady=(0, 12))
+            ctk.CTkLabel(
+                ob,
+                text=i18n.tr("onboarding.title"),
+                font=ctk.CTkFont(size=14, weight="bold"),
+            ).pack(anchor="w", padx=12, pady=(10, 4))
+            ctk.CTkLabel(
+                ob,
+                text=i18n.tr("onboarding.body"),
+                font=ctk.CTkFont(size=12),
+                justify="left",
+                anchor="w",
+            ).pack(anchor="w", padx=12, pady=(0, 8))
+            ob_btn = ctk.CTkFrame(ob, fg_color="transparent")
+            ob_btn.pack(fill="x", padx=8, pady=(0, 10))
+            ctk.CTkButton(
+                ob_btn,
+                text=i18n.tr("onboarding.open_releases"),
+                width=200,
+                command=lambda u=rel_url: webbrowser.open(u),
+                font=ctk.CTkFont(size=12),
+            ).pack(side="left", padx=4)
+            ctk.CTkButton(
+                ob_btn,
+                text=i18n.tr("onboarding.dismiss"),
+                width=140,
+                fg_color="transparent",
+                border_width=1,
+                command=lambda fr=ob: _dismiss_onboarding(fr),
+                font=ctk.CTkFont(size=12),
+            ).pack(side="left", padx=4)
         
         # Информация о подключении
         info_frame = ctk.CTkFrame(main_frame)
@@ -2131,10 +2344,15 @@ class PortalApp(ctk.CTk):
             self.log(i18n.tr("history.nothing_to_copy"))
 
     def _open_lan_scan_window(self) -> None:
-        base = (self.tailscale_ip or "").strip()
-        if not base:
+        seeds = collect_lan_scan_seed_ips((self.tailscale_ip or "").strip() or None)
+        if not seeds:
             self.log(i18n.tr("lan.no_local_ip"))
             return
+        subnet_labels = ", ".join(
+            sorted(
+                {f"{p}.0/24" for p in (subnet24_prefix_from_ipv4(ip) for ip in seeds) if p}
+            )
+        )
         if self._lan_win is not None:
             try:
                 if self._lan_win.winfo_exists():
@@ -2151,7 +2369,10 @@ class PortalApp(ctk.CTk):
         except Exception:
             pass
         self._lan_win = w
-        st = ctk.CTkLabel(w, text=i18n.tr("lan.scanning"))
+        st = ctk.CTkLabel(
+            w,
+            text=i18n.tr("lan.scanning_detail", subnets=subnet_labels or "…"),
+        )
         st.pack(pady=8)
         scroll = ctk.CTkScrollableFrame(w)
         scroll.pack(fill="both", expand=True, padx=10, pady=4)
@@ -2172,7 +2393,7 @@ class PortalApp(ctk.CTk):
                 ctk.CTkCheckBox(row, text=ip, variable=v).pack(side="left")
 
         def work() -> None:
-            found = scan_lan_subnet_for_portal_hosts(base)
+            found = scan_lan_subnets_merged(seeds, port=PORTAL_PORT, timeout=1.0, max_workers=72)
             self.after(0, lambda: finish(found))
 
         threading.Thread(target=work, daemon=True).start()
