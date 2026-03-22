@@ -80,9 +80,11 @@
 
 Позже при необходимости можно усилить схему (challenge-response, подпись сообщений, Fernet/HMAC) поверх того же пароля.
 
-## Android (экспериментально)
+## Android
 
-Каталог **[`portal-android/`](portal-android/)** — Kivy + Share Sheet, тот же TCP-протокол. Подробности: [`portal-android/README.md`](portal-android/README.md).
+**Основной клиент:** **[`portal_flutter/`](portal_flutter/)** (Flutter) — см. [portal_flutter/README.md](portal_flutter/README.md).
+
+**Legacy:** **[`portal-android/`](portal-android/)** (Kivy + Share Sheet), тот же TCP-протокол — [`portal-android/README.md`](portal-android/README.md).
 
 В приложении: **📥 APK** — по умолчанию **`Загрузки/Portal-Flutter.apk`** (релиз **`portal-flutter-latest`**); опционально **Portal-Android.apk** (Kivy, **`portal-android-latest`**).
 
