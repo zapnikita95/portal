@@ -215,6 +215,7 @@ def _portal_hotkey_tk_sequences() -> tuple[List[str], List[str], List[str]]:
 
 # Хромакей: Windows — почти чёрный; macOS — магента (#FF00FF), чтобы не съесть тёмные края портала
 # Свой цвет: PORTAL_WIDGET_CHROMA=#RRGGBB
+# Старый GIF с розовым фоном на Windows без дыр: PORTAL_WIDGET_AGGRESSIVE_CHROMA=1
 CHROMA_KEY_WIN = "#010101"
 CHROMA_KEY_MAC = "#FF00FF"
 
@@ -915,27 +916,46 @@ class PortalWidget:
 
     def _prepare_portal_frame_rgba(self, frame: Image.Image) -> Image.Image:
         """
-        Квадрат → resize; убрать магенту (#FF00FF) и тёмную «подложку» вокруг портала;
-        лёгкое размытие альфы по краю (без замены альфы жёстким кругом).
+        Вписать кадр в квадрат self.size без обрезки по длинной стороне (letterbox).
+        Убрать цвет хромакея; агрессивная чистка «мадженты + эллипс» — только для розового ключа (#FF00FF),
+        иначе на Windows с чёрным ключом #010101 портятся tech / fuzzy / пресеты с фиолетовым.
         """
         img = frame.convert("RGBA")
         w, h = img.size
-        sq = min(w, h)
-        left = (w - sq) // 2
-        top = (h - sq) // 2
-        img = img.crop((left, top, left + sq, top + sq))
-        img = img.resize((self.size, self.size), Image.Resampling.LANCZOS)
+        box = int(self.size)
+        if w <= 0 or h <= 0:
+            return Image.new("RGBA", (box, box), (0, 0, 0, 0))
+
+        scale = min(box / float(w), box / float(h))
+        nw = max(1, int(round(w * scale)))
+        nh = max(1, int(round(h * scale)))
+        img = img.resize((nw, nh), Image.Resampling.LANCZOS)
+        out = Image.new("RGBA", (box, box), (0, 0, 0, 0))
+        ox = (box - nw) // 2
+        oy = (box - nh) // 2
+        out.paste(img, (ox, oy), img)
 
         cr, cg, cb = self._chroma_rgb
-        # Радиус в RGB²: дизер/сглаживание к магенте (не только чистый #FF00FF)
-        chroma_r2 = 105 * 105
-        size = self.size
+        lum_key = cr + cg + cb
+        # Чёрный/почти чёрный ключ (Windows): только очень близкие к ключу пиксели — иначе съедается металл PNG
+        if lum_key <= 24 and max(cr, cg, cb) <= 12:
+            chroma_r2 = 14 * 14
+        else:
+            # Маджента и др.: дизер к фону GIF
+            chroma_r2 = 105 * 105
+
+        aggressive = (cr, cg, cb) == (255, 0, 255) or (
+            os.environ.get("PORTAL_WIDGET_AGGRESSIVE_CHROMA", "").strip().lower()
+            in ("1", "true", "yes", "on")
+        )
+
+        size = box
         cx = (size - 1) * 0.5
         cy = (size - 1) * 0.5
         rx = max(size * 0.44, 1.0)
         ry = max(size * 0.50, 1.0)
 
-        px = img.load()
+        px = out.load()
         for y in range(size):
             for x in range(size):
                 r, g, b, a = px[x, y]
@@ -945,7 +965,9 @@ class PortalWidget:
                 if d2 <= chroma_r2:
                     px[x, y] = (0, 0, 0, 0)
                     continue
-                # «Розово-фиолетовая» кайма (R+B высокие, G подавлен) — остатки антиалиаса к фону GIF
+                if not aggressive:
+                    continue
+                # Ниже — только для классических GIF с розовым фоном
                 if r >= 130 and b >= 130 and g <= 135 and (r + b) >= (g * 2.4 + 80):
                     px[x, y] = (0, 0, 0, 0)
                     continue
@@ -955,7 +977,6 @@ class PortalWidget:
                 luma = (r + g + b) / 3.0
                 mn, mx = min(r, g, b), max(r, g, b)
                 grayish = (mx - mn) < 34
-                # Тёмная матовка вокруг огня (чёрный круг в ассете), не трогаем само пламя
                 if ell > 0.44 and grayish and luma < 54:
                     px[x, y] = (0, 0, 0, 0)
                     continue
@@ -963,10 +984,10 @@ class PortalWidget:
                     px[x, y] = (0, 0, 0, 0)
                     continue
 
-        rch, gch, bch, ach = img.split()
+        rch, gch, bch, ach = out.split()
         ach = ach.filter(ImageFilter.GaussianBlur(0.45))
-        img = Image.merge("RGBA", (rch, gch, bch, ach))
-        return img
+        out = Image.merge("RGBA", (rch, gch, bch, ach))
+        return out
 
     @staticmethod
     def _snap_near_chroma_rgb(
@@ -1021,8 +1042,12 @@ class PortalWidget:
         r, g, b = self._chroma_rgb
         bg = Image.new("RGBA", rgba.size, (r, g, b, 255))
         composed = Image.alpha_composite(bg, rgba).convert("RGB")
-        composed = self._snap_near_chroma_rgb(composed, r, g, b)
-        composed = self._purge_magenta_screen_rgb(composed, r, g, b)
+        # Узкий snap для тёмного ключа — не заливаем в чёрный реальные тени портала
+        snap_tol = 36 if (r + g + b) <= 24 and max(r, g, b) <= 12 else 108
+        composed = self._snap_near_chroma_rgb(composed, r, g, b, tol=snap_tol)
+        # Эвристика «экранной мадженты» ломает фиолетовые пресеты на Windows
+        if r > 120 and b > 120 and g < 100:
+            composed = self._purge_magenta_screen_rgb(composed, r, g, b)
         return ImageTk.PhotoImage(composed, master=self.canvas)
 
     def _fit_rgba_to_widget_canvas(self, rgba: Image.Image) -> Image.Image:

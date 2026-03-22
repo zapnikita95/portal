@@ -1969,6 +1969,14 @@ class PortalApp(ctk.CTk):
         ).pack(side="left", padx=(0, 8))
         ctk.CTkLabel(
             t_peers,
+            text=i18n.tr("peers.settings_hint"),
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=720,
+            justify="left",
+        ).pack(anchor="w", padx=8, pady=(4, 8))
+        ctk.CTkLabel(
+            t_peers,
             text=i18n.tr("peers.groups_title"),
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(anchor="w", padx=8, pady=(10, 4))
@@ -3023,7 +3031,12 @@ class PortalApp(ctk.CTk):
         portal_config.save_peer_send_group_ids(g_chosen)
         eff = portal_config.load_effective_send_ips()
         labels = [portal_config.peer_display_label(ip) for ip in eff]
-        self.log(f"💾 Отправка: {', '.join(labels) or '(пусто)'}")
+        self.log(
+            i18n.tr(
+                "log.save_send_targets",
+                list=", ".join(labels) if labels else "(пусто)",
+            )
+        )
         if hasattr(self, "ip_saved_feedback"):
             self.ip_saved_feedback.configure(text="✅ Выбор сохранён", text_color="#3dd68c")
         self.check_peer_connection_async(silent=False)
@@ -4046,10 +4059,6 @@ class PortalApp(ctk.CTk):
             return out if out else list(portal_config.load_peer_ips())
         return list(portal_config.load_peer_ips())
 
-    def _peer_ips_for_probe(self) -> List[str]:
-        draft = self._parse_peer_ips_draft()
-        return draft if draft else list(portal_config.load_peer_ips())
-
     def _peer_targets_for_probe(self) -> List[str]:
         """IP отмеченных получателей (пиры + группы), как при отправке."""
         seen: Set[str] = set()
@@ -4598,7 +4607,13 @@ class PortalApp(ctk.CTk):
             elif req == "get_clipboard":
                 self.send_clipboard_response(client_socket)
             elif req == "ping":
-                # Как в репо: отвечаем pong сразу (проверка «это Портал» с другого ПК)
+                # Как в репо: отвечаем pong сразу (проверка «это Портал» с другого устройства)
+                if os.environ.get("PORTAL_VERBOSE_PING", "").strip().lower() in (
+                    "1",
+                    "true",
+                    "yes",
+                ):
+                    self._log_from_thread(f"📡 ping ← {addr[0]}")
                 pong = json.dumps(
                     {"type": "pong", "ok": True, "version": 1},
                     ensure_ascii=False,
@@ -5948,7 +5963,9 @@ class PortalApp(ctk.CTk):
                 threading.Thread(target=_push_to_ip, args=(ip,), daemon=True).start()
 
             if kind == "text":
-                summary = f"📤 Буфер (текст) → {len(targets)} ПК"
+                summary = i18n.tr(
+                    "log.clipboard_push_text_n", n=len(targets)
+                )
                 _text_payload = (payload.get("text") or "")
                 _snip = str(_text_payload)[:500]
                 try:
@@ -5968,8 +5985,10 @@ class PortalApp(ctk.CTk):
             elif kind == "files":
                 _paths = [p for p in (payload.get("paths") or []) if os.path.isfile(p)]
                 n = len(_paths)
-                summary = (
-                    f"📤 Буфер: {n} файл(ов) (clipboard_files) → {len(targets)} ПК"
+                summary = i18n.tr(
+                    "log.clipboard_push_files_n",
+                    files=n,
+                    n=len(targets),
                 )
                 try:
                     for _tip in targets:
@@ -5989,8 +6008,8 @@ class PortalApp(ctk.CTk):
                 except Exception:
                     pass
             elif kind == "image":
-                summary = (
-                    f"📤 Буфер: картинка (clipboard_rich) → {len(targets)} ПК"
+                summary = i18n.tr(
+                    "log.clipboard_push_image_n", n=len(targets)
                 )
                 try:
                     for _tip in targets:
@@ -6007,7 +6026,9 @@ class PortalApp(ctk.CTk):
                 except Exception:
                     pass
             else:
-                summary = f"📤 Буфер → {len(targets)} ПК"
+                summary = i18n.tr(
+                    "log.clipboard_push_generic_n", n=len(targets)
+                )
             self.log(summary)
     
     def send_clipboard(self, target_ip: str):

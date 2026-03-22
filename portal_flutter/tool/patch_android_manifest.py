@@ -60,11 +60,49 @@ def main() -> None:
 
     text = _patch_fgs_service_type(text)
 
+    # 4. Share sheet (receive_sharing_intent): без intent-filter Portal не в списке «Поделиться».
+    text = _inject_portal_share_intent_filters(text)
+
     if text != orig:
         MANIFEST.write_text(text, encoding="utf-8")
         print("AndroidManifest.xml обновлён.")
     else:
         print("AndroidManifest.xml без изменений (уже ок).")
+
+
+def _inject_portal_share_intent_filters(src: str) -> str:
+    marker = "<!-- PortalShareIntentFilters -->"
+    if marker in src or "android.intent.action.SEND_MULTIPLE" in src:
+        return src
+    m = re.search(
+        r'<activity\b[^>]*android:name\s*=\s*"[^"]*MainActivity"[^>]*>',
+        src,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not m:
+        print("WARN: MainActivity не найден в манифесте — share intent не добавлен.")
+        return src
+    start = m.end()
+    end = src.find("</activity>", start)
+    if end < 0:
+        return src
+    inner = src[start:end]
+    if "android.intent.action.SEND" in inner:
+        return src
+    snippet = f"""
+            {marker}
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+"""
+    return src[:end] + snippet + src[end:]
 
 
 if __name__ == "__main__":

@@ -76,26 +76,41 @@ Future<(bool ok, String err)> sendFileToPeer(
   Socket? socket;
   try {
     final f = File(filePath);
-    final size = await f.length();
     final name = filePath.split(Platform.pathSeparator).last;
+    final len = await f.length();
     final hdr = _withSecret(
       {
         'type': 'file',
         'filename': name,
-        'filesize': size,
+        'filesize': len,
         'portal_source': 'flutter',
       },
       secret,
     );
     socket = await Socket.connect(h, port, timeout: const Duration(seconds: 30));
+    // Не addStream(): на Android возможен другой порядок flush → битый JPEG на ПК.
     socket.add(utf8.encode('${jsonEncode(hdr)}\n'));
+    const maxMem = 48 * 1024 * 1024;
+    if (len <= maxMem) {
+      socket.add(await f.readAsBytes());
+    } else {
+      var sent = 0;
+      await for (final chunk in f.openRead(65536)) {
+        socket.add(chunk);
+        sent += chunk.length;
+      }
+      if (sent != len) {
+        return (false, 'size_mismatch');
+      }
+    }
     await socket.flush();
-    // Цельный поток байт без flush на каждый chunk — меньше риска артефактов на приёме.
-    await socket.addStream(f.openRead());
-    await socket.flush();
-    final resp = await socket.timeout(const Duration(seconds: 60)).first;
-    final ok = utf8.decode(resp).startsWith('OK');
-    return (ok, ok ? 'ok' : 'bad_response');
+    try {
+      final resp = await socket.timeout(const Duration(seconds: 120)).first;
+      final ok = utf8.decode(resp).startsWith('OK');
+      return (ok, ok ? 'ok' : 'bad_response');
+    } catch (_) {
+      return (false, 'no_response');
+    }
   } catch (e) {
     return (false, e.toString());
   } finally {
