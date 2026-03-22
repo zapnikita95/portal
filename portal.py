@@ -1417,6 +1417,23 @@ class PortalApp(ctk.CTk):
                 i18n.tr("lang.restart_hint"),
             )
 
+    def _save_mdns_display_name_from_settings(self) -> None:
+        if not hasattr(self, "mdns_display_entry"):
+            return
+        raw = self.mdns_display_entry.get().strip()
+        if portal_config.save_portal_mdns_display_name(raw):
+            self.log(i18n.tr("settings.mdns_saved"))
+            try:
+                if self.is_server_running:
+                    import portal_mdns
+
+                    portal_mdns.stop_advertise()
+                    portal_mdns.start_advertise(PORTAL_PORT)
+            except Exception:
+                pass
+        else:
+            self.log("⚠️ Не удалось сохранить имя устройства (mDNS)")
+
     def _refresh_main_secret_banner_visibility(self) -> None:
         if not hasattr(self, "_main_secret_frame") or not hasattr(
             self, "_peer_targets_heading"
@@ -1544,6 +1561,40 @@ class PortalApp(ctk.CTk):
         ctk.CTkLabel(
             t_gen,
             text=i18n.tr("settings.lang_note"),
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=680,
+            justify="left",
+        ).pack(anchor="w", padx=8, pady=(0, 8))
+        ctk.CTkLabel(
+            t_gen,
+            text=i18n.tr("settings.mdns_title"),
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=8, pady=(8, 4))
+        mdns_row = ctk.CTkFrame(t_gen, fg_color="transparent")
+        mdns_row.pack(fill="x", padx=8, pady=(0, 4))
+        self.mdns_display_entry = ctk.CTkEntry(
+            mdns_row,
+            width=360,
+            placeholder_text=i18n.tr("settings.mdns_ph"),
+            font=ctk.CTkFont(size=12),
+        )
+        self.mdns_display_entry.pack(side="left", padx=(0, 8))
+        try:
+            self.mdns_display_entry.insert(0, portal_config.load_portal_mdns_display_name())
+        except Exception:
+            pass
+        wire_ctk_entry_paste(self.mdns_display_entry)
+        ctk.CTkButton(
+            mdns_row,
+            text=i18n.tr("settings.save_mdns"),
+            width=160,
+            command=self._save_mdns_display_name_from_settings,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left")
+        ctk.CTkLabel(
+            t_gen,
+            text=i18n.tr("settings.mdns_note"),
             font=ctk.CTkFont(size=11),
             text_color="gray",
             wraplength=680,
@@ -2461,32 +2512,50 @@ class PortalApp(ctk.CTk):
         ).pack(anchor="w", padx=14, pady=(10, 0))
         st = ctk.CTkLabel(
             w,
-            text=i18n.tr("lan.scanning_detail", subnets=subnet_labels or "…"),
+            text=i18n.tr("lan.scan_start", subnets=subnet_labels or "…"),
         )
         st.pack(pady=8)
         scroll = ctk.CTkScrollableFrame(w)
         scroll.pack(fill="both", expand=True, padx=10, pady=4)
         check_vars: Dict[str, tk.BooleanVar] = {}
 
-        def finish(found: List[str]) -> None:
-            st.configure(text=i18n.tr("lan.done", n=len(found)))
+        def finish(found_labels: Dict[str, str]) -> None:
+            st.configure(text=i18n.tr("lan.done", n=len(found_labels)))
             for ch in scroll.winfo_children():
                 ch.destroy()
-            if not found:
+            if not found_labels:
                 ctk.CTkLabel(scroll, text=i18n.tr("lan.none")).pack(anchor="w", pady=6)
                 return
-            for ip in found:
+            for ip in sorted(
+                found_labels.keys(),
+                key=lambda k: (found_labels[k].lower(), k),
+            ):
                 row = ctk.CTkFrame(scroll, fg_color="transparent")
                 row.pack(fill="x", pady=2)
                 v = tk.BooleanVar(value=True)
                 check_vars[ip] = v
-                ctk.CTkCheckBox(row, text=ip, variable=v).pack(side="left")
+                label = (found_labels.get(ip) or "").strip()
+                pretty = f"{label} ({ip})" if label and label != ip else ip
+                ctk.CTkCheckBox(row, text=pretty, variable=v).pack(side="left")
 
         def work() -> None:
-            found = scan_lan_subnets_merged(
+            mdns_map: Dict[str, str] = {}
+            try:
+                import portal_mdns
+
+                mdns_map = dict(portal_mdns.browse_peers(timeout=2.6))
+            except Exception:
+                pass
+            tcp_found = scan_lan_subnets_merged(
                 seeds, port=PORTAL_PORT, timeout=2.2, max_workers=48
             )
-            self.after(0, lambda: finish(found))
+            merged: Dict[str, str] = {}
+            for ip in tcp_found:
+                merged[ip] = mdns_map.get(ip, ip)
+            for ip, nm in mdns_map.items():
+                if ip not in merged:
+                    merged[ip] = nm
+            self.after(0, lambda m=dict(merged): finish(m))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -4604,8 +4673,7 @@ class PortalApp(ctk.CTk):
         """Запуск сервера для приема файлов"""
         if not self.tailscale_ip:
             self.log(
-                "⚠️ Tailscale IP не определён — сервер всё равно запускается на 0.0.0.0 "
-                f"(порт {PORTAL_PORT}). Укажи на других ПК свой LAN / Tailscale IP этого компа."
+                i18n.tr("log.server_no_mesh_ip", port=PORTAL_PORT)
             )
         
         try:
@@ -4640,12 +4708,24 @@ class PortalApp(ctk.CTk):
                 )
             self._refresh_local_link_status_label()
             self._arm_peer_poll()
+            try:
+                import portal_mdns
+
+                portal_mdns.start_advertise(PORTAL_PORT)
+            except Exception:
+                pass
         except Exception as e:
             self.log(f"❌ Ошибка запуска: {str(e)}")
             self.is_server_running = False
     
     def stop_server(self):
         """Остановка сервера"""
+        try:
+            import portal_mdns
+
+            portal_mdns.stop_advertise()
+        except Exception:
+            pass
         self.is_server_running = False
         if self.server_socket:
             try:

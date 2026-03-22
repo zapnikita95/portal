@@ -112,7 +112,7 @@ class _HomeReceiveScreenState extends State<HomeReceiveScreen>
     if (mounted) {
       setState(() {
         _pcReachability =
-            'Нет pong (${ips.take(3).join(', ')}…). ПК: «Запустить портал», пароль, Tailscale/файрвол.';
+            'Нет pong (${ips.take(3).join(', ')}…). ПК: «Запустить портал», пароль, mesh-VPN/файрвол.';
       });
     }
   }
@@ -178,7 +178,7 @@ class _HomeReceiveScreenState extends State<HomeReceiveScreen>
                             ? 'Приём на этом телефоне :$portalPort (пока приложение на экране). '
                                 'Статус «ПК отвечает» ниже — отдельная проверка до Mac по IP из «Пиры».'
                             : 'Приём на этом телефоне в фоне (FGS). '
-                                '«ПК отвечает» — ping по IP из «Пиры» (LAN или Tailscale 100.x).',
+                                '«ПК отвечает» — ping по IP из «Пиры» (LAN или mesh-VPN 100.x).',
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
                     ],

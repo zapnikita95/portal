@@ -13,7 +13,7 @@ class PeerDto {
   final String name;
   final bool send;
 
-  /// auto | lan | tailscale — для фильтра вкладок Wi‑Fi / TS на экране «Пиры».
+  /// auto | lan | tailscale — для фильтра вкладок Wi‑Fi / mesh на экране «Пиры».
   final String networkKind;
 
   Map<String, dynamic> toJson() => {

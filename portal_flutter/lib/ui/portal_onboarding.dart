@@ -41,8 +41,8 @@ Future<void> showPortalQuickStartSheet(BuildContext context) async {
               Text(
                 '• Установи Портал на компьютере и телефоне — сборки в релизах на GitHub.\n'
                 '• Задай один и тот же «пароль сети» в приложении и на ПК (config.json).\n'
-                '• Устройства должны видеть друг друга: одна Wi‑Fi сеть и/или Tailscale.\n'
-                '• На вкладке «Пиры» выбери режим LAN-скана: Wi‑Fi (192.168.x) или Tailscale (100.x).\n'
+                '• Подключись по локальной сети или через mesh-VPN (Tailscale / NetBird / ZeroTier / Headscale).\n'
+                '• На вкладке «Пиры» выбери режим LAN-скана: Wi‑Fi (192.168.x) или mesh-VPN (100.x).\n'
                 '• Включи приём / фоновый сервис, добавь IP пира.\n\n'
                 'На iOS для приёма с ПК часто нужно держать приложение на экране — система режет фоновый TCP.',
                 style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(

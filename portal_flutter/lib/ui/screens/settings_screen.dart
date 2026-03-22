@@ -147,7 +147,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ListTile(
             leading: const Icon(Icons.help_outline),
             title: const Text('Быстрый старт'),
-            subtitle: const Text('Установка, Wi‑Fi / Tailscale, пароль, LAN-скан'),
+            subtitle: const Text('Установка, Wi‑Fi / mesh-VPN, пароль, LAN-скан'),
             onTap: () => showPortalQuickStartSheet(context),
           ),
           const SizedBox(height: 8),

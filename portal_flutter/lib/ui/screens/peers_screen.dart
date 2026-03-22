@@ -205,7 +205,7 @@ class _PeersScreenState extends State<PeersScreen> {
           ok
               ? 'Pong: $ip'
               : 'Нет ответа: $ip. На ПК «Запустить портал», порт 12345; пароль как в config.json '
-                  '(если на ПК пароль пустой — очисти поле в приложении); файрвол / Tailscale.',
+                  '(если на ПК пароль пустой — очисти поле в приложении); файрвол / mesh-VPN.',
         ),
         duration: const Duration(seconds: 6),
       ),
@@ -433,7 +433,7 @@ class _PeersScreenState extends State<PeersScreen> {
   static const _kindLabels = <String, String>{
     'auto': 'Авто (по IP)',
     'lan': 'Домашняя сеть',
-    'tailscale': 'Tailscale / VPN',
+    'tailscale': 'mesh-VPN',
   };
 
   @override
@@ -475,7 +475,7 @@ class _PeersScreenState extends State<PeersScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 12),
               children: [
                 Text(
-                  'Вкладки Wi‑Fi / TS / Все фильтруют список. Тип сети у строки задаётся вручную. '
+                  'Вкладки Wi‑Fi / mesh / Все фильтруют список. Тип сети у строки задаётся вручную. '
                   'Нажми «Сохранить», чтобы записать пиров, группы и подсказку для LAN-скана.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
@@ -487,7 +487,7 @@ class _PeersScreenState extends State<PeersScreen> {
                 const SizedBox(height: 6),
                 Text(
                   'Wi‑Fi — только пиры с типом «домашняя» или авто с LAN-IP. '
-                  'TS — только Tailscale (100.64–127.x) или явно помеченные. '
+                  'mesh — только mesh-VPN (100.64–127.x) или явно помеченные. '
                   '«Все» — весь список.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
@@ -501,7 +501,7 @@ class _PeersScreenState extends State<PeersScreen> {
                     ),
                     ButtonSegment<LanScanScope>(
                       value: LanScanScope.tailscale,
-                      label: Text('TS'),
+                      label: Text('mesh'),
                       icon: Icon(Icons.hub_outlined, size: 18),
                     ),
                     ButtonSegment<LanScanScope>(
@@ -521,7 +521,7 @@ class _PeersScreenState extends State<PeersScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 24),
                     child: Center(
                       child: Text(
-                        'В этой вкладке нет пиров. Переключи Wi‑Fi / TS / Все или добавь строку «+».',
+                        'В этой вкладке нет пиров. Переключи Wi‑Fi / mesh / Все или добавь строку «+».',
                         textAlign: TextAlign.center,
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),

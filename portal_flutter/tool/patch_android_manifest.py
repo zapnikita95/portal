@@ -7,6 +7,9 @@ from pathlib import Path
 
 MANIFEST = Path("android/app/src/main/AndroidManifest.xml")
 
+# Полное имя класса из пакета id.flutter.flutter_background_service (library manifest: .BackgroundService).
+_FGS_SERVICE_CLASS = "id.flutter.flutter_background_service.BackgroundService"
+
 # Имя сервиса flutter_background_service (может меняться в плагине, поэтому ищем по подстроке).
 _FGS_SERVICE_SUBSTR = "flutter_background_service"
 
@@ -18,8 +21,22 @@ def main() -> None:
     text = MANIFEST.read_text(encoding="utf-8")
     orig = text
 
-    # 1. usesCleartextTraffic — TCP к LAN без TLS.
-    if 'usesCleartextTraffic' not in text and "<application" in text:
+    # 0. xmlns:tools для merge/replace атрибутов сервиса из зависимости.
+    if "xmlns:tools=" not in text and "<manifest" in text:
+        text = text.replace(
+            "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"",
+            "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"\n"
+            '    xmlns:tools="http://schemas.android.com/tools"',
+            1,
+        )
+
+    # 1. Имя в лаунчере + cleartext для TCP в LAN.
+    text = re.sub(
+        r'android:label="portal_flutter"',
+        'android:label="Portal"',
+        text,
+    )
+    if "usesCleartextTraffic" not in text and "<application" in text:
         text = text.replace("<application", '<application android:usesCleartextTraffic="true"', 1)
 
     # 2. Разрешения.
@@ -59,6 +76,9 @@ def main() -> None:
         return re.sub(pattern, replacer, src, flags=re.DOTALL)
 
     text = _patch_fgs_service_type(text)
+
+    # 3b. Library не задаёт foregroundServiceType → Android 14+ краш при startForeground(dataSync).
+    text = _inject_background_service_fgs_merge(text)
 
     # 4. Share sheet (receive_sharing_intent): без intent-filter Portal не в списке «Поделиться».
     text = _inject_portal_share_intent_filters(text)
@@ -103,6 +123,28 @@ def _inject_portal_share_intent_filters(src: str) -> str:
             </intent-filter>
 """
     return src[:end] + snippet + src[end:]
+
+
+def _inject_background_service_fgs_merge(src: str) -> str:
+    if _FGS_SERVICE_CLASS in src and "foregroundServiceType" in src:
+        return src
+    marker = "<!-- PortalBackgroundServiceFgs -->"
+    if marker in src:
+        return src
+    snippet = f"""
+        {marker}
+        <service
+            android:name="{_FGS_SERVICE_CLASS}"
+            android:exported="true"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
+"""
+    # Вставить сразу после открывающего <application ...>.
+    m = re.search(r"<application\b[^>]*>", src)
+    if not m:
+        print("WARN: <application> не найден — FGS merge для BackgroundService не добавлен.")
+        return src
+    return src[: m.end()] + "\n" + snippet + src[m.end() :]
 
 
 if __name__ == "__main__":

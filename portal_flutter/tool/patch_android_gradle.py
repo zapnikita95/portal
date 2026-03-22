@@ -1,26 +1,18 @@
 #!/usr/bin/env python3
 """
-После `flutter create`: compileSdk 35 и JVM 17 для app + всех Android-модулей (плагины).
-Устраняет: lifecycle SDK 35; receive_sharing_intent Kotlin 17 vs Java 1.8.
+После `flutter create`: compileSdk 35 и JVM 17 для app + Android-модулей (плагины).
+Поддерживает шаблон Flutter 3.41+: android/app/build.gradle.kts и android/build.gradle.kts.
 """
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
-APP = Path("android/app/build.gradle")
-ROOT = Path("android/build.gradle")
-
 MARK_BEGIN = "// PORTAL_GRADLE_PATCH_BEGIN"
 MARK_END = "// PORTAL_GRADLE_PATCH_END"
 
-# Без subproject.afterEvaluate: в шаблоне Flutter есть evaluationDependsOn(':app'),
-# из‑за этого дочерние проекты уже «evaluated» → afterEvaluate падает на CI.
-#
-# Ранний withId задаёт compileSdk; JVM для плагинов (shared_preferences_android и др.)
-# выставляется в gradle.projectsEvaluated — иначе AGP/плагины перезаписывают Java 11,
-# а Kotlin остаётся 17 → «javac target 11 vs Kotlin 17».
-ROOT_SNIPPET = f"""
+# Groovy (старые проекты)
+ROOT_SNIPPET_GROOVY = f"""
 {MARK_BEGIN}
 subprojects {{ subproject ->
     subproject.plugins.withId("com.android.library") {{
@@ -58,9 +50,52 @@ gradle.projectsEvaluated {{
 {MARK_END}
 """
 
+# Kotlin DSL (Flutter 3.35+)
+ROOT_SNIPPET_KTS = f"""
+{MARK_BEGIN}
+gradle.projectsEvaluated {{
+    rootProject.subprojects.forEach {{ sub ->
+        sub.plugins.withId("com.android.library") {{
+            sub.extensions.findByType(com.android.build.gradle.LibraryExtension::class.java)?.apply {{
+                compileSdk = 35
+                compileOptions {{
+                    sourceCompatibility = JavaVersion.VERSION_17
+                    targetCompatibility = JavaVersion.VERSION_17
+                }}
+            }}
+        }}
+        sub.tasks.withType(org.gradle.api.tasks.compile.JavaCompile::class.java).configureEach {{
+            sourceCompatibility = JavaVersion.VERSION_17.toString()
+            targetCompatibility = JavaVersion.VERSION_17.toString()
+            options.release.set(17)
+        }}
+        sub.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile::class.java).configureEach {{
+            kotlinOptions.jvmTarget = "17"
+        }}
+    }}
+}}
+{MARK_END}
+"""
+
+
+def _pick_app_gradle() -> Path:
+    for p in (Path("android/app/build.gradle.kts"), Path("android/app/build.gradle")):
+        if p.is_file():
+            return p
+    raise SystemExit(
+        "Нет android/app/build.gradle.kts ни build.gradle — сначала "
+        "flutter create . --project-name portal_flutter --org org.portal --platforms=android"
+    )
+
+
+def _pick_root_gradle() -> Path | None:
+    for p in (Path("android/build.gradle.kts"), Path("android/build.gradle")):
+        if p.is_file():
+            return p
+    return None
+
 
 def _patch_app_gradle(text: str) -> str:
-    # compileSdk
     text = re.sub(
         r"compileSdk\s*=\s*flutter\.compileSdkVersion",
         "compileSdk = 35",
@@ -71,7 +106,6 @@ def _patch_app_gradle(text: str) -> str:
         "compileSdkVersion 35",
         text,
     )
-    # Java / Kotlin в app (шаблоны Flutter: 1.8 или 11)
     text = text.replace("JavaVersion.VERSION_1_8", "JavaVersion.VERSION_17")
     text = text.replace("JavaVersion.VERSION_11", "JavaVersion.VERSION_17")
     text = text.replace("JavaVersion.VERSION_1_11", "JavaVersion.VERSION_17")
@@ -84,34 +118,46 @@ def _patch_app_gradle(text: str) -> str:
     return text
 
 
-def _patch_root_gradle(text: str) -> str:
+def _patch_root_groovy(text: str) -> str:
     if MARK_BEGIN in text:
         a = text.index(MARK_BEGIN)
         b = text.index(MARK_END) + len(MARK_END)
-        text = text[:a] + ROOT_SNIPPET.strip() + text[b:]
-        return text
-    return text.rstrip() + "\n" + ROOT_SNIPPET
+        return text[:a] + ROOT_SNIPPET_GROOVY.strip() + text[b:]
+    return text.rstrip() + "\n" + ROOT_SNIPPET_GROOVY
+
+
+def _patch_root_kts(text: str) -> str:
+    if MARK_BEGIN in text:
+        a = text.index(MARK_BEGIN)
+        b = text.index(MARK_END) + len(MARK_END)
+        return text[:a] + ROOT_SNIPPET_KTS.strip() + text[b:]
+    return text.rstrip() + "\n" + ROOT_SNIPPET_KTS
 
 
 def main() -> None:
-    if not APP.is_file():
-        raise SystemExit(f"Нет {APP} — сначала flutter create --platforms=android")
-    raw = APP.read_text(encoding="utf-8")
+    app = _pick_app_gradle()
+    raw = app.read_text(encoding="utf-8")
     new = _patch_app_gradle(raw)
     if new != raw:
-        APP.write_text(new, encoding="utf-8")
-        print(f"Обновлён {APP}")
+        app.write_text(new, encoding="utf-8")
+        print(f"Обновлён {app}")
     else:
-        print(f"{APP}: без изменений (проверь шаблон Flutter)")
+        print(f"{app}: без изменений (проверь шаблон Flutter)")
 
-    if ROOT.is_file():
-        r = ROOT.read_text(encoding="utf-8")
-        nr = _patch_root_gradle(r)
-        if nr != r:
-            ROOT.write_text(nr, encoding="utf-8")
-            print(f"Обновлён {ROOT}")
-        else:
-            print(f"{ROOT}: без изменений")
+    root = _pick_root_gradle()
+    if root is None:
+        print("Нет android/build.gradle(.kts) — пропуск root patch")
+        return
+    r = root.read_text(encoding="utf-8")
+    if root.suffix == ".kts":
+        nr = _patch_root_kts(r)
+    else:
+        nr = _patch_root_groovy(r)
+    if nr != r:
+        root.write_text(nr, encoding="utf-8")
+        print(f"Обновлён {root}")
+    else:
+        print(f"{root}: без изменений")
 
 
 if __name__ == "__main__":

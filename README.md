@@ -1,6 +1,8 @@
 # 🌀 Портал
 
-Приложение для передачи файлов и синхронизации буфера обмена через Tailscale сеть с красивым UI в стиле портала и виджетом на рабочем столе.
+Приложение для передачи файлов и синхронизации буфера обмена по **локальной сети** и **mesh-VPN** (Tailscale, NetBird, ZeroTier, Headscale и т.п.) с красивым UI в стиле портала и виджетом на рабочем столе.
+
+→ [Как подключаться: LAN, mesh-VPN, mDNS](docs/CONNECTING.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)

@@ -89,6 +89,28 @@ def save_ui_language(lang: str) -> bool:
     return _write_all(data)
 
 
+def load_portal_mdns_display_name() -> str:
+    """Имя устройства для mDNS (LAN). По умолчанию — короткое имя хоста."""
+    import socket
+
+    data = _load_all()
+    raw = str(data.get("portal_mdns_display_name") or "").strip()
+    if raw:
+        return raw[:63]
+    h = (socket.gethostname() or "Portal").split(".")[0].strip()
+    return (h or "Portal")[:63]
+
+
+def save_portal_mdns_display_name(name: str) -> bool:
+    s = str(name or "").strip()
+    data = _load_all()
+    if not s:
+        data.pop("portal_mdns_display_name", None)
+    else:
+        data["portal_mdns_display_name"] = s[:63]
+    return _write_all(data)
+
+
 def _load_all() -> Dict[str, Any]:
     p = config_path()
     if not p.exists():

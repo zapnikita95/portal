@@ -43,7 +43,7 @@ String lanScanScopeLabel(LanScanScope s) {
     case LanScanScope.wifi:
       return 'Wi‑Fi (локальная сеть)';
     case LanScanScope.tailscale:
-      return 'Tailscale (100.x…)';
+      return 'mesh-VPN (100.x…)';
     case LanScanScope.all:
       return 'Все интерфейсы';
   }
