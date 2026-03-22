@@ -11,8 +11,16 @@ name: Portal Desktop Build
 on:
   workflow_dispatch:
   push:
+    branches: [main, master]
     tags:
       - "v*"
+    paths:
+      - "portal_widget.py"
+      - "portal_mac_hotkey_helper.py"
+      - "portal.py"
+      - "MAC_PORTAL_HOTKEYS.md"
+      - "pyinstaller_portal.spec"
+      - ".github/workflows/portal-desktop-release.yml"
 
 permissions:
   contents: write

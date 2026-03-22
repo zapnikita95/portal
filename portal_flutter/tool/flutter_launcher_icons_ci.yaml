@@ -1,0 +1,9 @@
+# Только для CI после `flutter create` (есть android/). Локально без android/ — `dart run flutter_launcher_icons` из pubspec.
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: assets/branding/portal_icon.png
+  min_sdk_android: 21
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: assets/branding/portal_icon.png
+  remove_alpha_ios: true

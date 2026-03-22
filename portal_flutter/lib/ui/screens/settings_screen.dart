@@ -2,6 +2,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:portal_flutter/data/settings_repository.dart';
 import 'package:portal_flutter/services/portal_service_controller.dart';
+import 'package:portal_flutter/ui/portal_onboarding.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -60,6 +61,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       receiveDir: _recvDir.text.trim(),
       portalAnimPreset: _animPreset,
       peerGroups: st.peerGroups,
+      lanScanMode: st.lanScanMode,
     ));
     await PortalServiceController.reloadReceiveIfRunning();
     if (!mounted) return;
@@ -139,7 +141,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 24),
           FilledButton(onPressed: _save, child: const Text('Сохранить')),
-          const SizedBox(height: 16),
+          const SizedBox(height: 20),
+          ListTile(
+            leading: const Icon(Icons.help_outline),
+            title: const Text('Быстрый старт'),
+            subtitle: const Text('Установка, Wi‑Fi / Tailscale, пароль, LAN-скан'),
+            onTap: () => showPortalQuickStartSheet(context),
+          ),
+          const SizedBox(height: 8),
           Text(
             'Flutter-версия — основной мобильный клиент Portal.',
             style: Theme.of(context).textTheme.bodySmall,

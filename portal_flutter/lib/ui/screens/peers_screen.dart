@@ -18,6 +18,7 @@ class _PeersScreenState extends State<PeersScreen> {
   bool _loading = true;
   Timer? _debounce;
   bool _saving = false;
+  LanScanScope _lanScope = LanScanScope.wifi;
 
   @override
   void initState() {
@@ -53,13 +54,15 @@ class _PeersScreenState extends State<PeersScreen> {
     }
     if (_rows.isEmpty) {
       final row = _PeerRow(
-        ip: TextEditingController(text: '100.'),
+        ip: TextEditingController(),
         name: TextEditingController(),
         send: true,
       );
       _wireRow(row);
       _rows.add(row);
     }
+
+    _lanScope = lanScanScopeFromStorage(st.lanScanMode);
 
     for (final g in st.peerGroups) {
       final ge = _GroupEdit(
@@ -122,6 +125,7 @@ class _PeersScreenState extends State<PeersScreen> {
         receiveDir: st0.receiveDir,
         portalAnimPreset: st0.portalAnimPreset,
         peerGroups: groups,
+        lanScanMode: lanScanScopeStorageValue(_lanScope),
       ));
     } finally {
       _saving = false;
@@ -158,33 +162,47 @@ class _PeersScreenState extends State<PeersScreen> {
   Future<void> _lanScan() async {
     final st = await SettingsRepository.load();
     if (!mounted) return;
-    final seeds = await collectLocalIpv4Seeds();
+    final bundle = await collectLanSeedBundle();
+    final seeds = seedsForScope(bundle, _lanScope);
     if (seeds.isEmpty) {
+      final w = bundle.wifiIp ?? '—';
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'Нет локального IPv4 (Wi‑Fi выкл или нет прав). Включи сеть и попробуй снова.',
+            'Нет IPv4 для режима «${lanScanScopeLabel(_lanScope)}». '
+            'Wi‑Fi IP (система): $w. Включи Wi‑Fi, на Android нужны разрешения сети; '
+            'попробуй режим «Все интерфейсы» или «Tailscale».',
           ),
+          duration: const Duration(seconds: 7),
         ),
       );
       return;
     }
+    if (!mounted) return;
     showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => const AlertDialog(
+      builder: (ctx) => AlertDialog(
         content: Row(
           children: [
-            CircularProgressIndicator(),
-            SizedBox(width: 20),
-            Expanded(child: Text('Скан локальной сети…')),
+            const CircularProgressIndicator(),
+            const SizedBox(width: 20),
+            Expanded(
+              child: Text(
+                'Скан ${lanScanScopeLabel(_lanScope)} (${seeds.length} подсетей)…',
+              ),
+            ),
           ],
         ),
       ),
     );
     List<String> found;
     try {
-      found = await scanLanForPortalHosts(secret: st.secret);
+      found = await scanLanForPortalHosts(
+        secret: st.secret,
+        scope: _lanScope,
+      );
     } catch (e) {
       found = [];
       if (mounted) {
@@ -346,6 +364,42 @@ class _PeersScreenState extends State<PeersScreen> {
                 Text(
                   'Изменения подтягиваются в хранилище автоматически; «Сохранить» — явное подтверждение.',
                   style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Поиск в LAN (иконка радара)',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Wi‑Fi — подсеть домашнего роутера (192.168.x и т.п.), без Tailscale. '
+                  'Tailscale — только 100.64–127.x. «Все» — Wi‑Fi + VPN сразу.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 8),
+                SegmentedButton<LanScanScope>(
+                  segments: const <ButtonSegment<LanScanScope>>[
+                    ButtonSegment<LanScanScope>(
+                      value: LanScanScope.wifi,
+                      label: Text('Wi‑Fi'),
+                      icon: Icon(Icons.wifi, size: 18),
+                    ),
+                    ButtonSegment<LanScanScope>(
+                      value: LanScanScope.tailscale,
+                      label: Text('TS'),
+                      icon: Icon(Icons.hub_outlined, size: 18),
+                    ),
+                    ButtonSegment<LanScanScope>(
+                      value: LanScanScope.all,
+                      label: Text('Все'),
+                      icon: Icon(Icons.device_hub_outlined, size: 18),
+                    ),
+                  ],
+                  selected: <LanScanScope>{_lanScope},
+                  onSelectionChanged: (Set<LanScanScope> next) {
+                    setState(() => _lanScope = next.first);
+                    _scheduleAutosave();
+                  },
                 ),
                 const SizedBox(height: 8),
                 ...List.generate(_rows.length, (i) {

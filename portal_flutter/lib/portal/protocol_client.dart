@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:portal_flutter/config.dart';
+import 'package:portal_flutter/portal/framing.dart';
 
 Map<String, dynamic> _withSecret(Map<String, dynamic> msg, String secret) {
   final s = secret.trim();
@@ -21,11 +22,18 @@ Future<bool> pingPortal(
   if (h.isEmpty) return false;
   Socket? socket;
   try {
-    socket = await Socket.connect(
-      h,
-      port,
-      timeout: connectTimeout ?? portalConnectTimeout,
-    );
+    final addr = InternetAddress.tryParse(h);
+    socket = addr != null
+        ? await Socket.connect(
+            addr,
+            port,
+            timeout: connectTimeout ?? portalConnectTimeout,
+          )
+        : await Socket.connect(
+            h,
+            port,
+            timeout: connectTimeout ?? portalConnectTimeout,
+          );
     final raw = jsonEncode(_withSecret({'type': 'ping'}, secret));
     socket.add(utf8.encode('$raw\n'));
     await socket.flush();
@@ -36,13 +44,16 @@ Future<bool> pingPortal(
       buf.add(data);
       final text = utf8.decode(buf.toBytes(), allowMalformed: true);
       if (text.contains('portal_auth_failed')) return false;
-      final obj = _firstJsonObject(text);
+      final obj = parseFirstJsonObjectFromString(text);
       if (obj != null) {
         return obj['type'] == 'pong';
       }
       if (buf.length > 16384) break;
     }
-    return false;
+    final tail = utf8.decode(buf.toBytes(), allowMalformed: true);
+    if (tail.contains('portal_auth_failed')) return false;
+    final obj = parseFirstJsonObjectFromString(tail);
+    return obj != null && obj['type'] == 'pong';
   } catch (_) {
     return false;
   } finally {
@@ -50,32 +61,6 @@ Future<bool> pingPortal(
       await socket?.close();
     } catch (_) {}
   }
-}
-
-Map<String, dynamic>? _firstJsonObject(String s) {
-  final i = s.indexOf('{');
-  if (i < 0) return null;
-  var depth = 0;
-  for (var j = i; j < s.length; j++) {
-    final c = s[j];
-    if (c == '{') {
-      depth++;
-    } else if (c == '}') {
-      depth--;
-      if (depth == 0) {
-        try {
-          final o = jsonDecode(s.substring(i, j + 1));
-          if (o is Map<String, dynamic>) return o;
-          if (o is Map) {
-            return o.map((k, v) => MapEntry(k.toString(), v));
-          }
-        } catch (_) {
-          return null;
-        }
-      }
-    }
-  }
-  return null;
 }
 
 Future<(bool ok, String err)> sendFileToPeer(

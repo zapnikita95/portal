@@ -24,10 +24,13 @@ flutter create . --project-name portal_flutter --org org.portal --platforms=andr
 python3 tool/patch_android_manifest.py   # Android
 python3 tool/patch_ios_info_plist.py     # iOS: уведомления
 flutter pub get
+dart run flutter_launcher_icons        # иконка из assets/branding/portal_icon.png (iOS сразу; Android — после create в pubspec android: true)
 flutter run
 ```
 
 `tool/patch_android_manifest.py` дублируется в CI после `flutter create`.
+
+**Иконка приложения:** исходник — `assets/branding/portal_icon.png` (копия брендинга репозитория). После смены картинки снова `dart run flutter_launcher_icons`. Для Android в `pubspec.yaml` у `flutter_launcher_icons` выставь `android: true` (когда есть папка `android/`).
 
 ## CI
 
@@ -38,6 +41,10 @@ Workflow **Portal Flutter Build**: артефакт `portal-flutter-apk`, рел
 Причина была в **мобильном приёме**: поток TCP читался небезопасно для сокета + лишние `flush` при отправке. Исправлено: один `StreamIterator` на соединение, `addStream` при отправке файла. Имя сохранённого файла — **как на десктопе** (`имя.apk`, при коллизии `имя_время.apk`), без префикса `время_`.
 
 **Ping «нет ответа»:** на ПК должны быть нажаты **«Запустить портал»**, порт **12345**, в приложении — **тот же пароль**, что в `config.json` на ПК; проверь Tailscale и файрвол.
+
+**LAN «Найти в LAN»:** на экране **Пиры** выбери сегмент **Wi‑Fi** (192.168.x — как IP телефона в настройках Wi‑Fi), **TS** (только Tailscale 100.64–127.x) или **Все**. Скан идёт **с телефона** по выбранным подсетям. На Android после `flutter create` прогони `python3 tool/patch_android_manifest.py` — там в т.ч. `ACCESS_WIFI_STATE` для `getWifiIP()`.
+
+**Приём с десктопа:** десктоп шлёт `ping` **без перевода строки**; приём на Flutter теперь парсит так же, как Python (`read_first_json`), а не только `json\\n`.
 
 ## App Store
 

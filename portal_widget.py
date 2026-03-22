@@ -2122,17 +2122,19 @@ class GlobalHotkeyManager:
                     except Exception:
                         pass
 
-                # Local NSEvent: Apple не шлёт global monitor в своё приложение — без этого только Tk (ломается на РУ).
-                if os.environ.get("PORTAL_MAC_NSLOCAL_MONITOR", "1").strip().lower() not in (
-                    "0",
-                    "false",
-                    "no",
-                    "off",
-                ):
+                # Local NSEvent: на Python 3.13+ реентрантность Tcl↔AppKit при return None из monitor
+                # даёт SIGABRT при действиях внутри окна — по умолчанию ВЫКЛ. Включить явно:
+                # PORTAL_MAC_NSLOCAL_MONITOR=1 (если нужен перехват Cmd+Ctrl внутри Portal без дубля с Tk).
+                _env = os.environ.get("PORTAL_MAC_NSLOCAL_MONITOR", "").strip().lower()
+                if sys.version_info >= (3, 13):
+                    use_local = _env in ("1", "true", "yes", "on")
+                else:
+                    use_local = _env not in ("0", "false", "no", "off", "")
+                if use_local:
                     try:
                         self.main_app.after(350, self._setup_nslocal_monitor)
                     except Exception as e:
-                        self._log(f"after(local monitor 3.13+): {e}")
+                        self._log(f"after(local monitor): {e}")
 
                 self._log(
                     "⌛ macOS 3.13+: глобальные хоткеи — процесс hotkey-helper → pipe (без NSRunLoop в Tk). "
@@ -2442,7 +2444,7 @@ class GlobalHotkeyManager:
         self._log(
             "⏳ Глобальный helper жив, но ещё не подтвердил монитор — подожди 1–2 с или нажми Cmd+Ctrl+P "
             "**вне** окна Portal. Строка «✅ Глобальные хоткеи: NSEvent/CGEventTap» значит снаружи окна уже ок. "
-            "Внутри окна — Tk bind_all (local NSEvent: PORTAL_MAC_NSLOCAL_MONITOR=1, нестабильно на 3.13). Права TCC: "
+            "Внутри окна — Tk bind_all (на 3.13+ local NSEvent выключен по умолчанию; см. PORTAL_MAC_NSLOCAL_MONITOR). Права TCC: "
             + _mac_privacy_target_hint()
         )
         self._maybe_prompt_input_monitoring_dialog()

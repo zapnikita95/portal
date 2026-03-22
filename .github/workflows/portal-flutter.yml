@@ -40,10 +40,11 @@ jobs:
         working-directory: portal_flutter
         run: python3 tool/patch_android_gradle.py
 
-      - name: flutter pub get + analyze
+      - name: flutter pub get + иконки Android + analyze
         working-directory: portal_flutter
         run: |
           flutter pub get
+          dart run flutter_launcher_icons -f tool/flutter_launcher_icons_ci.yaml
           flutter analyze --no-fatal-infos
 
       - name: flutter build apk
@@ -102,6 +103,7 @@ jobs:
         working-directory: portal_flutter
         run: |
           flutter pub get
+          dart run flutter_launcher_icons
           flutter build ios --release --no-codesign
 
       - name: Архив Runner.app

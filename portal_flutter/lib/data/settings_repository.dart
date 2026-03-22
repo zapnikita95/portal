@@ -67,6 +67,7 @@ class PortalSettings {
     required this.receiveDir,
     this.portalAnimPreset = 'pulse',
     this.peerGroups = const [],
+    this.lanScanMode = 'wifi',
   });
 
   final List<PeerDto> peers;
@@ -78,12 +79,16 @@ class PortalSettings {
 
   final List<PeerGroupDto> peerGroups;
 
+  /// wifi | tailscale | all — для кнопки «Найти в LAN» на экране пиров.
+  final String lanScanMode;
+
   Map<String, dynamic> toJson() => {
         'peers': peers.map((e) => e.toJson()).toList(),
         'secret': secret,
         'receive_dir': receiveDir,
         'portal_anim': portalAnimPreset,
         'peer_groups': peerGroups.map((e) => e.toJson()).toList(),
+        'lan_scan_mode': lanScanMode,
       };
 
   static PortalSettings fromJson(Map<String, dynamic> m) {
@@ -111,6 +116,7 @@ class PortalSettings {
       receiveDir: (m['receive_dir'] ?? '').toString(),
       portalAnimPreset: (m['portal_anim'] ?? 'pulse').toString(),
       peerGroups: groups,
+      lanScanMode: (m['lan_scan_mode'] ?? 'wifi').toString(),
     );
   }
 
@@ -120,6 +126,7 @@ class PortalSettings {
         receiveDir: '',
         portalAnimPreset: 'branding',
         peerGroups: [],
+        lanScanMode: 'wifi',
       );
 
   /// Кому слать: если у хотя бы одной группы sendToGroup — только IP из отмеченных групп (пересечение с peers).
@@ -137,7 +144,10 @@ class PortalSettings {
       }
     }
     if (anyGroupOn) {
-      return peers.where((p) => fromGroups.contains(p.ip.trim())).toList();
+      final filtered =
+          peers.where((p) => fromGroups.contains(p.ip.trim())).toList();
+      // Галочка «на группу» с пустым/непересекающимся списком IP резала всех — «ничего не работает».
+      if (filtered.isNotEmpty) return filtered;
     }
     return peers.where((p) => p.send && p.ip.trim().isNotEmpty).toList();
   }

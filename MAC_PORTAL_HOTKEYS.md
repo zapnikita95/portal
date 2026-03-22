@@ -33,7 +33,7 @@
 - **Фокус в главном окне Portal** — **Tk bind_all** + на macOS дополнительно **физические keycode** (35/8/9 для P/C/V при Cmd+Ctrl), если русская раскладка не даёт сработать `<Command-Control-з>` и т.п.  
 - **Фокус в окне «Журнал»** (многострочное поле) — у `tkinter.Text` свои привязки **раньше**, чем тег `all`, поэтому раньше `bind_all` не срабатывал; в актуальной версии те же сочетания дублируются на внутренний `Text` журнала.  
 - **Русские з/с/м** — см. [коммит с раскладкой](https://github.com/zapnikita95/portal/commit/7dacbe6f70979c4fa8e6733a413120c14c61fd25).  
-  **Python 3.13+:** по умолчанию включён **NSEvent local monitor** (ловит Cmd+Ctrl по keycode внутри окна Portal, в т.ч. РУ раскладка). Отключить: `PORTAL_MAC_NSLOCAL_MONITOR=0`.
+  **Python 3.13+:** **NSEvent local monitor по умолчанию выключен** (реентрантность Tcl↔AppKit при перехвате клавиш внутри окна давала SIGABRT). Работают **Tk bind_all** и физические keycode. Включить local monitor только при необходимости: `PORTAL_MAC_NSLOCAL_MONITOR=1`.
 
 ### Порядок helper и конфликт с другими программами (Whisper и т.д.)
 

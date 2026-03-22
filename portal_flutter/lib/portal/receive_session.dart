@@ -59,7 +59,7 @@ Future<void> handlePortalSocket(
       if (buf.length > 262144) {
         return;
       }
-      hdr = parsePortalHeader(Uint8List.fromList(buf.toBytes()));
+      hdr = parsePortalHeaderFlexible(Uint8List.fromList(buf.toBytes()));
     }
 
     final full = Uint8List.fromList(buf.toBytes());
@@ -79,7 +79,12 @@ Future<void> handlePortalSocket(
     final type = (h['type'] ?? '').toString().trim();
     if (type == 'ping') {
       try {
-        socket.add(utf8.encode(jsonEncode({'type': 'pong'})));
+        // Как десктоп: поля + \\n (часть клиентов читает построчно).
+        socket.add(
+          utf8.encode(
+            '${jsonEncode({'type': 'pong', 'ok': true, 'version': 1})}\n',
+          ),
+        );
         await socket.flush();
       } catch (_) {}
       return;

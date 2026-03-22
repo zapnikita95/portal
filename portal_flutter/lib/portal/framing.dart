@@ -35,3 +35,65 @@ HeaderParseResult? parsePortalHeader(Uint8List buf) {
     return null;
   }
 }
+
+/// Первый полный JSON-объект в строке (как `parse_first_json` на десктопе).
+Map<String, dynamic>? parseFirstJsonObjectFromString(String s) {
+  final i = s.indexOf('{');
+  if (i < 0) return null;
+  var depth = 0;
+  for (var j = i; j < s.length; j++) {
+    final c = s[j];
+    if (c == '{') {
+      depth++;
+    } else if (c == '}') {
+      depth--;
+      if (depth == 0) {
+        try {
+          final o = jsonDecode(s.substring(i, j + 1));
+          if (o is Map<String, dynamic>) return o;
+          if (o is Map) {
+            return o.map((k, v) => MapEntry(k.toString(), v));
+          }
+        } catch (_) {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/// Сначала строка `json\\n` + тело (файлы с ПК), иначе первый JSON в буфере
+/// (десктопный `ping` идёт **без** `\\n` — старый парсер вечно ждал заголовок).
+HeaderParseResult? parsePortalHeaderFlexible(Uint8List buf) {
+  final strict = parsePortalHeader(buf);
+  if (strict != null) return strict;
+  if (buf.isEmpty) return null;
+  final text = utf8.decode(buf, allowMalformed: true);
+  final header = parseFirstJsonObjectFromString(text);
+  if (header == null) return null;
+  final i = text.indexOf('{');
+  if (i < 0) return null;
+  var depth = 0;
+  var j = i;
+  for (; j < text.length; j++) {
+    final c = text[j];
+    if (c == '{') {
+      depth++;
+    } else if (c == '}') {
+      depth--;
+      if (depth == 0) break;
+    }
+  }
+  if (depth != 0) return null;
+  final byteAfterJson = utf8.encode(text.substring(0, j + 1)).length;
+  var bodyStart = byteAfterJson;
+  while (bodyStart < buf.length &&
+      (buf[bodyStart] == 9 ||
+          buf[bodyStart] == 10 ||
+          buf[bodyStart] == 13 ||
+          buf[bodyStart] == 32)) {
+    bodyStart++;
+  }
+  return HeaderParseResult(header, bodyStart);
+}
