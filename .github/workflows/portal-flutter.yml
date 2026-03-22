@@ -23,7 +23,8 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: "3.24.5"
+          # iOS Runner использует FlutterImplicitEngineDelegate / FlutterSceneDelegate (UIScene) — с Flutter 3.41+.
+          flutter-version: "3.41.5"
 
       - name: Добавить android/ если только lib/ (каркас из репо)
         working-directory: portal_flutter
@@ -86,7 +87,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: "3.24.5"
+          flutter-version: "3.41.5"
 
       - name: Добавить ios/ при необходимости
         working-directory: portal_flutter
