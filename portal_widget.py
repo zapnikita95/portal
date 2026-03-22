@@ -2387,12 +2387,6 @@ class GlobalHotkeyManager:
         """Считать все доступные байты из pipe глобальных хоткеев и выполнить действия."""
         if not self._running or self._hk_r is None:
             return
-        # CGEventTap иногда шлёт два одинаковых байта за одно нажатие — дедублируем на 80 мс.
-        now = time.monotonic()
-        _last: dict[int, float] = getattr(self, "_pipe_byte_last_seen", {})
-        if not hasattr(self, "_pipe_byte_last_seen"):
-            self._pipe_byte_last_seen: dict[int, float] = {}
-            _last = self._pipe_byte_last_seen
         try:
             while True:
                 chunk = os.read(self._hk_r, 64)
@@ -2401,9 +2395,6 @@ class GlobalHotkeyManager:
                 for c in chunk:
                     if c in (ord("t"), ord("c"), ord("v")):
                         self._hotkey_pipe_got_byte = True
-                        if now - _last.get(c, 0.0) < 0.18:
-                            continue
-                        _last[c] = now
                     if c == ord("t"):
                         self._log("🔑 Глобальный хоткей → виджет", "🔑")
                         self._toggle_ui()
