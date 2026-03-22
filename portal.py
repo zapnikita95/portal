@@ -5680,15 +5680,63 @@ class PortalApp(ctk.CTk):
 
             if kind == "text":
                 summary = f"📤 Буфер (текст) → {len(targets)} ПК"
+                _text_payload = (payload.get("text") or "")
+                _snip = str(_text_payload)[:500]
+                try:
+                    for _tip in targets:
+                        portal_history.append_event(
+                            direction="send",
+                            kind="text",
+                            peer_ip=_tip,
+                            peer_label=portal_config.peer_display_label(_tip),
+                            name="clipboard",
+                            snippet=_snip,
+                            stored_path="",
+                            route_json=json.dumps(targets),
+                        )
+                except Exception:
+                    pass
             elif kind == "files":
-                n = len([p for p in (payload.get("paths") or []) if os.path.isfile(p)])
+                _paths = [p for p in (payload.get("paths") or []) if os.path.isfile(p)]
+                n = len(_paths)
                 summary = (
                     f"📤 Буфер: {n} файл(ов) (clipboard_files) → {len(targets)} ПК"
                 )
+                try:
+                    for _tip in targets:
+                        for _fp in _paths:
+                            _fname = os.path.basename(_fp)
+                            _fsz = os.path.getsize(_fp)
+                            portal_history.append_event(
+                                direction="send",
+                                kind="file",
+                                peer_ip=_tip,
+                                peer_label=portal_config.peer_display_label(_tip),
+                                name=_fname,
+                                stored_path=str(Path(_fp).resolve()),
+                                route_json=json.dumps(targets),
+                                filesize=_fsz,
+                            )
+                except Exception:
+                    pass
             elif kind == "image":
                 summary = (
                     f"📤 Буфер: картинка (clipboard_rich) → {len(targets)} ПК"
                 )
+                try:
+                    for _tip in targets:
+                        portal_history.append_event(
+                            direction="send",
+                            kind="image",
+                            peer_ip=_tip,
+                            peer_label=portal_config.peer_display_label(_tip),
+                            name="clipboard_image",
+                            snippet="",
+                            stored_path="",
+                            route_json=json.dumps(targets),
+                        )
+                except Exception:
+                    pass
             else:
                 summary = f"📤 Буфер → {len(targets)} ПК"
             self.log(summary)

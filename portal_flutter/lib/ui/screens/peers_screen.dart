@@ -162,8 +162,13 @@ class _PeersScreenState extends State<PeersScreen> {
   Future<void> _lanScan() async {
     final st = await SettingsRepository.load();
     if (!mounted) return;
+    // Подсказки из пиров — fallback, если ОС не отдаёт Wi-Fi IP (старый APK без разрешений).
+    final peerHints = _rows
+        .map((r) => r.ip.text.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
     final bundle = await collectLanSeedBundle();
-    final seeds = seedsForScope(bundle, _lanScope);
+    final seeds = seedsForScope(bundle, _lanScope, extraHints: peerHints);
     if (seeds.isEmpty) {
       final w = bundle.wifiIp ?? '—';
       if (!mounted) return;
@@ -171,10 +176,11 @@ class _PeersScreenState extends State<PeersScreen> {
         SnackBar(
           content: Text(
             'Нет IPv4 для режима «${lanScanScopeLabel(_lanScope)}». '
-            'Wi‑Fi IP (система): $w. Включи Wi‑Fi, на Android нужны разрешения сети; '
-            'попробуй режим «Все интерфейсы» или «Tailscale».',
+            'Wi‑Fi IP (система): $w. '
+            'Добавь IP пира вручную хотя бы одного — он станет seed для скана. '
+            'Или попробуй «Tailscale» / «Все».',
           ),
-          duration: const Duration(seconds: 7),
+          duration: const Duration(seconds: 8),
         ),
       );
       return;
@@ -202,6 +208,7 @@ class _PeersScreenState extends State<PeersScreen> {
       found = await scanLanForPortalHosts(
         secret: st.secret,
         scope: _lanScope,
+        peerHints: peerHints,
       );
     } catch (e) {
       found = [];

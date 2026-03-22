@@ -31,26 +31,41 @@ class PortalServiceController {
 
   /// Дожидаемся, пока плагин увидит сервис (иначе тумблер остаётся «выкл» сразу после старта).
   static Future<void> startAndroidReceive() async {
-    final n = await Permission.notification.request();
-    if (n != PermissionStatus.granted) {
-      throw StateError(
-        'Нужны уведомления для фонового приёма (разреши в настройках).',
-      );
+    // Уведомления нужны для FGS-уведомления. Если отказано — продолжаем без них (FGS всё равно может работать).
+    try {
+      final n = await Permission.notification.request();
+      if (n == PermissionStatus.permanentlyDenied) {
+        throw StateError(
+          'Уведомления заблокированы насовсем. Включи в Настройки → Приложения → Portal → Уведомления.',
+        );
+      }
+    } catch (e) {
+      if (e is StateError) rethrow;
+      // permission_handler может кидать исключение на некоторых прошивках — игнорируем.
     }
+
     final s = FlutterBackgroundService();
-    if (!await s.isRunning()) {
-      await s.startService();
-    } else {
-      s.invoke('reload');
+    try {
+      if (!await s.isRunning()) {
+        await s.startService();
+      } else {
+        s.invoke('reload');
+        return;
+      }
+    } catch (e) {
+      throw StateError(
+        'Не удалось запустить FGS: $e\n'
+        'Android 14+: нужен foregroundServiceType в AndroidManifest. '
+        'Пересобери APK или открой logcat.',
+      );
     }
     for (var i = 0; i < 50; i++) {
       await Future<void>.delayed(const Duration(milliseconds: 100));
-      if (await s.isRunning()) {
-        return;
-      }
+      if (await s.isRunning()) return;
     }
     throw StateError(
-      'Foreground service не поднялся за ~5 с. Проверь разрешения, батарею (без ограничений) и logcat.',
+      'Foreground service не поднялся за ~5 с. '
+      'Проверь батарею (без ограничений), уведомления и logcat.',
     );
   }
 

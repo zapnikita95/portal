@@ -109,15 +109,31 @@ class _HistoryScreenState extends State<HistoryScreen> {
           final r = _rows[i];
           final id = r['id'] as int?;
           final ts = r['ts'] as int? ?? 0;
-          final dir = r['direction'] ?? '';
-          final kind = r['kind'] ?? '';
+          final dir = (r['direction'] ?? '').toString();
+          final kind = (r['kind'] ?? '').toString();
           final nameStr = (r['name'] ?? '').toString();
+          final snip = (r['snippet'] ?? '').toString();
+          final peerLabel = (r['peer_label'] ?? r['peer_ip'] ?? '').toString();
+          final peerIp = (r['peer_ip'] ?? '').toString();
+          final peerStr = (peerLabel.isNotEmpty && peerLabel != peerIp)
+              ? '$peerLabel ($peerIp)'
+              : peerIp;
           final dt = DateTime.fromMillisecondsSinceEpoch(ts * 1000);
-          final titleSuffix =
-              nameStr.isNotEmpty ? ' · $nameStr' : '';
+          final dtStr =
+              '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} '
+              '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:${dt.second.toString().padLeft(2, '0')}';
+          final dirIcon = dir == 'send' ? '↑' : '↓';
+          final titleStr = '$dirIcon $kind'
+              '${nameStr.isNotEmpty ? ' · $nameStr' : ''}';
+          final snipShort = snip.length > 120 ? '${snip.substring(0, 120)}…' : snip;
+          final subtitleParts = <String>[
+            dtStr,
+            if (peerStr.isNotEmpty) peerStr,
+            if (snipShort.isNotEmpty && kind == 'text') '"$snipShort"',
+          ];
           return ListTile(
-            title: Text('$dir / $kind$titleSuffix'),
-            subtitle: Text('$dt'),
+            title: Text(titleStr),
+            subtitle: Text(subtitleParts.join(' · ')),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -125,10 +141,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   IconButton(
                     icon: const Icon(Icons.repeat),
                     onPressed: id == null ? null : () => _resend(id),
+                    tooltip: 'Повторить',
                   ),
                 IconButton(
                   icon: const Icon(Icons.copy),
                   onPressed: id == null ? null : () => _copyPath(id),
+                  tooltip: 'Копировать',
                 ),
               ],
             ),

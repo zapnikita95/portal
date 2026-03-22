@@ -128,7 +128,19 @@ Future<LanSeedBundle> collectLanSeedBundle() async {
 }
 
 /// Сиды (уникальные IPv4) для выбранного режима скана.
-List<String> seedsForScope(LanSeedBundle bundle, LanScanScope scope) {
+///
+/// [extraHints] — ручные IP из поля «пиры»: если ОС не отдала Wi‑Fi IP
+/// (Android без ACCESS_WIFI_STATE), хотя бы попадём в нужный /24 по IP пира.
+List<String> seedsForScope(
+  LanSeedBundle bundle,
+  LanScanScope scope, {
+  List<String> extraHints = const [],
+}) {
+  final hints = extraHints
+      .map((s) => s.trim())
+      .where(_validIpv4)
+      .toList();
+
   switch (scope) {
     case LanScanScope.wifi:
       final out = <String>{};
@@ -140,11 +152,26 @@ List<String> seedsForScope(LanSeedBundle bundle, LanScanScope scope) {
           out.add(ip);
         }
       }
+      // Fallback: если ОС ничего не дала, но пользователь вручную ввёл LAN-IP пира.
+      if (out.isEmpty) {
+        for (final ip in hints) {
+          if (isPrivateLanIpv4(ip) && !isTailscaleCgNatIpv4(ip)) {
+            out.add(ip);
+          }
+        }
+      }
       return out.toList();
     case LanScanScope.tailscale:
-      return bundle.allIpv4.where(isTailscaleCgNatIpv4).toList();
+      final out = bundle.allIpv4.where(isTailscaleCgNatIpv4).toSet();
+      if (out.isEmpty) {
+        for (final ip in hints) {
+          if (isTailscaleCgNatIpv4(ip)) out.add(ip);
+        }
+      }
+      return out.toList();
     case LanScanScope.all:
-      return [...bundle.allIpv4];
+      final out = <String>{...bundle.allIpv4, ...hints};
+      return out.toList();
   }
 }
 
@@ -165,14 +192,18 @@ String? subnet24Prefix(String ip) {
 }
 
 /// Параллельный скан /24 для Portal (ping).
+///
+/// [peerHints] — IP из настроек пиров, используются как fallback-сиды если ОС
+/// не отдала Wi‑Fi IP (старый Android APK без ACCESS_WIFI_STATE).
 Future<List<String>> scanLanForPortalHosts({
   required String secret,
   LanScanScope scope = LanScanScope.wifi,
+  List<String> peerHints = const [],
   Duration connectTimeout = const Duration(milliseconds: 900),
   int workers = 48,
 }) async {
   final bundle = await collectLanSeedBundle();
-  final seeds = seedsForScope(bundle, scope);
+  final seeds = seedsForScope(bundle, scope, extraHints: peerHints);
   final prefixes = <String>{};
   for (final s in seeds) {
     final pre = subnet24Prefix(s);
