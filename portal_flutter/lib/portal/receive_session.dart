@@ -149,7 +149,7 @@ Future<void> handlePortalSocket(
       final kb = (filesize / 1024).ceil().clamp(1, 1 << 30);
       await onEvent(
         'receive_file',
-        '[+] Файл от $peer: $fname (${kb} КБ)',
+        '[+] Файл от $peer: $fname ($kb КБ)',
         outPath,
       );
       await HistoryRepository.insertInBackground(

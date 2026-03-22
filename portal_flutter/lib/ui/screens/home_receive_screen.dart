@@ -24,10 +24,13 @@ class _HomeReceiveScreenState extends State<HomeReceiveScreen> {
     super.initState();
     _refresh();
     if (Platform.isAndroid) {
-      _sub = FlutterBackgroundService().on('log').listen((ev) {
+      _sub = FlutterBackgroundService().on('log').listen((Object? ev) {
         if (!mounted) return;
-        if (ev is Map && ev['t'] != null) {
-          setState(() => _log = ev['t'].toString());
+        if (ev is! Map) return;
+        final m = Map<String, dynamic>.from(ev);
+        final t = m['t'];
+        if (t != null) {
+          setState(() => _log = t.toString());
         }
       });
     }
@@ -87,7 +90,7 @@ class _HomeReceiveScreenState extends State<HomeReceiveScreen> {
             const SizedBox(height: 24),
             SwitchListTile(
               title: const Text('Принимать файлы с ПК'),
-              subtitle: Text('Порт $portalPort'),
+              subtitle: const Text('Порт $portalPort'),
               value: _on,
               onChanged: _busy ? null : _toggle,
             ),

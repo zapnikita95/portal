@@ -24,7 +24,7 @@ HeaderParseResult? parsePortalHeader(Uint8List buf) {
     final line = utf8.decode(buf.sublist(i, nl), allowMalformed: false);
     final raw = jsonDecode(line);
     if (raw is! Map) return null;
-    final header = Map<String, dynamic>.from(raw as Map);
+    final header = Map<String, dynamic>.from(raw);
     var j = nl + 1;
     while (j < buf.length &&
         (buf[j] == 9 || buf[j] == 10 || buf[j] == 13 || buf[j] == 32)) {
