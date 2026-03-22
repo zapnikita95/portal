@@ -16,6 +16,10 @@ MARK_END = "// PORTAL_GRADLE_PATCH_END"
 
 # Без subproject.afterEvaluate: в шаблоне Flutter есть evaluationDependsOn(':app'),
 # из‑за этого дочерние проекты уже «evaluated» → afterEvaluate падает на CI.
+#
+# Ранний withId задаёт compileSdk; JVM для плагинов (shared_preferences_android и др.)
+# выставляется в gradle.projectsEvaluated — иначе AGP/плагины перезаписывают Java 11,
+# а Kotlin остаётся 17 → «javac target 11 vs Kotlin 17».
 ROOT_SNIPPET = f"""
 {MARK_BEGIN}
 subprojects {{ subproject ->
@@ -28,14 +32,27 @@ subprojects {{ subproject ->
             }}
         }}
     }}
-    subproject.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {{
-        kotlinOptions {{
-            jvmTarget = "17"
+}}
+gradle.projectsEvaluated {{
+    rootProject.subprojects.each {{ p ->
+        if (p.plugins.hasPlugin("com.android.library") || p.plugins.hasPlugin("com.android.application")) {{
+            p.android {{
+                compileOptions {{
+                    sourceCompatibility JavaVersion.VERSION_17
+                    targetCompatibility JavaVersion.VERSION_17
+                }}
+            }}
         }}
-    }}
-    subproject.tasks.withType(JavaCompile).configureEach {{
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        p.tasks.withType(JavaCompile).configureEach {{ jc ->
+            jc.sourceCompatibility = JavaVersion.VERSION_17
+            jc.targetCompatibility = JavaVersion.VERSION_17
+            jc.options.release = 17
+        }}
+        p.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {{
+            kotlinOptions {{
+                jvmTarget = "17"
+            }}
+        }}
     }}
 }}
 {MARK_END}
@@ -54,8 +71,10 @@ def _patch_app_gradle(text: str) -> str:
         "compileSdkVersion 35",
         text,
     )
-    # Java / Kotlin в app
+    # Java / Kotlin в app (шаблоны Flutter: 1.8 или 11)
     text = text.replace("JavaVersion.VERSION_1_8", "JavaVersion.VERSION_17")
+    text = text.replace("JavaVersion.VERSION_11", "JavaVersion.VERSION_17")
+    text = text.replace("JavaVersion.VERSION_1_11", "JavaVersion.VERSION_17")
     text = re.sub(
         r"jvmTarget\s*=\s*JavaVersion\.VERSION_1_8\.toString\(\)",
         'jvmTarget = "17"',
