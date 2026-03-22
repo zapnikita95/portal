@@ -26,6 +26,13 @@
 - Приём с ПК по TCP **:12345**, пока приложение **на экране** (активно). При приходе файла/текста показывается **локальное уведомление** (если выдал разрешение).
 - Вкладка **«История»** — SQLite, как на десктопе: приём/отправка, повтор файла, копирование.
 - Вкладка **«Пиры»** — кнопка **Ping** (радар) у строки: проверка `pong` с ПК.
+- **«Поделиться» из других приложений:** в системном меню «Поделиться» доступен пункт **Portal** (Share Extension). Выбранные фото/файлы/текст откроют приложение на экране **Отправить**, откуда можно отправить на ПК.
+
+### App Groups (важно для подписи)
+
+У приложения два таргета: **Runner** и **Share Extension** (`org.portal.portalFlutter.PortalShare`). Оба используют группу **`group.org.portal.portalFlutter.share`** (файлы `Runner/Runner.entitlements` и `Share Extension/Share Extension.entitlements`).
+
+В [Apple Developer → Identifiers](https://developer.apple.com/account/resources/identifiers/list) для **App ID** основного приложения и для extension включи capability **App Groups** и добавь **ту же** группу. Иначе Xcode ругнётся на подпись. После `pod install` открой `ios/Runner.xcworkspace` — CocoaPods подключает `receive_sharing_intent` к расширению.
 
 ## Почему не «как Android в фоне»
 
