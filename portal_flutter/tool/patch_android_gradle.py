@@ -15,10 +15,12 @@ MARK_END = "// PORTAL_GRADLE_PATCH_END"
 ROOT_SNIPPET_GROOVY = f"""
 {MARK_BEGIN}
 subprojects {{ subproject ->
-    subproject.plugins.withId("com.android.library") {{
-        subproject.android {{
-            compileSdkVersion 36
-            compileOptions {{
+    subproject.afterEvaluate {{
+        if (subproject.name == "app") return
+        def ext = subproject.extensions.findByType(com.android.build.gradle.BaseExtension)
+        if (ext != null) {{
+            ext.compileSdk = 36
+            ext.compileOptions {{
                 sourceCompatibility JavaVersion.VERSION_17
                 targetCompatibility JavaVersion.VERSION_17
             }}
@@ -27,14 +29,6 @@ subprojects {{ subproject ->
 }}
 gradle.projectsEvaluated {{
     rootProject.subprojects.each {{ p ->
-        if (p.plugins.hasPlugin("com.android.library") || p.plugins.hasPlugin("com.android.application")) {{
-            p.android {{
-                compileOptions {{
-                    sourceCompatibility JavaVersion.VERSION_17
-                    targetCompatibility JavaVersion.VERSION_17
-                }}
-            }}
-        }}
         p.tasks.withType(JavaCompile).configureEach {{ jc ->
             jc.sourceCompatibility = JavaVersion.VERSION_17
             jc.targetCompatibility = JavaVersion.VERSION_17
@@ -51,12 +45,13 @@ gradle.projectsEvaluated {{
 """
 
 # Kotlin DSL (Flutter 3.35+); Kotlin 2.2+ forbids kotlinOptions on KotlinCompile — use compilerOptions.
-# compileSdk для library — в subprojects/plugins.withId, не в projectsEvaluated (AGP: too late to set compileSdk).
+# compileSdk для модулей плагинов: afterEvaluate (withId на корне часто не цепляет Flutter-плагины → пустой android.jar).
 ROOT_SNIPPET_KTS = f"""
 {MARK_BEGIN}
 subprojects {{
-    plugins.withId("com.android.library") {{
-        extensions.findByType(com.android.build.gradle.LibraryExtension::class.java)?.apply {{
+    afterEvaluate {{
+        if (project.name == "app") return@afterEvaluate
+        extensions.findByType(com.android.build.gradle.BaseExtension::class.java)?.apply {{
             compileSdk = 36
             compileOptions {{
                 sourceCompatibility = JavaVersion.VERSION_17

@@ -37,9 +37,18 @@ jobs:
         working-directory: portal_flutter
         run: python3 tool/patch_android_manifest.py
 
-      - name: Патч Gradle (compileSdk 35, JVM 17 для плагинов)
+      - name: Патч Gradle (compileSdk 36, JVM 17 для плагинов)
         working-directory: portal_flutter
         run: python3 tool/patch_android_gradle.py
+
+      - name: Android SDK platform 36 (плагины compileSdk 36)
+        run: |
+          SDKM="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDKM" ]; then
+            yes | "$SDKM" "platforms;android-36" >/dev/null
+          elif command -v sdkmanager >/dev/null 2>&1; then
+            yes | sdkmanager "platforms;android-36" >/dev/null
+          fi
 
       - name: flutter pub get + иконки Android + analyze
         working-directory: portal_flutter

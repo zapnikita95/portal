@@ -18,19 +18,19 @@ subprojects {
     val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
     project.layout.buildDirectory.value(newSubprojectBuildDir)
 }
-subprojects {
-    project.evaluationDependsOn(":app")
-}
+// Не вешать evaluationDependsOn(":app") на все subprojects: ломает порядок конфигурации
+// Android-модулей плагинов (пустой android.jar → «package android.content does not exist»).
 
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }
 
 // PORTAL_GRADLE_PATCH_BEGIN
-// compileSdk только здесь (при apply плагина), не в projectsEvaluated — иначе AGP: «too late to set compileSdk».
+// compileSdk для модулей плагинов: afterEvaluate (не projectsEvaluated — «too late»; withId на корне часто не цепляет Flutter-плагины).
 subprojects {
-    plugins.withId("com.android.library") {
-        extensions.findByType(com.android.build.gradle.LibraryExtension::class.java)?.apply {
+    afterEvaluate {
+        if (project.name == "app") return@afterEvaluate
+        extensions.findByType(com.android.build.gradle.BaseExtension::class.java)?.apply {
             compileSdk = 36
             compileOptions {
                 sourceCompatibility = JavaVersion.VERSION_17
