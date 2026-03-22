@@ -1,3 +1,4 @@
+import com.android.build.gradle.LibraryExtension
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
@@ -30,7 +31,8 @@ tasks.register<Delete>("clean") {
 subprojects {
     afterEvaluate {
         if (project.name == "app") return@afterEvaluate
-        extensions.findByType(com.android.build.gradle.BaseExtension::class.java)?.apply {
+        // BaseExtension в KTS не даёт compileSdk — только LibraryExtension / ApplicationExtension.
+        extensions.findByType(LibraryExtension::class.java)?.apply {
             compileSdk = 36
             compileOptions {
                 sourceCompatibility = JavaVersion.VERSION_17

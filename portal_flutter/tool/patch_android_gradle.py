@@ -17,7 +17,7 @@ ROOT_SNIPPET_GROOVY = f"""
 subprojects {{ subproject ->
     subproject.afterEvaluate {{
         if (subproject.name == "app") return
-        def ext = subproject.extensions.findByType(com.android.build.gradle.BaseExtension)
+        def ext = subproject.extensions.findByType(com.android.build.gradle.LibraryExtension)
         if (ext != null) {{
             ext.compileSdk = 36
             ext.compileOptions {{
@@ -51,7 +51,7 @@ ROOT_SNIPPET_KTS = f"""
 subprojects {{
     afterEvaluate {{
         if (project.name == "app") return@afterEvaluate
-        extensions.findByType(com.android.build.gradle.BaseExtension::class.java)?.apply {{
+        extensions.findByType(LibraryExtension::class.java)?.apply {{
             compileSdk = 36
             compileOptions {{
                 sourceCompatibility = JavaVersion.VERSION_17
@@ -77,16 +77,19 @@ gradle.projectsEvaluated {{
 {MARK_END}
 """
 
-KTS_KOTLIN_COMPILE_IMPORTS = """import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+KTS_KOTLIN_COMPILE_IMPORTS = """import com.android.build.gradle.LibraryExtension
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 """
 
 
 def _ensure_kts_kotlin_imports(text: str) -> str:
-    if "import org.jetbrains.kotlin.gradle.tasks.KotlinCompile" in text:
-        return text
-    return KTS_KOTLIN_COMPILE_IMPORTS + text.lstrip("\n")
+    if "import org.jetbrains.kotlin.gradle.tasks.KotlinCompile" not in text:
+        return KTS_KOTLIN_COMPILE_IMPORTS + text.lstrip("\n")
+    if "import com.android.build.gradle.LibraryExtension" not in text:
+        return "import com.android.build.gradle.LibraryExtension\n" + text
+    return text
 
 
 def _pick_app_gradle() -> Path:
