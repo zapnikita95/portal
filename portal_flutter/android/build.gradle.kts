@@ -27,17 +27,20 @@ tasks.register<Delete>("clean") {
 }
 
 // PORTAL_GRADLE_PATCH_BEGIN
-gradle.projectsEvaluated {
-    rootProject.subprojects.forEach { sub ->
-        sub.plugins.withId("com.android.library") {
-            sub.extensions.findByType(com.android.build.gradle.LibraryExtension::class.java)?.apply {
-                compileSdk = 35
-                compileOptions {
-                    sourceCompatibility = JavaVersion.VERSION_17
-                    targetCompatibility = JavaVersion.VERSION_17
-                }
+// compileSdk только здесь (при apply плагина), не в projectsEvaluated — иначе AGP: «too late to set compileSdk».
+subprojects {
+    plugins.withId("com.android.library") {
+        extensions.findByType(com.android.build.gradle.LibraryExtension::class.java)?.apply {
+            compileSdk = 36
+            compileOptions {
+                sourceCompatibility = JavaVersion.VERSION_17
+                targetCompatibility = JavaVersion.VERSION_17
             }
         }
+    }
+}
+gradle.projectsEvaluated {
+    rootProject.subprojects.forEach { sub ->
         sub.tasks.withType(org.gradle.api.tasks.compile.JavaCompile::class.java).configureEach {
             sourceCompatibility = JavaVersion.VERSION_17.toString()
             targetCompatibility = JavaVersion.VERSION_17.toString()

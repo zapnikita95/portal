@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-После `flutter create`: compileSdk 35 и JVM 17 для app + Android-модулей (плагины).
+После `flutter create`: compileSdk 36 и JVM 17 для app + Android-модулей (плагины).
 Поддерживает шаблон Flutter 3.41+: android/app/build.gradle.kts и android/build.gradle.kts.
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ ROOT_SNIPPET_GROOVY = f"""
 subprojects {{ subproject ->
     subproject.plugins.withId("com.android.library") {{
         subproject.android {{
-            compileSdkVersion 35
+            compileSdkVersion 36
             compileOptions {{
                 sourceCompatibility JavaVersion.VERSION_17
                 targetCompatibility JavaVersion.VERSION_17
@@ -51,19 +51,22 @@ gradle.projectsEvaluated {{
 """
 
 # Kotlin DSL (Flutter 3.35+); Kotlin 2.2+ forbids kotlinOptions on KotlinCompile — use compilerOptions.
+# compileSdk для library — в subprojects/plugins.withId, не в projectsEvaluated (AGP: too late to set compileSdk).
 ROOT_SNIPPET_KTS = f"""
 {MARK_BEGIN}
-gradle.projectsEvaluated {{
-    rootProject.subprojects.forEach {{ sub ->
-        sub.plugins.withId("com.android.library") {{
-            sub.extensions.findByType(com.android.build.gradle.LibraryExtension::class.java)?.apply {{
-                compileSdk = 35
-                compileOptions {{
-                    sourceCompatibility = JavaVersion.VERSION_17
-                    targetCompatibility = JavaVersion.VERSION_17
-                }}
+subprojects {{
+    plugins.withId("com.android.library") {{
+        extensions.findByType(com.android.build.gradle.LibraryExtension::class.java)?.apply {{
+            compileSdk = 36
+            compileOptions {{
+                sourceCompatibility = JavaVersion.VERSION_17
+                targetCompatibility = JavaVersion.VERSION_17
             }}
         }}
+    }}
+}}
+gradle.projectsEvaluated {{
+    rootProject.subprojects.forEach {{ sub ->
         sub.tasks.withType(org.gradle.api.tasks.compile.JavaCompile::class.java).configureEach {{
             sourceCompatibility = JavaVersion.VERSION_17.toString()
             targetCompatibility = JavaVersion.VERSION_17.toString()
@@ -111,14 +114,16 @@ def _pick_root_gradle() -> Path | None:
 def _patch_app_gradle(text: str) -> str:
     text = re.sub(
         r"compileSdk\s*=\s*flutter\.compileSdkVersion",
-        "compileSdk = 35",
+        "compileSdk = 36",
         text,
     )
     text = re.sub(
         r"compileSdkVersion\s+flutter\.compileSdkVersion",
-        "compileSdkVersion 35",
+        "compileSdkVersion 36",
         text,
     )
+    text = text.replace("compileSdk = 35", "compileSdk = 36")
+    text = text.replace("compileSdkVersion 35", "compileSdkVersion 36")
     text = text.replace("JavaVersion.VERSION_1_8", "JavaVersion.VERSION_17")
     text = text.replace("JavaVersion.VERSION_11", "JavaVersion.VERSION_17")
     text = text.replace("JavaVersion.VERSION_1_11", "JavaVersion.VERSION_17")
