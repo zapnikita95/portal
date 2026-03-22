@@ -30,6 +30,25 @@ flutter run
 
 `tool/patch_android_manifest.py` дублируется в CI после `flutter create`.
 
+## Отладка Android: `adb` и logcat
+
+Команда в терминале **`adb`** — это не Python. Она из **Android SDK Platform Tools** (Google), не из `pip install adb` (это другой пакет).
+
+**macOS — проще всего:**
+```bash
+brew install android-platform-tools
+adb version
+```
+
+Либо путь из Android Studio: `~/Library/Android/sdk/platform-tools` — добавь в `PATH`.
+
+**Снять лог при краше** (USB, на телефоне включена отладка по USB):
+```bash
+adb devices
+adb logcat -c && adb logcat '*:E' 'AndroidRuntime:E' 'flutter:V' | tee portal_crash.txt
+```
+В **zsh** фильтры вроде `*:E` обязательно в **кавычках**, иначе shell подставит имена файлов из текущей папки.
+
 **Иконка приложения:** исходник — `assets/branding/portal_icon.png` (копия брендинга репозитория). После смены картинки снова `dart run flutter_launcher_icons`. Для Android в `pubspec.yaml` у `flutter_launcher_icons` выставь `android: true` (когда есть папка `android/`).
 
 ## CI
