@@ -63,9 +63,30 @@ jobs:
           dart run flutter_launcher_icons -f tool/flutter_launcher_icons_ci.yaml
           flutter analyze --no-fatal-infos
 
+      - name: Среда сборки (дебаг)
+        working-directory: portal_flutter
+        run: |
+          set -x
+          java -version
+          echo "JAVA_HOME=${JAVA_HOME:-}"
+          flutter --version
+          flutter doctor -v
+
       - name: flutter build apk
         working-directory: portal_flutter
-        run: flutter build apk --release
+        env:
+          # Реже падает «Kotlin compile daemon terminated» на shared runner.
+          GRADLE_OPTS: -Dkotlin.compiler.execution.strategy=in-process
+        run: |
+          set -e
+          if ! flutter build apk --release -v; then
+            echo "::group::Gradle :app:assembleRelease --stacktrace (после падения flutter)"
+            cd android
+            chmod +x gradlew 2>/dev/null || true
+            ./gradlew :app:assembleRelease --stacktrace --warning-mode all --no-daemon || true
+            echo "::endgroup::"
+            exit 1
+          fi
 
       - name: Стабильное имя для релиза
         working-directory: portal_flutter

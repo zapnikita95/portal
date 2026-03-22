@@ -110,6 +110,23 @@ def _pick_root_gradle() -> Path | None:
 
 
 def _patch_app_gradle(text: str) -> str:
+    # Core library desugaring (flutter_local_notifications AAR metadata при Java 21+).
+    if "isCoreLibraryDesugaringEnabled" not in text and "compileOptions" in text:
+        text = text.replace(
+            "compileOptions {",
+            "compileOptions {\n        isCoreLibraryDesugaringEnabled = true",
+            1,
+        )
+    if "coreLibraryDesugaring(" not in text:
+        needle = "\nflutter {"
+        if needle in text:
+            insert = """
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+}
+
+"""
+            text = text.replace(needle, insert + needle, 1)
     text = re.sub(
         r"compileSdk\s*=\s*flutter\.compileSdkVersion",
         "compileSdk = 36",
