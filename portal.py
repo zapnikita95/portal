@@ -885,7 +885,7 @@ class PortalApp(ctk.CTk):
             return None
     
     def create_ui(self):
-        """Создание интерфейса: верхняя панель + главный скролл; настройки/APK/лог/справка — отдельные окна."""
+        """Создание интерфейса: верхняя панель + главный скролл; настройки/APP/лог/справка — отдельные окна."""
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
@@ -905,8 +905,8 @@ class PortalApp(ctk.CTk):
         ).pack(side="left", padx=3)
         ctk.CTkButton(
             toolbar,
-            text=i18n.tr("toolbar.apk"),
-            width=82,
+            text=i18n.tr("toolbar.app"),
+            width=88,
             command=self._open_apk_window,
             font=ctk.CTkFont(size=13),
         ).pack(side="left", padx=3)
@@ -1754,7 +1754,7 @@ class PortalApp(ctk.CTk):
                 self._apk_win = None
         w = ctk.CTkToplevel(self)
         w.title(i18n.tr("apk.title"))
-        w.geometry("520x420")
+        w.geometry("540x520")
         try:
             w.transient(self)
         except Exception:
@@ -1762,33 +1762,44 @@ class PortalApp(ctk.CTk):
         self._apk_win = w
         ctk.CTkLabel(
             w,
-            text=i18n.tr("apk.heading"),
-            font=ctk.CTkFont(size=16, weight="bold"),
-        ).pack(anchor="w", padx=14, pady=(14, 4))
+            text=i18n.tr("apk.window_subtitle"),
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+        ).pack(anchor="w", padx=14, pady=(12, 4))
+
+        tab = ctk.CTkTabview(w)
+        tab.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+
+        t_and = tab.add(i18n.tr("apk.tab_android"))
         ctk.CTkLabel(
-            w,
+            t_and,
+            text=i18n.tr("apk.heading"),
+            font=ctk.CTkFont(size=15, weight="bold"),
+        ).pack(anchor="w", padx=6, pady=(8, 4))
+        ctk.CTkLabel(
+            t_and,
             text=i18n.tr("apk.blurb"),
             font=ctk.CTkFont(size=11),
             text_color="gray",
-            wraplength=480,
+            wraplength=470,
             justify="left",
-        ).pack(anchor="w", padx=14, pady=(0, 12))
+        ).pack(anchor="w", padx=6, pady=(0, 10))
         ctk.CTkButton(
-            w,
+            t_and,
             text=i18n.tr("apk.download_flutter"),
             height=44,
             command=self.download_portal_flutter_apk_from_github,
             font=ctk.CTkFont(size=15, weight="bold"),
-        ).pack(fill="x", padx=14, pady=(0, 8))
+        ).pack(fill="x", padx=6, pady=(0, 8))
         ctk.CTkButton(
-            w,
+            t_and,
             text=i18n.tr("apk.download_kivy"),
             height=36,
             command=self.download_portal_apk_from_github,
             font=ctk.CTkFont(size=13),
-        ).pack(fill="x", padx=14, pady=(0, 10))
-        row2 = ctk.CTkFrame(w, fg_color="transparent")
-        row2.pack(fill="x", padx=14, pady=4)
+        ).pack(fill="x", padx=6, pady=(0, 10))
+        row2 = ctk.CTkFrame(t_and, fg_color="transparent")
+        row2.pack(fill="x", padx=6, pady=4)
         ctk.CTkButton(
             row2,
             text=i18n.tr("apk.open_release_flutter"),
@@ -1810,6 +1821,43 @@ class PortalApp(ctk.CTk):
             command=self.trigger_android_apk_workflow,
             font=ctk.CTkFont(size=12),
         ).pack(side="left")
+
+        t_ios = tab.add(i18n.tr("apk.tab_ios"))
+        ctk.CTkLabel(
+            t_ios,
+            text=i18n.tr("apk.ios_heading"),
+            font=ctk.CTkFont(size=15, weight="bold"),
+        ).pack(anchor="w", padx=6, pady=(8, 4))
+        ctk.CTkLabel(
+            t_ios,
+            text=i18n.tr("apk.ios_blurb"),
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=470,
+            justify="left",
+        ).pack(anchor="w", padx=6, pady=(0, 12))
+        ctk.CTkButton(
+            t_ios,
+            text=i18n.tr("apk.ios_open_guide"),
+            height=40,
+            command=self.open_ios_install_guide_page,
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).pack(fill="x", padx=6, pady=(0, 8))
+        ctk.CTkButton(
+            t_ios,
+            text=i18n.tr("apk.ios_open_actions"),
+            height=36,
+            command=self.open_portal_flutter_actions_page,
+            font=ctk.CTkFont(size=13),
+        ).pack(fill="x", padx=6, pady=(0, 8))
+        ctk.CTkButton(
+            t_ios,
+            text=i18n.tr("apk.open_release_flutter"),
+            height=32,
+            command=self.open_flutter_apk_release_page,
+            font=ctk.CTkFont(size=12),
+        ).pack(fill="x", padx=6, pady=(0, 4))
+
         ctk.CTkLabel(
             w,
             text=i18n.tr("apk.repo_hint"),
@@ -2825,6 +2873,28 @@ class PortalApp(ctk.CTk):
             self.log(f"🌐 Релиз Kivy APK: {url}")
         except Exception as e:
             self.log(f"❌ Не удалось открыть релиз: {e}")
+
+    def open_ios_install_guide_page(self) -> None:
+        try:
+            import portal_github
+
+            repo = self._apk_repo_from_ui()
+            url = portal_github.ios_install_guide_url(repo)
+            webbrowser.open(url)
+            self.log(f"🌐 Инструкция iOS: {url}")
+        except Exception as e:
+            self.log(f"❌ Не удалось открыть страницу: {e}")
+
+    def open_portal_flutter_actions_page(self) -> None:
+        try:
+            import portal_github
+
+            repo = self._apk_repo_from_ui()
+            url = portal_github.portal_flutter_workflow_url(repo)
+            webbrowser.open(url)
+            self.log(f"🌐 GitHub Actions (Flutter / артефакт iOS): {url}")
+        except Exception as e:
+            self.log(f"❌ Не удалось открыть Actions: {e}")
 
     def download_portal_flutter_apk_from_github(self) -> None:
         import portal_github

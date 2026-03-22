@@ -11,7 +11,10 @@
 
 ## iPhone / iPad
 
-Пошаговая установка и ограничения фона: **[IOS_INSTALL.md](IOS_INSTALL.md)**.
+Пошаговая установка и ограничения фона: **[IOS_INSTALL.md](IOS_INSTALL.md)**  
+(в веб-репозитории: `…/blob/main/portal_flutter/IOS_INSTALL.md`.)
+
+**Не APK:** для iOS нет одного файла «как .apk» в релизе; обычно сборка в **Xcode** или артефакт **Portal-Flutter-iOS-nosign.zip** из workflow **Portal Flutter Build** (job `ios-nosign`).
 
 ## Сборка локально
 

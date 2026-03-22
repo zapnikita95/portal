@@ -74,6 +74,20 @@ def flutter_release_page_url(owner_repo: str) -> str:
     return f"https://github.com/{o}/{r}/releases/tag/{FLUTTER_RELEASE_TAG}"
 
 
+FLUTTER_WORKFLOW_FILE = "portal-flutter.yml"
+
+
+def portal_flutter_workflow_url(owner_repo: str) -> str:
+    o, r = _split_owner_repo(owner_repo)
+    return f"https://github.com/{o}/{r}/actions/workflows/{FLUTTER_WORKFLOW_FILE}"
+
+
+def ios_install_guide_url(owner_repo: str) -> str:
+    """Ссылка на инструкцию установки iOS в репозитории (Markdown на GitHub)."""
+    o, r = _split_owner_repo(owner_repo)
+    return f"https://github.com/{o}/{r}/blob/main/portal_flutter/IOS_INSTALL.md"
+
+
 def get_release_apk_asset_download_url(
     owner_repo: str,
     release_tag: str,
