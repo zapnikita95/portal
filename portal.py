@@ -1751,7 +1751,7 @@ class PortalApp(ctk.CTk):
                 self._apk_win = None
         w = ctk.CTkToplevel(self)
         w.title(i18n.tr("apk.title"))
-        w.geometry("520x360")
+        w.geometry("520x420")
         try:
             w.transient(self)
         except Exception:
@@ -1772,20 +1772,34 @@ class PortalApp(ctk.CTk):
         ).pack(anchor="w", padx=14, pady=(0, 12))
         ctk.CTkButton(
             w,
-            text=i18n.tr("apk.download"),
+            text=i18n.tr("apk.download_flutter"),
             height=44,
-            command=self.download_portal_apk_from_github,
+            command=self.download_portal_flutter_apk_from_github,
             font=ctk.CTkFont(size=15, weight="bold"),
+        ).pack(fill="x", padx=14, pady=(0, 8))
+        ctk.CTkButton(
+            w,
+            text=i18n.tr("apk.download_kivy"),
+            height=36,
+            command=self.download_portal_apk_from_github,
+            font=ctk.CTkFont(size=13),
         ).pack(fill="x", padx=14, pady=(0, 10))
         row2 = ctk.CTkFrame(w, fg_color="transparent")
         row2.pack(fill="x", padx=14, pady=4)
         ctk.CTkButton(
             row2,
-            text=i18n.tr("apk.open_release"),
-            width=200,
-            command=self.open_apk_release_page,
+            text=i18n.tr("apk.open_release_flutter"),
+            width=150,
+            command=self.open_flutter_apk_release_page,
             font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 8))
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            row2,
+            text=i18n.tr("apk.open_release_kivy"),
+            width=130,
+            command=self.open_kivy_apk_release_page,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 6))
         ctk.CTkButton(
             row2,
             text=i18n.tr("apk.build_gh"),
@@ -2787,16 +2801,71 @@ class PortalApp(ctk.CTk):
         else:
             self.log("⚠️ Некорректный repo — нужен формат owner/repo (один слэш)")
 
-    def open_apk_release_page(self) -> None:
+    def open_flutter_apk_release_page(self) -> None:
+        try:
+            import portal_github
+
+            repo = self._apk_repo_from_ui()
+            url = portal_github.flutter_release_page_url(repo)
+            webbrowser.open(url)
+            self.log(f"🌐 Релиз Flutter APK: {url}")
+        except Exception as e:
+            self.log(f"❌ Не удалось открыть релиз: {e}")
+
+    def open_kivy_apk_release_page(self) -> None:
         try:
             import portal_github
 
             repo = self._apk_repo_from_ui()
             url = portal_github.apk_release_page_url(repo)
             webbrowser.open(url)
-            self.log(f"🌐 Релиз с APK: {url}")
+            self.log(f"🌐 Релиз Kivy APK: {url}")
         except Exception as e:
             self.log(f"❌ Не удалось открыть релиз: {e}")
+
+    def download_portal_flutter_apk_from_github(self) -> None:
+        import portal_github
+
+        repo = self._apk_repo_from_ui()
+        if not repo or repo.count("/") != 1:
+            self.log("⚠️ Укажи репозиторий как owner/repo и сохрани")
+            return
+        home = Path.home()
+        down = home / "Downloads"
+        if not down.is_dir():
+            down = home / "Загрузки"
+        if not down.is_dir():
+            down = home
+        dest = down / "Portal-Flutter.apk"
+        token = os.environ.get("PORTAL_GITHUB_TOKEN", "").strip()
+
+        def work() -> None:
+            ok, msg = portal_github.download_flutter_apk_to_file(
+                repo, dest, token=token or None
+            )
+
+            def done() -> None:
+                if ok:
+                    self.log(f"✅ Flutter APK сохранён: {msg}")
+                    if platform.system() == "Darwin":
+                        try:
+                            subprocess.run(
+                                ["open", "-R", str(dest)],
+                                check=False,
+                                capture_output=True,
+                            )
+                        except Exception:
+                            pass
+                else:
+                    self.log(f"❌ Скачивание Flutter APK: {msg}")
+
+            try:
+                self.after(0, done)
+            except Exception:
+                done()
+
+        self.log("⬇ Качаю Portal-Flutter.apk с GitHub Release…")
+        threading.Thread(target=work, daemon=True).start()
 
     def download_portal_apk_from_github(self) -> None:
         import portal_github

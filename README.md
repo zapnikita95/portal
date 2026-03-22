@@ -84,7 +84,7 @@
 
 Каталог **[`portal-android/`](portal-android/)** — Kivy + Share Sheet, тот же TCP-протокол. Подробности: [`portal-android/README.md`](portal-android/README.md).
 
-В приложении: **📥 APK → «Скачать APK с GitHub»** — файл кладётся в **`Загрузки/Portal-Android.apk`** (из GitHub Release, тег **`portal-android-latest`**).
+В приложении: **📥 APK** — по умолчанию **`Загрузки/Portal-Flutter.apk`** (релиз **`portal-flutter-latest`**); опционально **Portal-Android.apk** (Kivy, **`portal-android-latest`**).
 
 **Как выложить APK на GitHub (один раз настроить CI):** в репо уже есть **[`.github/workflows/portal-android-apk.yml`](.github/workflows/portal-android-apk.yml)** — после push запусти workflow вручную (**Actions → Portal Android APK → Run workflow**) или дождись сборки по push в `portal-android/**`. Успешный run публикует **`Portal-Android.apk`** в релиз с тегом `portal-android-latest` (обновляется при каждой сборке). Дополнительно остаётся артефакт **portal-debug-apk**.
 

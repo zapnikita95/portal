@@ -43,6 +43,8 @@ def _urlopen(
 
 # Должны совпадать с шагом «Publish to GitHub Release» в .github/workflows/portal-android-apk.yml
 APK_RELEASE_TAG = "portal-android-latest"
+# Flutter: .github/workflows/portal-flutter.yml → Portal-Flutter.apk
+FLUTTER_RELEASE_TAG = "portal-flutter-latest"
 
 
 def _split_owner_repo(owner_repo: str) -> Tuple[str, str]:
@@ -67,21 +69,24 @@ def apk_release_page_url(owner_repo: str) -> str:
     return f"https://github.com/{o}/{r}/releases/tag/{APK_RELEASE_TAG}"
 
 
-def get_apk_asset_download_url(
+def flutter_release_page_url(owner_repo: str) -> str:
+    o, r = _split_owner_repo(owner_repo)
+    return f"https://github.com/{o}/{r}/releases/tag/{FLUTTER_RELEASE_TAG}"
+
+
+def get_release_apk_asset_download_url(
     owner_repo: str,
+    release_tag: str,
+    preferred_apk_name: str,
     *,
     token: Optional[str] = None,
 ) -> Tuple[Optional[str], str]:
     """
-    Возвращает browser_download_url для APK из релиза с тегом APK_RELEASE_TAG.
-
-    Сначала запрос **без** Authorization: публичный репозиторий так всегда работает.
-    Если в .env лежит битый/просроченный PAT, запрос *с* Bearer даёт 401 — из‑за этого
-    «Скачать APK» ломался при том, что релиз на GitHub есть.
-    При 404 повторяем **с** токеном (приватный репозиторий).
+    browser_download_url для .apk из релиза с заданным тегом.
+    Сначала запрос без Authorization; при 404 с токеном — для приватного репо.
     """
     o, r = _split_owner_repo(owner_repo)
-    api = f"https://api.github.com/repos/{o}/{r}/releases/tags/{APK_RELEASE_TAG}"
+    api = f"https://api.github.com/repos/{o}/{r}/releases/tags/{release_tag}"
     tok = (token or "").strip()
 
     def _release_json(with_auth: bool) -> dict:
@@ -113,15 +118,15 @@ def get_apk_asset_download_url(
                     d2 = str(e2)
                 if e2.code == 404:
                     return None, (
-                        "Релиза с APK нет или нет доступа (тег portal-android-latest). "
+                        f"Релиза с APK нет или нет доступа (тег {release_tag}). "
                         "Для приватного репо нужен валидный PORTAL_GITHUB_TOKEN (repo)."
                     )
                 return None, f"GitHub API {e2.code}: {d2}"
         else:
             if e.code == 404:
                 return None, (
-                    "Релиза с APK пока нет (тег portal-android-latest). "
-                    "Нажми «Собрать на GitHub», дождись CI и скачай снова."
+                    f"Релиза с APK пока нет (тег {release_tag}). "
+                    "Запусти CI (Actions), дождись сборки и скачай снова."
                 )
             return None, f"GitHub API {e.code}: {detail}"
     except Exception as e:
@@ -131,7 +136,7 @@ def get_apk_asset_download_url(
         return None, "Некорректный ответ GitHub API"
 
     assets = data.get("assets") or []
-    preferred = "Portal-Android.apk"
+    preferred = preferred_apk_name
     for a in assets:
         if (a.get("name") or "") == preferred:
             u = a.get("browser_download_url")
@@ -146,6 +151,32 @@ def get_apk_asset_download_url(
     return None, "В релизе нет .apk — подожди, пока сборка выложит файл."
 
 
+def get_apk_asset_download_url(
+    owner_repo: str,
+    *,
+    token: Optional[str] = None,
+) -> Tuple[Optional[str], str]:
+    return get_release_apk_asset_download_url(
+        owner_repo,
+        APK_RELEASE_TAG,
+        "Portal-Android.apk",
+        token=token,
+    )
+
+
+def get_flutter_apk_asset_download_url(
+    owner_repo: str,
+    *,
+    token: Optional[str] = None,
+) -> Tuple[Optional[str], str]:
+    return get_release_apk_asset_download_url(
+        owner_repo,
+        FLUTTER_RELEASE_TAG,
+        "Portal-Flutter.apk",
+        token=token,
+    )
+
+
 def download_apk_to_file(
     owner_repo: str,
     dest_file: Path,
@@ -153,6 +184,56 @@ def download_apk_to_file(
     token: Optional[str] = None,
 ) -> Tuple[bool, str]:
     url, err = get_apk_asset_download_url(owner_repo, token=token)
+    if not url:
+        return False, err
+    dest_file = dest_file.expanduser()
+    dest_file.parent.mkdir(parents=True, exist_ok=True)
+    tok = (token or "").strip()
+
+    def _open_asset(with_auth: bool):
+        req = urllib.request.Request(url, method="GET")
+        req.add_header("Accept", "application/octet-stream")
+        req.add_header("User-Agent", "PortalDesktop/1.0")
+        if with_auth and tok:
+            req.add_header("Authorization", f"Bearer {tok}")
+        return _urlopen(req, timeout=900)
+
+    tmp = dest_file.with_suffix(dest_file.suffix + ".part")
+    try:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        try:
+            resp = _open_asset(False)
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403) and tok:
+                resp = _open_asset(True)
+            else:
+                raise
+        try:
+            with resp:
+                with open(tmp, "wb") as out:
+                    shutil.copyfileobj(resp, out, length=256 * 1024)
+        except urllib.error.HTTPError:
+            raise
+        tmp.replace(dest_file)
+        return True, str(dest_file)
+    except Exception as e:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return False, str(e)
+
+
+def download_flutter_apk_to_file(
+    owner_repo: str,
+    dest_file: Path,
+    *,
+    token: Optional[str] = None,
+) -> Tuple[bool, str]:
+    url, err = get_flutter_apk_asset_download_url(owner_repo, token=token)
     if not url:
         return False, err
     dest_file = dest_file.expanduser()
