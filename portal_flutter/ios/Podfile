@@ -47,4 +47,18 @@ post_install do |installer|
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
     end
   end
+
+  # Share Extension: Pods-Share Extension.*.xcconfig не добавляет Flutter (в отличие от Pods-Runner).
+  # Иначе receive_sharing_intent не находит Flutter/Flutter.h при сборке расширения.
+  Dir.glob(File.join(__dir__, 'Pods/Target Support Files/Pods-Share Extension/Pods-Share Extension.*.xcconfig')).each do |path|
+    body = File.read(path)
+    next if body.include?('"${PODS_CONFIGURATION_BUILD_DIR}/Flutter"')
+    body.sub!(/^(FRAMEWORK_SEARCH_PATHS = .+)$/, "\\1 \"${PODS_CONFIGURATION_BUILD_DIR}/Flutter\"")
+    if body =~ /^OTHER_MODULE_VERIFIER_FLAGS = /
+      body.sub!(/^(OTHER_MODULE_VERIFIER_FLAGS = .+)$/, "\\1 \"-F${PODS_CONFIGURATION_BUILD_DIR}/Flutter\"")
+    else
+      body << "\nOTHER_MODULE_VERIFIER_FLAGS = $(inherited) \"-F${PODS_CONFIGURATION_BUILD_DIR}/Flutter\"\n"
+    end
+    File.write(path, body)
+  end
 end

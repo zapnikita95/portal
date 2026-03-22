@@ -222,12 +222,178 @@ def parse_peer_receive_dirs_editor(text: str) -> Dict[str, str]:
     return out
 
 
-def receive_files_mode() -> str:
-    """
-    Как обрабатывать входящие файлы (обычная отправка и файл, забранный Cmd+Ctrl+V):
-    both — папка приёма + буфер ОС; disk_only — только папка; clipboard_only — в буфер (+ файл в папке).
-    Отправка «как из буфера» (portal_clipboard) по-прежнему всегда кладёт в буфер на приёме.
-    """
+def _ui_mode_to_rfm(ui: str) -> str:
+    """disk|clipboard|both (UI) → disk_only|clipboard_only|both."""
+    m = {
+        "disk": "disk_only",
+        "clipboard": "clipboard_only",
+        "both": "both",
+    }
+    return m.get(ui, "both")
+
+
+def _rfm_to_ui_mode(rfm: str) -> str:
+    return {
+        "disk_only": "disk",
+        "clipboard_only": "clipboard",
+        "both": "both",
+    }.get(rfm, "both")
+
+
+def load_receive_clipboard_push_mode_ui() -> str:
+    """Режим приёма файлов из буфера (clipboard_files / push с другого ПК): disk|clipboard|both."""
+    data = _load_all()
+    v = data.get("receive_clipboard_push_mode")
+    if v in ("disk", "clipboard", "both"):
+        return str(v)
+    return _rfm_to_ui_mode(receive_files_mode_legacy())
+
+
+def load_receive_portal_file_mode_ui() -> str:
+    """Режим приёма обычного файла по протоколу портала (не push из буфера)."""
+    data = _load_all()
+    v = data.get("receive_portal_file_mode")
+    if v in ("disk", "clipboard", "both"):
+        return str(v)
+    return _rfm_to_ui_mode(receive_files_mode_legacy())
+
+
+def save_receive_clipboard_push_mode_ui(mode: str) -> bool:
+    if mode not in ("disk", "clipboard", "both"):
+        return False
+    data = _load_all()
+    data["receive_clipboard_push_mode"] = mode
+    return _write_all(data)
+
+
+def save_receive_portal_file_mode_ui(mode: str) -> bool:
+    if mode not in ("disk", "clipboard", "both"):
+        return False
+    data = _load_all()
+    data["receive_portal_file_mode"] = mode
+    # legacy-поле для старых сборок / внешних скриптов
+    data["receive_files_mode"] = _ui_mode_to_rfm(mode)
+    data["receive_copy_to_clipboard"] = mode != "disk"
+    return _write_all(data)
+
+
+def _load_peer_mode_map(key: str) -> Dict[str, str]:
+    data = _load_all()
+    raw = data.get(key)
+    out: Dict[str, str] = {}
+    if not isinstance(raw, dict):
+        return out
+    for k, v in raw.items():
+        ip = str(k).strip()
+        s = str(v).strip() if v is not None else ""
+        if ip and s in ("disk", "clipboard", "both"):
+            out[ip] = s
+    return out
+
+
+def load_peer_receive_clipboard_mode_ui(peer_ip: Optional[str]) -> str:
+    ip = (peer_ip or "").strip()
+    if not ip:
+        return load_receive_clipboard_push_mode_ui()
+    m = _load_peer_mode_map("peer_receive_clipboard_mode")
+    return m.get(ip, load_receive_clipboard_push_mode_ui())
+
+
+def load_peer_receive_portal_mode_ui(peer_ip: Optional[str]) -> str:
+    ip = (peer_ip or "").strip()
+    if not ip:
+        return load_receive_portal_file_mode_ui()
+    m = _load_peer_mode_map("peer_receive_portal_mode")
+    return m.get(ip, load_receive_portal_file_mode_ui())
+
+
+def effective_clipboard_push_rfm(peer_ip: Optional[str] = None) -> str:
+    return _ui_mode_to_rfm(load_peer_receive_clipboard_mode_ui(peer_ip))
+
+
+def effective_portal_file_rfm(peer_ip: Optional[str] = None) -> str:
+    return _ui_mode_to_rfm(load_peer_receive_portal_mode_ui(peer_ip))
+
+
+def save_peer_receive_extra(
+    *,
+    clipboard_modes: Dict[str, str],
+    portal_modes: Dict[str, str],
+) -> bool:
+    """Сохранить per-IP режимы приёма (пустой словарь = удалить ключ)."""
+    data = _load_all()
+    allowed = set(load_peer_ips())
+
+    def _clean(m: Dict[str, str]) -> Dict[str, str]:
+        out: Dict[str, str] = {}
+        for k, v in (m or {}).items():
+            ip = str(k).strip()
+            s = str(v).strip() if v is not None else ""
+            if ip in allowed and s in ("disk", "clipboard", "both"):
+                out[ip] = s
+        return out
+
+    cc = _clean(clipboard_modes)
+    pp = _clean(portal_modes)
+    if cc:
+        data["peer_receive_clipboard_mode"] = cc
+    else:
+        data.pop("peer_receive_clipboard_mode", None)
+    if pp:
+        data["peer_receive_portal_mode"] = pp
+    else:
+        data.pop("peer_receive_portal_mode", None)
+    return _write_all(data)
+
+
+def load_peer_exchange_mode(peer_ip: str) -> str:
+    """both | receive_only | send_only — с какого IP принимаем / шлём."""
+    ip = str(peer_ip or "").strip()
+    if not ip:
+        return "both"
+    data = _load_all()
+    raw = data.get("peer_file_exchange_mode")
+    if not isinstance(raw, dict):
+        return "both"
+    s = str(raw.get(ip, "both")).strip().lower()
+    if s in ("receive_only", "send_only", "both"):
+        return s
+    return "both"
+
+
+def load_peer_exchange_modes() -> Dict[str, str]:
+    data = _load_all()
+    raw = data.get("peer_file_exchange_mode")
+    out: Dict[str, str] = {}
+    if not isinstance(raw, dict):
+        return out
+    allowed = set(load_peer_ips())
+    for k, v in raw.items():
+        ip = str(k).strip()
+        s = str(v).strip().lower() if v is not None else "both"
+        if ip in allowed and s in ("receive_only", "send_only", "both"):
+            out[ip] = s
+    return out
+
+
+def save_peer_exchange_modes(mapping: Dict[str, str]) -> bool:
+    data = _load_all()
+    allowed = set(load_peer_ips())
+    clean: Dict[str, str] = {}
+    for k, v in (mapping or {}).items():
+        ip = str(k).strip()
+        s = str(v).strip().lower() if v is not None else "both"
+        if ip in allowed and s in ("receive_only", "send_only", "both"):
+            clean[ip] = s
+    if clean:
+        data["peer_file_exchange_mode"] = clean
+    else:
+        data.pop("peer_file_exchange_mode", None)
+    return _write_all(data)
+
+
+def receive_files_mode_legacy() -> str:
+    """Только для обратной совместимости и миграции (один общий режим в старом config)."""
     data = _load_all()
     v = data.get("receive_files_mode")
     if v in ("both", "disk_only", "clipboard_only"):
@@ -237,12 +403,20 @@ def receive_files_mode() -> str:
     return "both"
 
 
+def receive_files_mode() -> str:
+    """
+    Legacy API: эквивалент режима «файл из портала» (не push буфера).
+    """
+    return _ui_mode_to_rfm(load_receive_portal_file_mode_ui())
+
+
 def save_receive_files_mode(mode: str) -> bool:
     if mode not in ("both", "disk_only", "clipboard_only"):
         return False
     data = _load_all()
     data["receive_files_mode"] = mode
     data["receive_copy_to_clipboard"] = mode != "disk_only"
+    data["receive_portal_file_mode"] = _rfm_to_ui_mode(mode)
     return _write_all(data)
 
 
@@ -263,7 +437,7 @@ def incoming_clipboard_files_save_dir(peer_ip: Optional[str] = None) -> Path:
     """Куда писать поток clipboard_files; при «только буфер» — temp (как на Win). Иначе папка по IP или общая."""
     import tempfile
 
-    if receive_files_mode() == "clipboard_only":
+    if effective_clipboard_push_rfm(peer_ip) == "clipboard_only":
         d = Path(tempfile.gettempdir()) / "PortalIncoming"
         d.mkdir(parents=True, exist_ok=True)
         return d
@@ -271,17 +445,14 @@ def incoming_clipboard_files_save_dir(peer_ip: Optional[str] = None) -> Path:
 
 
 def load_incoming_clipboard_files_mode() -> str:
-    """disk | clipboard | both — внутри portal_clipboard_rich / приём push."""
-    m = receive_files_mode()
-    return {"disk_only": "disk", "clipboard_only": "clipboard", "both": "both"}[m]
+    """disk | clipboard | both — виджет / приём push из буфера."""
+    return load_receive_clipboard_push_mode_ui()
 
 
 def save_incoming_clipboard_files_mode(mode: str) -> bool:
-    rev = {"disk": "disk_only", "clipboard": "clipboard_only", "both": "both"}
-    key = rev.get(mode)
-    if not key:
+    if mode not in ("disk", "clipboard", "both"):
         return False
-    return save_receive_files_mode(key)
+    return save_receive_clipboard_push_mode_ui(mode)
 
 
 INCOMING_CLIPBOARD_FILES_MODE_LABELS_RU: Dict[str, str] = {
@@ -503,7 +674,7 @@ def load_peer_groups() -> List[Dict[str, Any]]:
     raw = data.get("peer_groups")
     if not isinstance(raw, list):
         return []
-    out: List[Dict[str, _Any]] = []
+    out: List[Dict[str, Any]] = []
     for x in raw:
         if not isinstance(x, dict):
             continue
@@ -585,10 +756,20 @@ def save_peer_send_group_ids(ids: List[str]) -> bool:
 def load_effective_send_ips() -> List[str]:
     """
     Итоговые получатели: отмеченные пиры + IP из отмеченных групп (без дубликатов).
+    Пиры с режимом receive_only не получают исходящие (только приём на этой машине).
     """
     indiv = load_peer_send_targets()
-    seen = set(indiv)
-    out: List[str] = list(indiv)
+    seen = set()
+    out: List[str] = []
+
+    def _can_send_to(ip: str) -> bool:
+        return load_peer_exchange_mode(ip) != "receive_only"
+
+    for ip in indiv:
+        s = str(ip).strip()
+        if _is_ipv4(s) and s not in seen and _can_send_to(s):
+            seen.add(s)
+            out.append(s)
     groups_by_id = {g["id"]: g for g in load_peer_groups()}
     for gid in load_peer_send_group_ids():
         g = groups_by_id.get(gid)
@@ -596,7 +777,7 @@ def load_effective_send_ips() -> List[str]:
             continue
         for ip in g.get("member_ips", []):
             s = str(ip).strip()
-            if _is_ipv4(s) and s not in seen:
+            if _is_ipv4(s) and s not in seen and _can_send_to(s):
                 seen.add(s)
                 out.append(s)
     return out

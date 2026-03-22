@@ -873,6 +873,10 @@
 				DEVELOPMENT_TEAM = Y52BT2N4L8;
 				ENABLE_BITCODE = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PODS_CONFIGURATION_BUILD_DIR)/Flutter",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Share Extension/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Portal;
@@ -883,6 +887,12 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0.15;
+				OTHER_CFLAGS = (
+					"$(inherited)",
+					"-F",
+					"$(PODS_CONFIGURATION_BUILD_DIR)/Flutter",
+				);
+				OTHER_SWIFT_FLAGS = "$(inherited) -F $(PODS_CONFIGURATION_BUILD_DIR)/Flutter";
 				PRODUCT_BUNDLE_IDENTIFIER = org.portal.portalFlutter.PortalShare;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -908,12 +918,22 @@
 				INFOPLIST_FILE = "Share Extension/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Portal;
 				IPHONEOS_DEPLOYMENT_TARGET = 13.0;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PODS_CONFIGURATION_BUILD_DIR)/Flutter",
+				);
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0.15;
+				OTHER_CFLAGS = (
+					"$(inherited)",
+					"-F",
+					"$(PODS_CONFIGURATION_BUILD_DIR)/Flutter",
+				);
+				OTHER_SWIFT_FLAGS = "$(inherited) -F $(PODS_CONFIGURATION_BUILD_DIR)/Flutter";
 				PRODUCT_BUNDLE_IDENTIFIER = org.portal.portalFlutter.PortalShare;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -935,6 +955,10 @@
 				DEVELOPMENT_TEAM = Y52BT2N4L8;
 				ENABLE_BITCODE = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PODS_CONFIGURATION_BUILD_DIR)/Flutter",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Share Extension/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Portal;
@@ -945,6 +969,12 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0.15;
+				OTHER_CFLAGS = (
+					"$(inherited)",
+					"-F",
+					"$(PODS_CONFIGURATION_BUILD_DIR)/Flutter",
+				);
+				OTHER_SWIFT_FLAGS = "$(inherited) -F $(PODS_CONFIGURATION_BUILD_DIR)/Flutter";
 				PRODUCT_BUNDLE_IDENTIFIER = org.portal.portalFlutter.PortalShare;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;

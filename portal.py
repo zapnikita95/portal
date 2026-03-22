@@ -1612,7 +1612,7 @@ class PortalApp(ctk.CTk):
         peer_recv_wrap = ctk.CTkFrame(t_recv, fg_color="transparent")
         peer_recv_wrap.pack(fill="both", expand=False, padx=8, pady=(0, 8))
         self._peer_recv_dirs_scroll = ctk.CTkScrollableFrame(
-            peer_recv_wrap, height=220, fg_color="transparent"
+            peer_recv_wrap, height=320, fg_color="transparent"
         )
         self._peer_recv_dirs_scroll.pack(fill="both", expand=True)
         self._peer_recv_dir_rows = []
@@ -1636,26 +1636,52 @@ class PortalApp(ctk.CTk):
             text=i18n.tr("recv.mode_title"),
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(anchor="w", padx=8, pady=(16, 4))
-        self._receive_files_mode_labels = {
-            "both": i18n.tr("recv_mode.both"),
-            "disk_only": i18n.tr("recv_mode.disk_only"),
-            "clipboard_only": i18n.tr("recv_mode.clipboard_only"),
-        }
-        rm_row = ctk.CTkFrame(t_recv, fg_color="transparent")
-        rm_row.pack(fill="x", padx=8, pady=(0, 10))
-        self.receive_mode_menu = ctk.CTkOptionMenu(
-            rm_row,
-            values=list(self._receive_files_mode_labels.values()),
-            command=self._on_receive_files_mode_menu,
-            width=440,
+        self._incoming_mode_labels, self._incoming_label_to_key, self._incoming_key_to_label = (
+            self._incoming_ui_mode_labels()
+        )
+        rm_row_a = ctk.CTkFrame(t_recv, fg_color="transparent")
+        rm_row_a.pack(fill="x", padx=8, pady=(0, 4))
+        ctk.CTkLabel(
+            rm_row_a,
+            text=i18n.tr("recv.mode_clipboard_push"),
+            font=ctk.CTkFont(size=12),
+            width=280,
+            anchor="w",
+        ).pack(side="left", padx=(0, 8))
+        self.clipboard_push_mode_menu = ctk.CTkOptionMenu(
+            rm_row_a,
+            values=list(self._incoming_mode_labels),
+            command=self._on_clipboard_push_mode_menu,
+            width=360,
             font=ctk.CTkFont(size=12),
         )
-        self.receive_mode_menu.pack(side="left", padx=(0, 8))
-        cur_m = portal_config.receive_files_mode()
-        self.receive_mode_menu.set(
-            self._receive_files_mode_labels.get(
-                cur_m, self._receive_files_mode_labels["both"]
+        self.clipboard_push_mode_menu.pack(side="left", padx=(0, 8))
+        cur_clip = portal_config.load_receive_clipboard_push_mode_ui()
+        self.clipboard_push_mode_menu.set(
+            self._incoming_key_to_label.get(
+                cur_clip, self._incoming_mode_labels[0]
             )
+        )
+        rm_row_b = ctk.CTkFrame(t_recv, fg_color="transparent")
+        rm_row_b.pack(fill="x", padx=8, pady=(0, 10))
+        ctk.CTkLabel(
+            rm_row_b,
+            text=i18n.tr("recv.mode_portal_file"),
+            font=ctk.CTkFont(size=12),
+            width=280,
+            anchor="w",
+        ).pack(side="left", padx=(0, 8))
+        self.portal_file_mode_menu = ctk.CTkOptionMenu(
+            rm_row_b,
+            values=list(self._incoming_mode_labels),
+            command=self._on_portal_file_mode_menu,
+            width=360,
+            font=ctk.CTkFont(size=12),
+        )
+        self.portal_file_mode_menu.pack(side="left", padx=(0, 8))
+        cur_pf = portal_config.load_receive_portal_file_mode_ui()
+        self.portal_file_mode_menu.set(
+            self._incoming_key_to_label.get(cur_pf, self._incoming_mode_labels[0])
         )
 
         ctk.CTkLabel(
@@ -1989,7 +2015,7 @@ class PortalApp(ctk.CTk):
             justify="left",
         ).pack(anchor="w", padx=8, pady=(0, 4))
         self._peer_groups_scroll = ctk.CTkScrollableFrame(
-            t_peers, height=140, fg_color="transparent"
+            t_peers, height=240, fg_color="transparent"
         )
         self._peer_groups_scroll.pack(fill="both", expand=True, padx=8, pady=(0, 6))
         grp_btn_row = ctk.CTkFrame(t_peers, fg_color="transparent")
@@ -2089,7 +2115,7 @@ class PortalApp(ctk.CTk):
                 self._apk_win = None
         w = ctk.CTkToplevel(self)
         w.title(i18n.tr("apk.title"))
-        w.geometry("540x520")
+        w.geometry("540x380")
         try:
             w.transient(self)
         except Exception:
@@ -2125,37 +2151,7 @@ class PortalApp(ctk.CTk):
             height=44,
             command=self.download_portal_flutter_apk_from_github,
             font=ctk.CTkFont(size=15, weight="bold"),
-        ).pack(fill="x", padx=6, pady=(0, 8))
-        ctk.CTkButton(
-            t_and,
-            text=i18n.tr("apk.download_kivy"),
-            height=36,
-            command=self.download_portal_apk_from_github,
-            font=ctk.CTkFont(size=13),
         ).pack(fill="x", padx=6, pady=(0, 10))
-        row2 = ctk.CTkFrame(t_and, fg_color="transparent")
-        row2.pack(fill="x", padx=6, pady=4)
-        ctk.CTkButton(
-            row2,
-            text=i18n.tr("apk.open_release_flutter"),
-            width=150,
-            command=self.open_flutter_apk_release_page,
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(
-            row2,
-            text=i18n.tr("apk.open_release_kivy"),
-            width=130,
-            command=self.open_kivy_apk_release_page,
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(
-            row2,
-            text=i18n.tr("apk.build_gh"),
-            width=160,
-            command=self.trigger_android_apk_workflow,
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left")
 
         t_ios = tab.add(i18n.tr("apk.tab_ios"))
         ctk.CTkLabel(
@@ -2746,6 +2742,31 @@ class PortalApp(ctk.CTk):
         key_to_label = {v: k for k, v in label_to_key.items()}
         return labels, label_to_key, key_to_label
 
+    def _incoming_ui_mode_labels(self) -> Tuple[List[str], Dict[str, str], Dict[str, str]]:
+        keys_order = ("clipboard", "disk", "both")
+        key_to_label = {
+            "clipboard": i18n.tr("recv.incoming_ui.clipboard"),
+            "disk": i18n.tr("recv.incoming_ui.disk"),
+            "both": i18n.tr("recv.incoming_ui.both"),
+        }
+        labels = [key_to_label[k] for k in keys_order]
+        label_to_key = {key_to_label[k]: k for k in keys_order}
+        return labels, label_to_key, key_to_label
+
+    def _exchange_menu_values(self) -> Tuple[List[str], Dict[str, str], Dict[str, str]]:
+        labels = [
+            i18n.tr("peers.ex_both"),
+            i18n.tr("peers.ex_recv"),
+            i18n.tr("peers.ex_send"),
+        ]
+        label_to_key = {
+            labels[0]: "both",
+            labels[1]: "receive_only",
+            labels[2]: "send_only",
+        }
+        key_to_label = {v: k for k, v in label_to_key.items()}
+        return labels, label_to_key, key_to_label
+
     def _clear_peer_settings_widgets(self) -> None:
         if hasattr(self, "_peers_settings_scroll"):
             for w in self._peers_settings_scroll.winfo_children():
@@ -2774,27 +2795,35 @@ class PortalApp(ctk.CTk):
 
         self._clear_peer_group_settings_widgets()
         for g in portal_config.load_peer_groups():
+            mips = g.get("member_ips", []) or []
+            if isinstance(mips, str):
+                mips = [x.strip() for x in re.split(r"[\s,;]+", mips) if x.strip()]
             self._append_peer_group_row_widget(
                 str(g.get("id", "")),
                 str(g.get("name", "")),
-                ", ".join(g.get("member_ips", []) or []),
+                [str(x).strip() for x in mips if str(x).strip()],
             )
 
     def _append_peer_settings_row_widget(self, ip: str, name: str, net_label: str) -> None:
         labels, label_to_key, _ = self._net_menu_values()
+        ex_labels, ex_l2k, ex_k2l = self._exchange_menu_values()
         fr = ctk.CTkFrame(self._peers_settings_scroll, fg_color="transparent")
         fr.pack(fill="x", pady=3)
         ip_e = ctk.CTkEntry(fr, width=150, placeholder_text="192.168.x.x")
         if ip:
             ip_e.insert(0, ip)
-        nm_e = ctk.CTkEntry(fr, width=200, placeholder_text=i18n.tr("peers.name_ph"))
+        nm_e = ctk.CTkEntry(fr, width=160, placeholder_text=i18n.tr("peers.name_ph"))
         if name:
             nm_e.insert(0, name)
-        net_m = ctk.CTkOptionMenu(fr, values=labels, width=150)
+        net_m = ctk.CTkOptionMenu(fr, values=labels, width=130)
         net_m.set(net_label if net_label in labels else labels[0])
+        cur_ex = portal_config.load_peer_exchange_mode(ip) if ip else "both"
+        ex_m = ctk.CTkOptionMenu(fr, values=ex_labels, width=150)
+        ex_m.set(ex_k2l.get(cur_ex, ex_labels[0]))
         ip_e.pack(side="left", padx=(0, 6))
         nm_e.pack(side="left", padx=(0, 6))
         net_m.pack(side="left", padx=(0, 6))
+        ex_m.pack(side="left", padx=(0, 6))
 
         def _remove() -> None:
             fr.destroy()
@@ -2804,7 +2833,15 @@ class PortalApp(ctk.CTk):
             side="left", padx=(4, 0)
         )
         self._peer_setting_rows.append(
-            {"frame": fr, "ip": ip_e, "name": nm_e, "net": net_m, "label_to_key": label_to_key}
+            {
+                "frame": fr,
+                "ip": ip_e,
+                "name": nm_e,
+                "net": net_m,
+                "label_to_key": label_to_key,
+                "exchange": ex_m,
+                "ex_l2k": ex_l2k,
+            }
         )
 
     def _add_peer_settings_row_ui(self) -> None:
@@ -2813,20 +2850,78 @@ class PortalApp(ctk.CTk):
         _, _, key_to_label = self._net_menu_values()
         self._append_peer_settings_row_widget("", "", key_to_label["auto"])
 
-    def _append_peer_group_row_widget(self, gid: str, name: str, ips_csv: str) -> None:
+    def _peer_ips_for_group_picker(self) -> List[str]:
+        """IP из текущих (ещё не сохранённых) строк настроек пиров."""
+        ips, _, _, _, bad = self._collect_peer_rows_from_settings_ui()
+        return [x for x in ips if x and portal_config._is_ipv4(x)]
+
+    def _refresh_group_member_chips(self, row: Dict[str, Any]) -> None:
+        chips = row.get("chips_frame")
+        if chips is None:
+            return
+        for w in chips.winfo_children():
+            w.destroy()
+        for ip in row.get("member_ips", []):
+            chip = ctk.CTkFrame(chips, fg_color=("gray70", "gray30"))
+            chip.pack(side="left", padx=(0, 4), pady=2)
+            ctk.CTkLabel(chip, text=ip, font=ctk.CTkFont(size=11)).pack(
+                side="left", padx=(6, 2), pady=2
+            )
+
+            def _rm(target_ip: str = ip, r=row) -> None:
+                try:
+                    r["member_ips"] = [x for x in r.get("member_ips", []) if x != target_ip]
+                    self._refresh_group_member_chips(r)
+                    self._refresh_group_add_menu_values(r)
+                except Exception:
+                    pass
+
+            ctk.CTkButton(
+                chip, text="✕", width=22, height=22, command=_rm, font=ctk.CTkFont(size=10)
+            ).pack(side="left", padx=(0, 4), pady=2)
+
+    def _refresh_group_add_menu_values(self, row: Dict[str, Any]) -> None:
+        menu = row.get("add_menu")
+        if menu is None:
+            return
+        avail = self._peer_ips_for_group_picker()
+        taken = set(row.get("member_ips", []))
+        rest = [ip for ip in avail if ip not in taken]
+        placeholder = "—"
+        menu.configure(values=[placeholder] + rest if rest else [placeholder])
+        try:
+            menu.set(placeholder)
+        except Exception:
+            pass
+
+    def _on_group_add_ip_choice(self, row: Dict[str, Any], choice: str) -> None:
+        if not choice or choice.startswith("—"):
+            return
+        members: List[str] = list(row.get("member_ips", []))
+        if choice in members:
+            return
+        members.append(choice)
+        row["member_ips"] = members
+        self._refresh_group_member_chips(row)
+        self._refresh_group_add_menu_values(row)
+
+    def _append_peer_group_row_widget(
+        self, gid: str, name: str, member_ips: Optional[List[str]] = None
+    ) -> None:
         fr = ctk.CTkFrame(self._peer_groups_scroll, fg_color="transparent")
-        fr.pack(fill="x", pady=3)
+        fr.pack(fill="x", pady=4)
         if not gid:
             gid = f"g_{secrets.token_hex(6)}"
-        id_e = ctk.CTkEntry(fr, width=90)
+        top = ctk.CTkFrame(fr, fg_color="transparent")
+        top.pack(fill="x")
+        id_e = ctk.CTkEntry(top, width=88)
         id_e.insert(0, gid)
         id_e.configure(state="disabled")
-        nm_e = ctk.CTkEntry(fr, width=140, placeholder_text=i18n.tr("peers.group_name_ph"))
+        nm_e = ctk.CTkEntry(top, width=160, placeholder_text=i18n.tr("peers.group_name_ph"))
         if name:
             nm_e.insert(0, name)
-        ips_e = ctk.CTkEntry(fr, width=360, placeholder_text="192.168.0.1, 100.x.x.x")
-        if ips_csv:
-            ips_e.insert(0, ips_csv)
+        id_e.pack(side="left", padx=(0, 4))
+        nm_e.pack(side="left", padx=(0, 6))
 
         def _remove_g() -> None:
             fr.destroy()
@@ -2834,29 +2929,68 @@ class PortalApp(ctk.CTk):
                 r for r in self._peer_group_setting_rows if r["frame"] is not fr
             ]
 
-        id_e.pack(side="left", padx=(0, 4))
-        nm_e.pack(side="left", padx=(0, 6))
-        ips_e.pack(side="left", padx=(0, 6), fill="x", expand=True)
-        ctk.CTkButton(fr, text="✕", width=36, command=_remove_g, font=ctk.CTkFont(size=12)).pack(
-            side="left"
+        ctk.CTkButton(top, text="✕", width=36, command=_remove_g, font=ctk.CTkFont(size=12)).pack(
+            side="right", padx=(4, 0)
         )
-        self._peer_group_setting_rows.append(
-            {"frame": fr, "id_entry": id_e, "name": nm_e, "ips": ips_e}
+
+        chips_frame = ctk.CTkFrame(fr, fg_color="transparent")
+        chips_frame.pack(fill="x", padx=(0, 0), pady=(4, 2))
+        add_row = ctk.CTkFrame(fr, fg_color="transparent")
+        add_row.pack(fill="x")
+        ctk.CTkLabel(
+            add_row,
+            text=i18n.tr("peers.group_add_ip"),
+            font=ctk.CTkFont(size=11),
+            width=100,
+            anchor="w",
+        ).pack(side="left", padx=(0, 6))
+        add_menu = ctk.CTkOptionMenu(
+            add_row,
+            values=["—"],
+            width=220,
+            font=ctk.CTkFont(size=11),
+            command=lambda c, r=None: None,
         )
+        add_menu.pack(side="left", padx=(0, 8))
+
+        members_clean: List[str] = []
+        if member_ips:
+            for x in member_ips:
+                t = str(x).strip()
+                if t and portal_config._is_ipv4(t) and t not in members_clean:
+                    members_clean.append(t)
+
+        row: Dict[str, Any] = {
+            "frame": fr,
+            "id_entry": id_e,
+            "name": nm_e,
+            "member_ips": members_clean,
+            "chips_frame": chips_frame,
+            "add_menu": add_menu,
+        }
+        self._peer_group_setting_rows.append(row)
+
+        def _pick(choice: str, r=row) -> None:
+            self._on_group_add_ip_choice(r, choice)
+
+        add_menu.configure(command=_pick)
+        self._refresh_group_member_chips(row)
+        self._refresh_group_add_menu_values(row)
 
     def _add_peer_group_settings_row_ui(self) -> None:
         if not hasattr(self, "_peer_groups_scroll"):
             return
-        self._append_peer_group_row_widget("", "", "")
+        self._append_peer_group_row_widget("", "", [])
 
     def _collect_peer_rows_from_settings_ui(
         self,
-    ) -> Tuple[List[str], Dict[str, str], Dict[str, str], List[str]]:
-        """Возвращает ips, aliases, network_kinds, bad_ip_hints."""
+    ) -> Tuple[List[str], Dict[str, str], Dict[str, str], Dict[str, str], List[str]]:
+        """Возвращает ips, aliases, network_kinds, exchange_modes, bad_ip_hints."""
         labels, label_to_key, _ = self._net_menu_values()
         ips: List[str] = []
         aliases: Dict[str, str] = {}
         kinds: Dict[str, str] = {}
+        exchange: Dict[str, str] = {}
         bad: List[str] = []
         seen: Set[str] = set()
         for row in getattr(self, "_peer_setting_rows", []):
@@ -2877,24 +3011,33 @@ class PortalApp(ctk.CTk):
             k = label_to_key.get(lbl, "auto")
             if k != "auto":
                 kinds[ip] = k
-        return ips, aliases, kinds, bad
+            ex_lbl = row.get("exchange")
+            ex_map = row.get("ex_l2k") or {}
+            if ex_lbl is not None:
+                ex_k = ex_map.get(ex_lbl.get(), "both")
+                exchange[ip] = ex_k
+        return ips, aliases, kinds, exchange, bad
 
-    def _collect_groups_from_settings_ui(self) -> List[Dict[str, Any]]:
+    def _collect_groups_from_settings_ui(
+        self, allowed_ips: Optional[Set[str]] = None
+    ) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
+        allow = allowed_ips
         for row in getattr(self, "_peer_group_setting_rows", []):
             gid = row["id_entry"].get().strip()
             if not gid:
                 gid = f"g_{secrets.token_hex(6)}"
             nm = row["name"].get().strip() or "Группа"
-            raw = row["ips"].get().strip()
-            parts = re.split(r"[\s,;]+", raw)
             member_ips: List[str] = []
             seen: Set[str] = set()
-            for p in parts:
-                t = p.strip()
-                if t and portal_config._is_ipv4(t) and t not in seen:
-                    seen.add(t)
-                    member_ips.append(t)
+            for t in row.get("member_ips", []) or []:
+                ip = str(t).strip()
+                if not ip or not portal_config._is_ipv4(ip) or ip in seen:
+                    continue
+                if allow is not None and ip not in allow:
+                    continue
+                seen.add(ip)
+                member_ips.append(ip)
             out.append({"id": gid, "name": nm, "member_ips": member_ips})
         return out
 
@@ -2905,14 +3048,15 @@ class PortalApp(ctk.CTk):
     def save_peer_ips_from_ui(self) -> None:
         if not hasattr(self, "_peer_setting_rows"):
             return
-        ips, aliases, kinds, bad = self._collect_peer_rows_from_settings_ui()
-        groups = self._collect_groups_from_settings_ui()
+        ips, aliases, kinds, exchange, bad = self._collect_peer_rows_from_settings_ui()
+        groups = self._collect_groups_from_settings_ui(allowed_ips=set(ips))
         if hasattr(self, "ip_saved_feedback"):
             self.ip_saved_feedback.configure(text="⏳ …", text_color="gray")
         ok = portal_config.save_peer_ips(ips)
         if ok:
             portal_config.save_peer_aliases(aliases)
             portal_config.save_peer_network_kinds(kinds)
+            portal_config.save_peer_exchange_modes(exchange)
             portal_config.save_peer_groups(groups)
             # Убрать галочки групп, которых больше нет
             valid_g = {g["id"] for g in groups}
@@ -2973,14 +3117,22 @@ class PortalApp(ctk.CTk):
         ).pack(side="left", padx=(0, 6))
         if ips:
             for ip in ips:
-                var = ctk.BooleanVar(value=ip in targets_set)
+                recv_only = portal_config.load_peer_exchange_mode(ip) == "receive_only"
+                var = ctk.BooleanVar(value=(ip in targets_set) and not recv_only)
                 self._peer_checkbox_vars[ip] = var
-                ctk.CTkCheckBox(
+                cb = ctk.CTkCheckBox(
                     row,
                     text=portal_config.peer_display_label(ip),
                     variable=var,
                     font=ctk.CTkFont(size=11),
-                ).pack(side="left", padx=(0, 14), pady=0)
+                )
+                if recv_only:
+                    var.set(False)
+                    try:
+                        cb.configure(state="disabled")
+                    except Exception:
+                        pass
+                cb.pack(side="left", padx=(0, 14), pady=0)
         else:
             ctk.CTkLabel(
                 row,
@@ -3015,7 +3167,11 @@ class PortalApp(ctk.CTk):
     def save_peer_selection_from_ui(self) -> None:
         ips = portal_config.load_peer_ips()
         chosen = [
-            ip for ip in ips if self._peer_checkbox_vars.get(ip) and self._peer_checkbox_vars[ip].get()
+            ip
+            for ip in ips
+            if self._peer_checkbox_vars.get(ip)
+            and self._peer_checkbox_vars[ip].get()
+            and portal_config.load_peer_exchange_mode(ip) != "receive_only"
         ]
         g_chosen = [
             gid
@@ -3041,13 +3197,19 @@ class PortalApp(ctk.CTk):
             self.ip_saved_feedback.configure(text="✅ Выбор сохранён", text_color="#3dd68c")
         self.check_peer_connection_async(silent=False)
 
-    def _on_receive_files_mode_menu(self, choice: str) -> None:
-        rev = {v: k for k, v in getattr(self, "_receive_files_mode_labels", {}).items()}
-        key = rev.get(choice, "both")
-        if portal_config.save_receive_files_mode(key):
-            self.log(f"💾 Входящие файлы: {choice}")
+    def _on_clipboard_push_mode_menu(self, choice: str) -> None:
+        key = self._incoming_label_to_key.get(choice, "both")
+        if portal_config.save_receive_clipboard_push_mode_ui(key):
+            self.log(f"💾 Приём из буфера (push): {choice}")
         else:
-            self.log("⚠️ Не удалось сохранить режим приёма")
+            self.log("⚠️ Не удалось сохранить режим приёма из буфера")
+
+    def _on_portal_file_mode_menu(self, choice: str) -> None:
+        key = self._incoming_label_to_key.get(choice, "both")
+        if portal_config.save_receive_portal_file_mode_ui(key):
+            self.log(f"💾 Приём файла из портала: {choice}")
+        else:
+            self.log("⚠️ Не удалось сохранить режим приёма файлов")
 
     def choose_receive_dir(self) -> None:
         """Диалог выбора папки приёма (кнопка «Обзор…»)."""
@@ -3086,30 +3248,78 @@ class PortalApp(ctk.CTk):
             ).pack(anchor="w", pady=(4, 8))
             return
         ph = i18n.tr("recv.per_ip_path_placeholder")
+        labels_l, lbl2key, key2lbl = self._incoming_ui_mode_labels()
         for ip in ips:
-            fr = ctk.CTkFrame(sc, fg_color="transparent")
-            fr.pack(fill="x", pady=(0, 10))
+            outer = ctk.CTkFrame(sc, fg_color="transparent")
+            outer.pack(fill="x", pady=(0, 12))
+            row1 = ctk.CTkFrame(outer, fg_color="transparent")
+            row1.pack(fill="x")
             ctk.CTkLabel(
-                fr,
+                row1,
                 text=portal_config.peer_display_label(ip),
                 width=200,
                 anchor="w",
                 font=ctk.CTkFont(size=12, weight="bold"),
             ).pack(side="left", padx=(0, 10))
-            ent = ctk.CTkEntry(fr, placeholder_text=ph, font=ctk.CTkFont(size=12))
+            ent = ctk.CTkEntry(row1, placeholder_text=ph, font=ctk.CTkFont(size=12))
             ent.pack(side="left", padx=(0, 8), fill="x", expand=True)
             prev = (dirs_map.get(ip) or "").strip()
             if prev:
                 ent.insert(0, prev)
             wire_ctk_entry_paste(ent)
             ctk.CTkButton(
-                fr,
+                row1,
                 text=i18n.tr("recv.browse"),
                 width=88,
                 command=lambda e=ent: self._choose_dir_for_peer_entry(e),
                 font=ctk.CTkFont(size=12),
             ).pack(side="left")
-            self._peer_recv_dir_rows.append({"ip": ip, "entry": ent, "frame": fr})
+
+            row2 = ctk.CTkFrame(outer, fg_color="transparent")
+            row2.pack(fill="x", pady=(6, 0))
+            ctk.CTkLabel(
+                row2,
+                text=i18n.tr("recv.mode_clipboard_push"),
+                font=ctk.CTkFont(size=11),
+                width=200,
+                anchor="w",
+            ).pack(side="left", padx=(0, 8))
+            clip_m = ctk.CTkOptionMenu(
+                row2,
+                values=list(labels_l),
+                width=220,
+                font=ctk.CTkFont(size=11),
+            )
+            cur_c = portal_config.load_peer_receive_clipboard_mode_ui(ip)
+            clip_m.set(key2lbl.get(cur_c, labels_l[0]))
+            clip_m.pack(side="left", padx=(0, 16))
+            ctk.CTkLabel(
+                row2,
+                text=i18n.tr("recv.mode_portal_file"),
+                font=ctk.CTkFont(size=11),
+                width=200,
+                anchor="w",
+            ).pack(side="left", padx=(0, 8))
+            portal_m = ctk.CTkOptionMenu(
+                row2,
+                values=list(labels_l),
+                width=220,
+                font=ctk.CTkFont(size=11),
+            )
+            cur_p = portal_config.load_peer_receive_portal_mode_ui(ip)
+            portal_m.set(key2lbl.get(cur_p, labels_l[0]))
+            portal_m.pack(side="left", padx=(0, 8))
+
+            self._peer_recv_dir_rows.append(
+                {
+                    "ip": ip,
+                    "entry": ent,
+                    "frame": outer,
+                    "clip_menu": clip_m,
+                    "portal_menu": portal_m,
+                    "incoming_l2k": lbl2key,
+                }
+            )
 
     def _choose_dir_for_peer_entry(self, entry) -> None:
         from tkinter import filedialog
@@ -3129,9 +3339,11 @@ class PortalApp(ctk.CTk):
             entry.insert(0, d)
 
     def save_peer_receive_dirs_from_ui(self) -> None:
-        """Сохранить маппинг IP → папка из блоков по списку пиров."""
+        """Сохранить маппинг IP → папка и режимы приёма по IP."""
         rows = getattr(self, "_peer_recv_dir_rows", None)
         mapping: Dict[str, str] = {}
+        clip_modes: Dict[str, str] = {}
+        portal_modes: Dict[str, str] = {}
         if rows:
             for row in rows:
                 ip = str(row.get("ip", "")).strip()
@@ -3141,12 +3353,23 @@ class PortalApp(ctk.CTk):
                 p = (ent.get() or "").strip()
                 if p:
                     mapping[ip] = p
+                l2k = row.get("incoming_l2k") or {}
+                cm = row.get("clip_menu")
+                pm = row.get("portal_menu")
+                if cm is not None:
+                    clip_modes[ip] = l2k.get(cm.get(), "both")
+                if pm is not None:
+                    portal_modes[ip] = l2k.get(pm.get(), "both")
         ok = portal_config.save_peer_receive_dirs(mapping)
+        ok2 = portal_config.save_peer_receive_extra(
+            clipboard_modes=clip_modes, portal_modes=portal_modes
+        )
+        ok = ok and ok2
         if ok:
             self.log(
-                f"✅ Папки по IP: {len(mapping)} записей"
-                if mapping
-                else "✅ Список папок по IP очищен (общая папка для всех)"
+                f"✅ Папки и режимы по IP: {len(mapping)} папок, режимы для {len(clip_modes)} IP"
+                if mapping or clip_modes
+                else "✅ Настройки приёма по IP сохранены"
             )
             if hasattr(self, "peer_receive_dirs_feedback"):
                 self.peer_receive_dirs_feedback.configure(
@@ -4649,6 +4872,12 @@ class PortalApp(ctk.CTk):
                 self._log_from_thread(f"⚠️ clipboard_file: некорректный размер {need}")
                 _portal_sendall(client_socket, b"ERR")
                 return
+            if peer_ip and portal_config.load_peer_exchange_mode(peer_ip) == "send_only":
+                self._log_from_thread(
+                    f"⚠️ clipboard_file от {peer_ip} отклонён: режим пира «только отправка»"
+                )
+                _portal_sendall(client_socket, b"ERR")
+                return
             receive_dir = portal_config.incoming_clipboard_files_save_dir(peer_ip)
             receive_dir.mkdir(parents=True, exist_ok=True)
             filepath = receive_dir / f"{int(time.time() * 1000)}_{fname}"
@@ -4669,7 +4898,7 @@ class PortalApp(ctk.CTk):
 
             def _apply(ip: Optional[str] = peer_ip):
                 try:
-                    self._apply_incoming_clipboard_files([p])
+                    self._apply_incoming_clipboard_files([p], peer_ip=ip)
                     self._pulse_portal_widget(
                         pulse_event="receive_file", peer_ip=ip
                     )
@@ -4708,6 +4937,16 @@ class PortalApp(ctk.CTk):
                 filesize = 0
 
             self._log_from_thread(f"📥 Прием файла: {filename} ({filesize} байт)")
+
+            if peer_ip and portal_config.load_peer_exchange_mode(peer_ip) == "send_only":
+                self._log_from_thread(
+                    f"⚠️ Входящий файл от {peer_ip} отклонён: для пира выбран режим «только отправка»"
+                )
+                try:
+                    _portal_sendall(client_socket, b"ERR")
+                except Exception:
+                    pass
+                return
 
             receive_dir = portal_config.resolve_receive_dir_for_peer(peer_ip)
             receive_dir.mkdir(parents=True, exist_ok=True)
@@ -4826,14 +5065,15 @@ class PortalApp(ctk.CTk):
                                 n = int(bd.get("n", 1))
                                 self._clip_batch_add(bid, i, n, p)
                             except (TypeError, ValueError):
-                                self._apply_portal_clipboard_files([p])
+                                self._apply_portal_clipboard_files([p], peer_ip=peer_ip)
                         else:
-                            self._apply_portal_clipboard_files([p])
+                            self._apply_portal_clipboard_files([p], peer_ip=peer_ip)
                     else:
                         self._apply_receive_mode_after_saved_file(
                             p,
                             reveal_mac_allowed=reveal_ok,
                             from_mobile=_portal_message_from_mobile(msg_local),
+                            peer_ip=peer_ip,
                         )
                 except Exception as ex:
                     self.log(f"❌ После приёма (Finder/буфер): {ex}")
@@ -4857,12 +5097,20 @@ class PortalApp(ctk.CTk):
             self._log_from_thread(f"❌ Ошибка приёма файла: {e}")
 
     def _apply_receive_mode_after_saved_file(
-        self, p: Path, *, reveal_mac_allowed: bool, from_mobile: bool = False
+        self,
+        p: Path,
+        *,
+        reveal_mac_allowed: bool,
+        from_mobile: bool = False,
+        peer_ip: Optional[str] = None,
     ) -> None:
         """Обычный приём файла: режим both / disk_only / clipboard_only (не portal_clipboard)."""
-        mode = portal_config.receive_files_mode()
         if not p.is_file():
             return
+        if from_mobile:
+            mode = "disk_only"
+        else:
+            mode = portal_config.effective_portal_file_rfm(peer_ip)
         if (
             reveal_mac_allowed
             and platform.system() == "Darwin"
@@ -4880,7 +5128,7 @@ class PortalApp(ctk.CTk):
         # С телефона — только файл на диске, без подмены системного буфера обмена.
         copy_clip = (not from_mobile) and mode in ("both", "clipboard_only")
         if copy_clip:
-            self._apply_portal_clipboard_files([p])
+            self._apply_portal_clipboard_files([p], peer_ip=peer_ip)
             self.log(f"📋 В буфере для вставки: {p.name}")
 
     def receive_clipboard_files(
@@ -4894,6 +5142,16 @@ class PortalApp(ctk.CTk):
         specs = message.get("files") or []
         if not specs:
             self._log_from_thread("⚠️ clipboard_files: пустой список")
+            try:
+                _portal_sendall(client_socket, b"ERR")
+            except Exception:
+                pass
+            return
+
+        if peer_ip and portal_config.load_peer_exchange_mode(peer_ip) == "send_only":
+            self._log_from_thread(
+                f"⚠️ clipboard_files от {peer_ip} отклонён: режим пира «только отправка»"
+            )
             try:
                 _portal_sendall(client_socket, b"ERR")
             except Exception:
@@ -4949,7 +5207,7 @@ class PortalApp(ctk.CTk):
         self._log_from_thread(f"✅ Из буфера сохранено файлов: {len(saved)}")
         try:
             def _done(paths: List[str] = list(saved), ip: Optional[str] = peer_ip) -> None:
-                self._apply_incoming_clipboard_files(paths)
+                self._apply_incoming_clipboard_files(paths, peer_ip=ip)
                 self._pulse_portal_widget(pulse_event="receive_file", peer_ip=ip)
 
             self.after(0, _done)
@@ -4970,6 +5228,16 @@ class PortalApp(ctk.CTk):
             size = 0
         if not portal_clip_rich.image_size_ok(size):
             self._log_from_thread("⚠️ Слишком большой снимок буфера (clipboard_rich)")
+            try:
+                _portal_sendall(client_socket, b"ERR")
+            except Exception:
+                pass
+            return
+
+        if peer_ip and portal_config.load_peer_exchange_mode(peer_ip) == "send_only":
+            self._log_from_thread(
+                f"⚠️ clipboard_rich от {peer_ip} отклонён: режим пира «только отправка»"
+            )
             try:
                 _portal_sendall(client_socket, b"ERR")
             except Exception:
@@ -5028,10 +5296,12 @@ class PortalApp(ctk.CTk):
         except Exception:
             _done_img()
 
-    def _apply_incoming_clipboard_files(self, paths: List[str]) -> None:
+    def _apply_incoming_clipboard_files(
+        self, paths: List[str], peer_ip: Optional[str] = None
+    ) -> None:
         self.is_receiving_clipboard = True
         try:
-            mode = portal_config.load_incoming_clipboard_files_mode()
+            mode = portal_config.load_peer_receive_clipboard_mode_ui(peer_ip)
             msg = ""
             if mode in ("clipboard", "both"):
                 # macOS: сначала NSPasteboard (NSURL) в процессе приложения — надёжнее для Finder, чем osascript
@@ -5104,9 +5374,11 @@ class PortalApp(ctk.CTk):
             else:
                 paths_copy = None
         if paths_copy is not None:
-            self._apply_portal_clipboard_files(paths_copy)
+            self._apply_portal_clipboard_files(paths_copy, peer_ip=None)
 
-    def _apply_portal_clipboard_files(self, paths: List[Path]) -> None:
+    def _apply_portal_clipboard_files(
+        self, paths: List[Path], peer_ip: Optional[str] = None
+    ) -> None:
         """Безопасно с любого потока: выполнение на главном цикле Tk (pasteboard / win32)."""
         snap: List[Path] = []
         for p in paths:
@@ -5117,7 +5389,7 @@ class PortalApp(ctk.CTk):
 
         def _do():
             try:
-                self._apply_portal_clipboard_files_impl(snap)
+                self._apply_portal_clipboard_files_impl(snap, peer_ip=peer_ip)
             except Exception as e:
                 self.log(f"❌ Буфер (файлы): {e}")
 
@@ -5126,7 +5398,12 @@ class PortalApp(ctk.CTk):
         except Exception:
             _do()
 
-    def _apply_portal_clipboard_files_impl(self, paths: List[Path]) -> None:
+    def _apply_portal_clipboard_files_impl(
+        self, paths: List[Path], peer_ip: Optional[str] = None
+    ) -> None:
+        mode = portal_config.effective_portal_file_rfm(peer_ip)
+        if mode == "disk_only":
+            return
         paths = [p for p in paths if p.is_file()]
         if not paths:
             return
