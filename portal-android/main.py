@@ -35,7 +35,7 @@ except ImportError:
     send_file_to_peer = None  # type: ignore
     send_text_clipboard = None  # type: ignore
 
-from portal_json_framing import parse_first_json_object_bytes
+from portal_json_framing import parse_first_json_object_bytes, strip_leading_tcp_json_delimiter
 import portal_history
 
 try:
@@ -435,6 +435,8 @@ class ReceiveServer:
         filesize: int,
         already: bytes,
     ) -> None:
+        # TCP может отдать \\n после JSON отдельным пакетом — не писать его в файл.
+        already = strip_leading_tcp_json_delimiter(already)
         safe = _safe_filename(filename)
         ts = int(time.time())
         use_saf = bool(self.saf_tree_uri) and is_android_runtime() and kivy_platform == "android"

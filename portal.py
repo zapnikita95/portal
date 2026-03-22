@@ -45,7 +45,10 @@ import portal_config
 import portal_history
 import portal_i18n as i18n
 import portal_clipboard_rich as portal_clip_rich
-from portal_json_framing import parse_first_json_object_bytes
+from portal_json_framing import (
+    parse_first_json_object_bytes,
+    strip_leading_tcp_json_delimiter,
+)
 from portal_tk_compat import ensure_tkdnd_tk_misc_patch
 
 
@@ -4055,7 +4058,7 @@ class PortalApp(ctk.CTk):
                 filepath = receive_dir / f"{stem}_{int(time.time())}{suf}"
 
             remaining = filesize
-            chunk_buf = prefix
+            chunk_buf = strip_leading_tcp_json_delimiter(prefix)
             with open(filepath, "wb") as f:
                 while remaining > 0:
                     if chunk_buf:
@@ -4249,7 +4252,7 @@ class PortalApp(ctk.CTk):
             return
 
         saved: List[str] = []
-        buf = prefix
+        buf = strip_leading_tcp_json_delimiter(prefix)
         try:
             for spec in specs:
                 raw_name = spec.get("filename", "file")
@@ -4325,7 +4328,7 @@ class PortalApp(ctk.CTk):
             return
 
         out_path = receive_dir / f"portal_clipboard_{int(time.time() * 1000)}.png"
-        buf = prefix
+        buf = strip_leading_tcp_json_delimiter(prefix)
         try:
             with open(out_path, "wb") as f:
                 remaining = size

@@ -7,7 +7,12 @@ from __future__ import annotations
 import json
 from typing import Optional, Tuple
 
-__all__ = ("parse_first_json_object_bytes",)
+__all__ = ("parse_first_json_object_bytes", "strip_leading_tcp_json_delimiter")
+
+
+def strip_leading_tcp_json_delimiter(prefix: bytes) -> bytes:
+    """Копия ../portal_json_framing.py — см. докстринг там."""
+    return prefix.lstrip(b"\n\r")
 
 
 def parse_first_json_object_bytes(buf: bytes) -> Tuple[Optional[dict], int]:

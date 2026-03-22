@@ -75,7 +75,10 @@ def main() -> int:
 
     # 2) parse_first_json_object_bytes (portal_json_framing + re-export из portal)
     try:
-        from portal_json_framing import parse_first_json_object_bytes as _parse_framing
+        from portal_json_framing import (
+            parse_first_json_object_bytes as _parse_framing,
+            strip_leading_tcp_json_delimiter as _strip_tcp,
+        )
 
         buf = (
             json.dumps(
@@ -98,6 +101,8 @@ def main() -> int:
         obj2, n2 = _parse_framing(buf_nl)
         if not obj2 or obj2.get("filesize") != 3 or buf_nl[n2 : n2 + 2] != b"\xff\xd8":
             errors.append("parse_first_json_object_bytes: newline+binary")
+        if _strip_tcp(b"\r\nPK\x03\x04") != b"PK\x03\x04":
+            errors.append("strip_leading_tcp_json_delimiter: неверно")
         import portal as _portal_mod
 
         _parse_portal = getattr(_portal_mod, "parse_first_json_object_bytes", None)
