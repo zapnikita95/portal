@@ -25,7 +25,7 @@
 - 💿 **Сборка «как обычная программа»** (без `.command` / `.bat`): **[BUILD_DESKTOP.md](BUILD_DESKTOP.md)** — `pyinstaller -y pyinstaller_portal.spec` → **Windows:** `dist/Portal/Portal.exe`, **macOS:** `dist/Portal.app` (иконка из `portal_main.gif` (скрипт `generate_branding_icons.py`)). **В облаке:** GitHub Actions **Portal Desktop Build** (артефакты или релиз по тегу `v*`, см. BUILD_DESKTOP.md). **Как отдавать пользователям (ZIP / установщики):** [DISTRIBUTION.md](DISTRIBUTION.md).
 - 📜 **История передач** (SQLite `portal_history.sqlite3` рядом с `config.json`): кнопка «История» в шапке — фильтр, **переотправить** файл на те же IP, **копировать** путь или текст.
 - 🔎 **Найти локально** (фаза A): скан `/24` вокруг текущего IP — узлы с ответом Portal на `:12345`, добавление в список пиров.
-- 📱 **Мобильный клиент (Flutter)** — **основной** путь: [portal_flutter/README.md](portal_flutter/README.md). Сборки: **Portal Flutter Build** → релиз `portal-flutter-latest` (`Portal-Flutter.apk`). Kivy **Portal-Android.apk** (`portal-android-latest`) оставлен **legacy** (если нужна старая сборка).
+- 📱 **Мобильный клиент (Flutter)** — **основной** путь: [portal_flutter/README.md](portal_flutter/README.md). Сборки: **Portal Flutter Build** → релиз `portal-flutter-latest` (`Portal-Flutter.apk`). Kivy **Portal-Android.apk** (`portal-android-latest`) оставлен **legacy** (если нужна старая сборка). **iOS:** [portal_flutter/IOS_INSTALL.md](portal_flutter/IOS_INSTALL.md).
 - 🤖 **Android foreground service** (приём в фоне): [docs/ANDROID_FGS.md](docs/ANDROID_FGS.md).
 
 ## 📋 Требования

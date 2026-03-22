@@ -37,6 +37,18 @@ void portalBackgroundMain(ServiceInstance service) async {
         secret: st.secret,
         onEvent: (k, msg, p) async {
           service.invoke('log', {'t': msg});
+          if (Platform.isAndroid) {
+            final line =
+                msg.length > 96 ? '${msg.substring(0, 96)}…' : msg;
+            try {
+              // AndroidServiceInstance без импорта android-артефакта (iOS-сборка).
+              // ignore: avoid_dynamic_calls
+              (service as dynamic).setForegroundNotificationInfo(
+                title: 'Portal · приём',
+                content: line,
+              );
+            } catch (_) {}
+          }
         },
       );
     });

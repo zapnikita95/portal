@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:portal_flutter/data/settings_repository.dart';
+import 'package:portal_flutter/portal/protocol_client.dart';
 
 class PeersScreen extends StatefulWidget {
   const PeersScreen({super.key});
@@ -36,6 +37,25 @@ class _PeersScreenState extends State<PeersScreen> {
       ));
     }
     if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _ping(int index) async {
+    if (index < 0 || index >= _rows.length) return;
+    final r = _rows[index];
+    final ip = r.ip.text.trim();
+    if (ip.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Введи IP')),
+      );
+      return;
+    }
+    final st = await SettingsRepository.load();
+    final ok = await pingPortal(ip, secret: st.secret);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(ok ? 'Pong: $ip' : 'Нет ответа: $ip')),
+    );
   }
 
   Future<void> _save() async {
@@ -143,6 +163,11 @@ class _PeersScreenState extends State<PeersScreen> {
                             ),
                             const Text('Отправка на этот адрес'),
                             const Spacer(),
+                            IconButton(
+                              tooltip: 'Ping (pong с ПК)',
+                              onPressed: () => _ping(i),
+                              icon: const Icon(Icons.radar),
+                            ),
                             IconButton(
                               onPressed: () {
                                 setState(() {

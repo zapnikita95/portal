@@ -63,7 +63,7 @@ jobs:
           artifacts: portal_flutter/Portal-Flutter.apk
           allowUpdates: true
           replacesArtifacts: true
-          omitBodyDuringUpdate: true
+          omitBodyDuringUpdate: false
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/upload-artifact@v4
@@ -89,6 +89,10 @@ jobs:
           if [ ! -d ios ]; then
             flutter create . --project-name portal_flutter --org org.portal --platforms=ios
           fi
+
+      - name: Патч Info.plist (уведомления при приёме)
+        working-directory: portal_flutter
+        run: python3 tool/patch_ios_info_plist.py
 
       - name: Build iOS (без подписи — для локальной подписи / TestFlight)
         working-directory: portal_flutter

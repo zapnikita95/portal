@@ -3,9 +3,11 @@ import 'dart:io';
 import 'package:portal_flutter/config.dart';
 import 'package:portal_flutter/data/settings_repository.dart';
 import 'package:portal_flutter/portal/receive_session.dart';
+import 'package:portal_flutter/services/portal_notifications.dart';
 import 'package:portal_flutter/util/receive_paths.dart';
 
-/// Приём на iOS только пока приложение живёт (без долгого фона).
+/// Приём на iOS: TCP пока приложение на экране (процесс активен).
+/// В фоне iOS не держит произвольный TCP-сервер — см. IOS_INSTALL.md в репозитории.
 class IosReceiveRunner {
   static ServerSocket? _server;
 
@@ -23,7 +25,9 @@ class IosReceiveRunner {
         client,
         receiveDir: dir,
         secret: st.secret,
-        onEvent: (_, __, ___) async {},
+        onEvent: (_, msg, __) async {
+          await PortalNotifications.showReceiveLine(msg);
+        },
       );
     });
   }

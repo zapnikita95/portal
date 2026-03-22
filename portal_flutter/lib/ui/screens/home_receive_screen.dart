@@ -79,8 +79,9 @@ class _HomeReceiveScreenState extends State<HomeReceiveScreen> {
             const SizedBox(height: 8),
             Text(
               Platform.isIOS
-                  ? 'iOS: приём TCP :$portalPort только пока приложение активно.'
-                  : 'Android: foreground service держит приём в фоне.',
+                  ? 'iOS: приём :$portalPort, пока Portal на экране. Уведомление при каждом приёме. '
+                      'В фоне TCP недоступен (ограничение ОС) — для постоянного приёма используй Android.'
+                  : 'Android: foreground service держит приём в фоне; уведомление обновляется при каждом файле/тексте.',
               style: Theme.of(context).textTheme.bodyMedium,
             ),
             const SizedBox(height: 24),

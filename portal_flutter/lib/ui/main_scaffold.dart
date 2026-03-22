@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
+import 'package:portal_flutter/services/portal_service_controller.dart';
 
 import 'pending_share.dart';
 import 'screens/history_screen.dart';
@@ -18,14 +19,38 @@ class MainScaffold extends StatefulWidget {
   State<MainScaffold> createState() => _MainScaffoldState();
 }
 
-class _MainScaffoldState extends State<MainScaffold> {
+class _MainScaffoldState extends State<MainScaffold>
+    with WidgetsBindingObserver {
   int _index = 0;
   StreamSubscription<List<SharedMediaFile>>? _shareSub;
+  bool _iosResumeHintShown = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initShare();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state != AppLifecycleState.resumed) return;
+    if (!Platform.isIOS || !PortalServiceController.iosRunning) return;
+    if (_iosResumeHintShown || !mounted) return;
+    _iosResumeHintShown = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'iOS: для приёма с ПК держи Portal открытым на экране. '
+            'В фоне система обычно не принимает TCP.',
+          ),
+          duration: Duration(seconds: 6),
+        ),
+      );
+    });
   }
 
   Future<void> _initShare() async {
@@ -51,6 +76,7 @@ class _MainScaffoldState extends State<MainScaffold> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _shareSub?.cancel();
     super.dispose();
   }

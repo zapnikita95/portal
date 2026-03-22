@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:portal_flutter/services/portal_notifications.dart';
 import 'package:portal_flutter/services/portal_service_controller.dart';
 import 'package:portal_flutter/ui/main_scaffold.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await PortalNotifications.init();
   await PortalServiceController.initialize();
   runApp(const PortalApp());
 }
