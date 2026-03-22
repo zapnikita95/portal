@@ -1,5 +1,12 @@
 # Portal на iPhone / iPad
 
+## Пошаговая инструкция в Word
+
+Готовый файл: **`portal_flutter/docs/Portal_iOS_установка.docx`** (можно открыть в Microsoft Word / Pages).  
+Пересборка из исходников: из `portal_flutter` выполни `python3 tool/generate_ios_install_docx.py`.
+
+---
+
 ## TL;DR: что скачать и что делать
 
 | Платформа | Что «скачать» | Как поставить |

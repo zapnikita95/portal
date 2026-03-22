@@ -14,29 +14,28 @@ ROOT = Path("android/build.gradle")
 MARK_BEGIN = "// PORTAL_GRADLE_PATCH_BEGIN"
 MARK_END = "// PORTAL_GRADLE_PATCH_END"
 
+# Без subproject.afterEvaluate: в шаблоне Flutter есть evaluationDependsOn(':app'),
+# из‑за этого дочерние проекты уже «evaluated» → afterEvaluate падает на CI.
 ROOT_SNIPPET = f"""
 {MARK_BEGIN}
 subprojects {{ subproject ->
-    subproject.afterEvaluate {{
-        if (subproject.plugins.hasPlugin("com.android.application") ||
-                subproject.plugins.hasPlugin("com.android.library")) {{
-            subproject.android {{
-                compileSdkVersion 35
-                compileOptions {{
-                    sourceCompatibility JavaVersion.VERSION_17
-                    targetCompatibility JavaVersion.VERSION_17
-                }}
+    subproject.plugins.withId("com.android.library") {{
+        subproject.android {{
+            compileSdkVersion 35
+            compileOptions {{
+                sourceCompatibility JavaVersion.VERSION_17
+                targetCompatibility JavaVersion.VERSION_17
             }}
         }}
-        subproject.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {{
-            kotlinOptions {{
-                jvmTarget = "17"
-            }}
+    }}
+    subproject.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {{
+        kotlinOptions {{
+            jvmTarget = "17"
         }}
-        subproject.tasks.withType(JavaCompile).configureEach {{
-            sourceCompatibility = JavaVersion.VERSION_17
-            targetCompatibility = JavaVersion.VERSION_17
-        }}
+    }}
+    subproject.tasks.withType(JavaCompile).configureEach {{
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }}
 }}
 {MARK_END}
