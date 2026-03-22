@@ -13,7 +13,7 @@ import ssl
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 DEFAULT_WORKFLOW_FILE = "portal-android-apk.yml"
 
@@ -336,3 +336,82 @@ def dispatch_android_apk_workflow(
         return False, f"GitHub API {e.code}: {detail}"
     except Exception as e:
         return False, str(e)
+
+
+def fetch_latest_release_json(owner_repo: str) -> Tuple[Optional[dict], str]:
+    """GET /releases/latest — публичный репо без токена (лимит 60/час)."""
+    o, r = _split_owner_repo(owner_repo)
+    api = f"https://api.github.com/repos/{o}/{r}/releases/latest"
+    req = urllib.request.Request(api, method="GET")
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("X-GitHub-Api-Version", "2022-11-28")
+    req.add_header("User-Agent", "PortalDesktop/UpdateCheck")
+    try:
+        with _urlopen(req, timeout=45) as resp:
+            raw = resp.read().decode("utf-8")
+        data = json.loads(raw)
+        return (data if isinstance(data, dict) else None), ""
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None, "Релизов пока нет (404)."
+        try:
+            detail = e.read().decode("utf-8", errors="replace")[:400]
+        except Exception:
+            detail = str(e)
+        return None, f"GitHub API {e.code}: {detail}"
+    except Exception as e:
+        return None, str(e)
+
+
+def _parse_semver_tuple(s: str) -> Tuple[int, ...]:
+    t = (s or "").strip().lstrip("vV")
+    parts: List[int] = []
+    for chunk in t.split("."):
+        digits = "".join(c for c in chunk if c.isdigit())
+        parts.append(int(digits) if digits else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts[:4])
+
+
+def version_a_newer_than_b(tag_or_version_a: str, plain_b: str) -> bool:
+    """Сравнение v1.2.3 с 1.2.0."""
+    ta = _parse_semver_tuple(tag_or_version_a)
+    tb = _parse_semver_tuple(plain_b)
+    return ta > tb
+
+
+def pick_desktop_download_url(release: dict) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Предпочтение: Portal.dmg, затем Portal-macOS.zip, Portal-Windows.zip по платформе.
+    Возвращает (url, имя_файла).
+    """
+    import sys
+
+    assets = release.get("assets") or []
+    names_urls = [(str(a.get("name") or ""), str(a.get("browser_download_url") or "")) for a in assets]
+    names_urls = [(n, u) for n, u in names_urls if n and u]
+
+    def pick(*candidates: str) -> Tuple[Optional[str], Optional[str]]:
+        for want in candidates:
+            for n, u in names_urls:
+                if n == want:
+                    return u, n
+        return None, None
+
+    if sys.platform == "darwin":
+        u, n = pick("Portal.dmg", "Portal-macOS.zip")
+        if u:
+            return u, n
+    elif sys.platform == "win32":
+        u, n = pick("Portal-Windows.zip")
+        if u:
+            return u, n
+    # fallback: любой zip/dmg из релиза
+    for n, u in names_urls:
+        if n.endswith(".dmg") or n.endswith(".zip"):
+            return u, n
+    html = release.get("html_url")
+    if isinstance(html, str) and html.startswith("http"):
+        return html, "releases"
+    return None, None

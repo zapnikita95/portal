@@ -33,7 +33,13 @@
 - **Фокус в главном окне Portal** — **Tk bind_all** + на macOS дополнительно **физические keycode** (35/8/9 для P/C/V при Cmd+Ctrl), если русская раскладка не даёт сработать `<Command-Control-з>` и т.п.  
 - **Фокус в окне «Журнал»** (многострочное поле) — у `tkinter.Text` свои привязки **раньше**, чем тег `all`, поэтому раньше `bind_all` не срабатывал; в актуальной версии те же сочетания дублируются на внутренний `Text` журнала.  
 - **Русские з/с/м** — см. [коммит с раскладкой](https://github.com/zapnikita95/portal/commit/7dacbe6f70979c4fa8e6733a413120c14c61fd25).  
-  Опционально: `PORTAL_MAC_NSLOCAL_MONITOR=1` — экспериментальный NSEvent local (на Python **3.13** давал **краш** при хоткее в связке с Tk — по умолчанию **выкл**).
+  **Python 3.13+:** по умолчанию включён **NSEvent local monitor** (ловит Cmd+Ctrl по keycode внутри окна Portal, в т.ч. РУ раскладка). Отключить: `PORTAL_MAC_NSLOCAL_MONITOR=0`.
+
+### Порядок helper и конфликт с другими программами (Whisper и т.д.)
+
+- По умолчанию **сначала NSEvent global**, затем **CGEventTap** — так чаще стабильнее в Chrome при «занятом» CGEventTap другим приложением. Вернуть старый порядок: `PORTAL_MAC_HOTKEY_CG_FIRST=1`.
+- Доп. попытка tap: `PORTAL_MAC_HOTKEY_TRY_HID_TAP=1` (HID session вместо только session tap).
+- Два глобальных перехватчика (Portal + Whisper/pynput) могут мешать друг другу — см. `whisper/PORTAL_AND_WHISPER_MAC.md`: у Whisper задай сочетание **без ⌘** или останови клиент на время проверки Portal.
 
 ## Краш при нажатии хоткея (Python 3.13)
 

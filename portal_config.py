@@ -9,12 +9,49 @@ import os
 import re
 import sys
 import tempfile
+import time
 import secrets
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 # Алфавит без O/0/I/1 — проще диктовать и копировать
 _SHARED_SECRET_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+# Версия десктоп-сборки (PyInstaller CFBundleShortVersionString / проверка обновлений).
+# Поднимай вместе с pyinstaller_portal.spec → CFBundleShortVersionString.
+PORTAL_DESKTOP_VERSION = "1.0.0"
+
+_UPDATE_CHECK_INTERVAL_SEC = 86400 * 2  # не чаще раз в 2 суток авто-проверка
+
+
+def load_last_update_check_epoch() -> float:
+    try:
+        return float(_load_all().get("last_update_check_epoch") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def save_last_update_check_epoch(ts: Optional[float] = None) -> bool:
+    data = _load_all()
+    data["last_update_check_epoch"] = float(ts if ts is not None else time.time())
+    return _write_all(data)
+
+
+def load_dismissed_update_tag() -> str:
+    return str(_load_all().get("dismissed_update_tag") or "").strip()
+
+
+def save_dismissed_update_tag(tag: str) -> bool:
+    data = _load_all()
+    data["dismissed_update_tag"] = str(tag or "").strip()
+    return _write_all(data)
+
+
+def should_run_auto_update_check() -> bool:
+    if os.environ.get("PORTAL_SKIP_UPDATE_CHECK", "").strip().lower() in ("1", "true", "yes"):
+        return False
+    last = load_last_update_check_epoch()
+    return (time.time() - last) >= _UPDATE_CHECK_INTERVAL_SEC
 
 
 def config_path() -> Path:

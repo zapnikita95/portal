@@ -58,6 +58,7 @@ hiddenimports = [
     "portal_widget",
     "portal_tk_compat",
     "portal_github",
+    "portal_update_check",
     "certifi",
     "urllib",
     "ssl",

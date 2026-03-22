@@ -66,7 +66,8 @@ def _emit(c: str) -> None:
 
 def _match_hotkey(flags: int, keycode: int) -> str | None:
     """Вернуть 't'|'c'|'v' или None. flags — CG или NSEvent-подобная маска."""
-    f = int(flags)
+    # Только «чистые» модификаторы: Fn/Caps/secondary не ломают Cmd+Ctrl
+    f = int(flags) & (_NSCmd | _NSAlt | _NSShift | _NSCtrl)
     kc = int(keycode)
     if _is_legacy():
         if kc == _KEY_P and (f & _NSCmd) and (f & _NSAlt) and not (f & _NSShift):
@@ -178,6 +179,19 @@ def main_cg_event_tap() -> bool:
         callback,
         None,
     )
+    if not tap and os.environ.get("PORTAL_MAC_HOTKEY_TRY_HID_TAP", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        tap = Quartz.CGEventTapCreate(
+            Quartz.kCGHIDEventTap,
+            Quartz.kCGHeadInsertEventTap,
+            Quartz.kCGEventTapOptionListenOnly,
+            mask,
+            callback,
+            None,
+        )
     if not tap:
         print(
             "e CGEventTap не создан — это НЕ значит автоматически «ты не дал Мониторинг ввода». "
@@ -311,10 +325,21 @@ def main_pynput() -> None:
 def main() -> None:
     # В portal_hotkey_debug.log попадёт через stdout → out_reader родителя
     print(f"i hotkey-helper exe {_real_exe()}", flush=True)
-    if main_cg_event_tap():
-        return
-    if main_nsevent():
-        return
+    # Сначала NSEvent: при конфликте с другими CGEventTap (др. приложения) часто стабильнее для Chrome и т.д.
+    if os.environ.get("PORTAL_MAC_HOTKEY_CG_FIRST", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        if main_cg_event_tap():
+            return
+        if main_nsevent():
+            return
+    else:
+        if main_nsevent():
+            return
+        if main_cg_event_tap():
+            return
     # Python 3.13: pynput на Darwin ловит TypeError: ThreadHandle is not callable — не используем.
     if sys.version_info >= (3, 13) and sys.platform == "darwin":
         print(

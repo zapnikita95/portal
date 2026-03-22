@@ -1094,6 +1094,13 @@ class PortalApp(ctk.CTk):
         ).pack(side="left", padx=3)
         ctk.CTkButton(
             toolbar,
+            text=i18n.tr("toolbar.update"),
+            width=118,
+            command=self._check_portal_update_manual,
+            font=ctk.CTkFont(size=13),
+        ).pack(side="left", padx=3)
+        ctk.CTkButton(
+            toolbar,
             text=i18n.tr("toolbar.help"),
             width=40,
             command=self._open_help_window,
@@ -2161,6 +2168,14 @@ class PortalApp(ctk.CTk):
         if self._log_win is not None:
             self._log_win.deiconify()
             self._log_win.lift()
+
+    def _check_portal_update_manual(self) -> None:
+        try:
+            import portal_update_check
+
+            portal_update_check.manual_check_from_menu(self)
+        except Exception as e:
+            self.log(f"🔄 Обновления: {e}")
 
     def _open_help_window(self) -> None:
         if self._help_win is not None:
@@ -5843,6 +5858,12 @@ if __name__ == "__main__":
                 "📡 Под IP — блок «Статус связи»: зелёный = второй ПК отвечает как Портал; "
                 "серый/красный = там не запущен приём или неверный адрес."
             )
+            try:
+                import portal_update_check
+
+                app.after(12000, lambda: portal_update_check.maybe_notify_update_async(app))
+            except Exception:
+                pass
         except Exception as e:
             app.log(f"⚠️ Не удалось создать виджет: {str(e)}")
             import traceback

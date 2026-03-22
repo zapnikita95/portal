@@ -13,6 +13,7 @@ import 'screens/send_screen.dart';
 import 'screens/settings_screen.dart';
 import 'widgets/portal_tab_icons.dart';
 import 'portal_onboarding.dart';
+import 'package:portal_flutter/services/app_update_hint.dart';
 
 class MainScaffold extends StatefulWidget {
   const MainScaffold({super.key});
@@ -42,6 +43,10 @@ class _MainScaffoldState extends State<MainScaffold>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     if (state != AppLifecycleState.resumed) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      maybeShowUpdateHint(context);
+    });
     if (!Platform.isIOS || !PortalServiceController.iosRunning) return;
     if (_iosResumeHintShown || !mounted) return;
     _iosResumeHintShown = true;

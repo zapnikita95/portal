@@ -2122,10 +2122,12 @@ class GlobalHotkeyManager:
                     except Exception:
                         pass
 
-                if os.environ.get("PORTAL_MAC_NSLOCAL_MONITOR", "").strip().lower() in (
-                    "1",
-                    "true",
-                    "yes",
+                # Local NSEvent: Apple не шлёт global monitor в своё приложение — без этого только Tk (ломается на РУ).
+                if os.environ.get("PORTAL_MAC_NSLOCAL_MONITOR", "1").strip().lower() not in (
+                    "0",
+                    "false",
+                    "no",
+                    "off",
                 ):
                     try:
                         self.main_app.after(350, self._setup_nslocal_monitor)
@@ -2215,10 +2217,10 @@ class GlobalHotkeyManager:
         if len(ks) == 1 and ks.isascii() and ks.lower() in "pcv":
             return None
         st = int(getattr(event, "state", 0) or 0)
-        if not (st & 0x0004):
-            return None
-        rem = st & ~(0x0004 | 0x0001 | 0x0002)
-        if rem == 0:
+        # Tk/macOS: Control=0x4; Command часто 0x8, на части сборок — другие биты
+        ctrl = bool(st & 0x0004)
+        cmd = bool(st & 0x0008) or bool(st & 0x0100) or bool(st & 0x20000)
+        if not (ctrl and cmd):
             return None
         if kc == 35:
             self._log("Tk физ. клавиша (напр. РУ) → переключить виджет", "🔑")
@@ -2500,7 +2502,9 @@ class GlobalHotkeyManager:
                 mask = int(NSDeviceIndependentModifierFlagsMask)
             except Exception:
                 mask = self._NSMask
-            f = int(event.modifierFlags()) & mask
+            raw_f = int(event.modifierFlags()) & mask
+            # Только Cmd/Opt/Shift/Ctrl — иначе Fn/Caps ломают сравнение
+            f = raw_f & (CMD | ALT | SHIFT | CTRL)
             keycode = int(event.keyCode())
             legacy = os.environ.get("PORTAL_MAC_HOTKEY_LEGACY", "").strip().lower() in (
                 "1",

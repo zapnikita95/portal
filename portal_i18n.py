@@ -99,6 +99,11 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "toolbar.log": "📋 Журнал",
         "toolbar.history": "История",
         "toolbar.help": "❓",
+        "toolbar.update": "🔄 Обновление",
+        "update.dialog_title": "Доступна новая версия Portal",
+        "update.dialog_body": "Установлено: {current}\nНа GitHub: {new_tag}\nФайл: {asset}\n\nСкачай установщик и замени приложение (Mac: перетащи в «Программы»).",
+        "update.open_download": "Открыть загрузку",
+        "update.later": "Позже",
         "main.subtitle": "Передача файлов и общий буфер · пиры и папки — в ⚙ Настройки",
         "onboarding.title": "Быстрый старт",
         "onboarding.body": "• Установи Портал на каждом устройстве (ПК — из релизов GitHub, телефон — APK/IPA оттуда же).\n"
@@ -308,6 +313,11 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "toolbar.log": "📋 Log",
         "toolbar.history": "History",
         "toolbar.help": "❓",
+        "toolbar.update": "🔄 Update",
+        "update.dialog_title": "New Portal version available",
+        "update.dialog_body": "Installed: {current}\nOn GitHub: {new_tag}\nFile: {asset}\n\nDownload and replace the app (Mac: drag to Applications).",
+        "update.open_download": "Open download",
+        "update.later": "Later",
         "main.subtitle": "File transfer & shared clipboard · peers and folders in ⚙ Settings",
         "onboarding.title": "Quick start",
         "onboarding.body": "• Install Portal on each device (desktop builds from GitHub Releases; phone — APK/IPA there).\n"
