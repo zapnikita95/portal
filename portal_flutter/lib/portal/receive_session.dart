@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
@@ -15,6 +16,19 @@ String _safeName(String name) {
   return n.length > 180 ? n.substring(0, 180) : n;
 }
 
+/// Убрать ведущие \\n/\\r у тела файла (как portal_json_framing.strip_leading_tcp_json_delimiter).
+Uint8List _stripLeadingBodyNoise(Uint8List raw) {
+  var i = 0;
+  while (i < raw.length &&
+      (raw[i] == 9 || raw[i] == 10 || raw[i] == 13 || raw[i] == 32)) {
+    i++;
+  }
+  if (i == 0) return raw;
+  if (i >= raw.length) return Uint8List(0);
+  return Uint8List.sublistView(raw, i);
+}
+
+/// Один последовательный читатель сокета — нельзя многократно вешать `.first` на Socket.
 Future<void> handlePortalSocket(
   Socket socket, {
   required String receiveDir,
@@ -23,25 +37,33 @@ Future<void> handlePortalSocket(
       onEvent,
 }) async {
   final peer = socket.remoteAddress.address;
+  StreamIterator<List<int>>? it;
   try {
+    it = StreamIterator(socket.timeout(const Duration(seconds: 180)));
     final buf = BytesBuilder(copy: false);
     HeaderParseResult? hdr;
+
     while (hdr == null) {
-      final chunk = await socket.timeout(const Duration(seconds: 60)).first;
-      if (chunk.isEmpty) {
-        await socket.close();
+      bool more;
+      try {
+        more = await it.moveNext();
+      } catch (_) {
         return;
       }
+      if (!more) return;
+
+      final chunk = it.current;
+      if (chunk.isEmpty) continue;
+
       buf.add(chunk);
       if (buf.length > 262144) {
-        await socket.close();
         return;
       }
       hdr = parsePortalHeader(Uint8List.fromList(buf.toBytes()));
     }
 
-    final full = buf.toBytes();
-    final bodyStart = hdr.bodyStart;
+    final full = Uint8List.fromList(buf.toBytes());
+    var bodyStart = hdr.bodyStart;
     if (bodyStart > full.length) return;
 
     final h = hdr.header;
@@ -51,7 +73,6 @@ Future<void> handlePortalSocket(
         socket.add(utf8.encode(jsonEncode({'type': 'portal_auth_failed'})));
         await socket.flush();
       } catch (_) {}
-      await socket.close();
       return;
     }
 
@@ -61,7 +82,6 @@ Future<void> handlePortalSocket(
         socket.add(utf8.encode(jsonEncode({'type': 'pong'})));
         await socket.flush();
       } catch (_) {}
-      await socket.close();
       return;
     }
 
@@ -77,7 +97,6 @@ Future<void> handlePortalSocket(
         name: 'clipboard',
         snippet: text.length > 500 ? text.substring(0, 500) : text,
       );
-      await socket.close();
       return;
     }
 
@@ -85,24 +104,43 @@ Future<void> handlePortalSocket(
       final fname = _safeName((h['filename'] ?? 'file').toString());
       final filesize = int.tryParse((h['filesize'] ?? 0).toString()) ?? 0;
       if (filesize < 0) {
-        await socket.close();
         return;
       }
 
       await Directory(receiveDir).create(recursive: true);
-      final ts = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-      final outPath = p.join(receiveDir, '${ts}_$fname');
+      var outPath = p.join(receiveDir, fname);
+      if (await File(outPath).exists()) {
+        final stem = p.basenameWithoutExtension(fname);
+        final suf = p.extension(fname);
+        final ts = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+        outPath = p.join(receiveDir, '${stem}_$ts$suf');
+      }
+
       final sink = File(outPath).openWrite();
 
-      var got = full.length - bodyStart;
+      var body = _stripLeadingBodyNoise(
+        Uint8List.sublistView(full, bodyStart),
+      );
+      var got = 0;
+
       try {
-        if (got > 0) {
-          sink.add(full.sublist(bodyStart));
+        if (body.isNotEmpty) {
+          final take = math.min(body.length, filesize);
+          sink.add(body.sublist(0, take));
+          got = take;
         }
         while (got < filesize) {
-          final part = await socket.timeout(const Duration(seconds: 120)).first;
-          if (part.isEmpty) break;
-          final take = part.length > filesize - got ? filesize - got : part.length;
+          bool more;
+          try {
+            more = await it.moveNext();
+          } catch (_) {
+            break;
+          }
+          if (!more) break;
+          final part = it.current;
+          if (part.isEmpty) continue;
+          final need = filesize - got;
+          final take = part.length > need ? need : part.length;
           sink.add(part.sublist(0, take));
           got += take;
         }
@@ -113,7 +151,6 @@ Future<void> handlePortalSocket(
         try {
           await File(outPath).delete();
         } catch (_) {}
-        await socket.close();
         return;
       }
 
@@ -125,7 +162,6 @@ Future<void> handlePortalSocket(
         try {
           await File(outPath).delete();
         } catch (_) {}
-        await socket.close();
         return;
       }
 
@@ -138,7 +174,6 @@ Future<void> handlePortalSocket(
         try {
           await File(outPath).delete();
         } catch (_) {}
-        await socket.close();
         return;
       }
 
@@ -161,12 +196,14 @@ Future<void> handlePortalSocket(
         storedPath: outPath,
         filesize: filesize,
       );
-      await socket.close();
       return;
     }
-
-    await socket.close();
   } catch (_) {
+    // ignore
+  } finally {
+    try {
+      await it?.cancel();
+    } catch (_) {}
     try {
       await socket.close();
     } catch (_) {}

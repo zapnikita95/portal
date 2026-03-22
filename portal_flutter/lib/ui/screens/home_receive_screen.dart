@@ -4,7 +4,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:portal_flutter/config.dart';
+import 'package:portal_flutter/data/settings_repository.dart';
 import 'package:portal_flutter/services/portal_service_controller.dart';
+import 'package:portal_flutter/ui/widgets/portal_receive_animation.dart';
 
 class HomeReceiveScreen extends StatefulWidget {
   const HomeReceiveScreen({super.key});
@@ -13,31 +15,54 @@ class HomeReceiveScreen extends StatefulWidget {
   State<HomeReceiveScreen> createState() => _HomeReceiveScreenState();
 }
 
-class _HomeReceiveScreenState extends State<HomeReceiveScreen> {
+class _HomeReceiveScreenState extends State<HomeReceiveScreen>
+    with WidgetsBindingObserver {
   bool _on = false;
   bool _busy = false;
   String _log = '';
   StreamSubscription? _sub;
+  String _animPreset = 'pulse';
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _loadAnim();
     _refresh();
     if (Platform.isAndroid) {
-      _sub = FlutterBackgroundService().on('log').listen((Object? ev) {
-        if (!mounted) return;
-        if (ev is! Map) return;
-        final m = Map<String, dynamic>.from(ev);
-        final t = m['t'];
-        if (t != null) {
-          setState(() => _log = t.toString());
-        }
-      });
+      try {
+        _sub = FlutterBackgroundService().on('log').listen((Object? ev) {
+          if (!mounted) return;
+          if (ev is! Map) return;
+          final m = Map<String, dynamic>.from(ev);
+          final t = m['t'];
+          if (t != null) {
+            setState(() => _log = t.toString());
+          }
+        });
+      } catch (_) {
+        // Сервис ещё не поднят — не валим экран.
+      }
+    }
+  }
+
+  Future<void> _loadAnim() async {
+    final st = await SettingsRepository.load();
+    if (!mounted) return;
+    setState(() => _animPreset = st.portalAnimPreset);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _loadAnim();
+      _refresh();
     }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _sub?.cancel();
     super.dispose();
   }
@@ -62,6 +87,17 @@ class _HomeReceiveScreenState extends State<HomeReceiveScreen> {
         await PortalServiceController.stopReceiveForPlatform();
       }
       await _refresh();
+    } catch (e, _) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Не удалось ${v ? 'включить' : 'выключить'} приём: $e',
+            ),
+            duration: const Duration(seconds: 6),
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -75,17 +111,35 @@ class _HomeReceiveScreenState extends State<HomeReceiveScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Portal',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              Platform.isIOS
-                  ? 'iOS: приём :$portalPort, пока Portal на экране. Уведомление при каждом приёме. '
-                      'В фоне TCP недоступен (ограничение ОС) — для постоянного приёма используй Android.'
-                  : 'Android: foreground service держит приём в фоне; уведомление обновляется при каждом файле/тексте.',
-              style: Theme.of(context).textTheme.bodyMedium,
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Portal',
+                        style: Theme.of(context).textTheme.headlineMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        Platform.isIOS
+                            ? 'iOS: приём :$portalPort, пока Portal на экране. '
+                                'В фоне TCP недоступен — для постоянного приёма удобнее Android.'
+                            : 'Android: foreground service держит приём в фоне.',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                PortalReceiveAnimation(
+                  active: _on,
+                  preset: _animPreset,
+                  size: 100,
+                ),
+              ],
             ),
             const SizedBox(height: 24),
             SwitchListTile(

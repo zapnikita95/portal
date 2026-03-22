@@ -93,10 +93,9 @@ Future<(bool ok, String err)> sendFileToPeer(
     socket = await Socket.connect(h, port, timeout: const Duration(seconds: 30));
     socket.add(utf8.encode('${jsonEncode(hdr)}\n'));
     await socket.flush();
-    await for (final chunk in f.openRead()) {
-      socket.add(chunk);
-      await socket.flush();
-    }
+    // Цельный поток байт без flush на каждый chunk — меньше риска артефактов на приёме.
+    await socket.addStream(f.openRead());
+    await socket.flush();
     final resp = await socket.timeout(const Duration(seconds: 60)).first;
     final ok = utf8.decode(resp).startsWith('OK');
     return (ok, ok ? 'ok' : 'bad_response');

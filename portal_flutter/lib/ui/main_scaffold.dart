@@ -11,6 +11,7 @@ import 'screens/home_receive_screen.dart';
 import 'screens/peers_screen.dart';
 import 'screens/send_screen.dart';
 import 'screens/settings_screen.dart';
+import 'widgets/portal_tab_icons.dart';
 
 class MainScaffold extends StatefulWidget {
   const MainScaffold({super.key});
@@ -95,12 +96,62 @@ class _MainScaffoldState extends State<MainScaffold>
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.download), label: 'Приём'),
-          NavigationDestination(icon: Icon(Icons.people), label: 'Пиры'),
-          NavigationDestination(icon: Icon(Icons.upload), label: 'Отпр.'),
-          NavigationDestination(icon: Icon(Icons.history), label: 'История'),
-          NavigationDestination(icon: Icon(Icons.settings), label: 'Настр.'),
+        destinations: [
+          NavigationDestination(
+            icon: const PortalTabIcon(
+              kind: PortalTabKind.receive,
+              selected: false,
+            ),
+            selectedIcon: const PortalTabIcon(
+              kind: PortalTabKind.receive,
+              selected: true,
+            ),
+            label: 'Приём',
+          ),
+          NavigationDestination(
+            icon: const PortalTabIcon(
+              kind: PortalTabKind.peers,
+              selected: false,
+            ),
+            selectedIcon: const PortalTabIcon(
+              kind: PortalTabKind.peers,
+              selected: true,
+            ),
+            label: 'Пиры',
+          ),
+          NavigationDestination(
+            icon: const PortalTabIcon(
+              kind: PortalTabKind.send,
+              selected: false,
+            ),
+            selectedIcon: const PortalTabIcon(
+              kind: PortalTabKind.send,
+              selected: true,
+            ),
+            label: 'Отпр.',
+          ),
+          NavigationDestination(
+            icon: const PortalTabIcon(
+              kind: PortalTabKind.history,
+              selected: false,
+            ),
+            selectedIcon: const PortalTabIcon(
+              kind: PortalTabKind.history,
+              selected: true,
+            ),
+            label: 'История',
+          ),
+          NavigationDestination(
+            icon: const PortalTabIcon(
+              kind: PortalTabKind.settings,
+              selected: false,
+            ),
+            selectedIcon: const PortalTabIcon(
+              kind: PortalTabKind.settings,
+              selected: true,
+            ),
+            label: 'Настр.',
+          ),
         ],
       ),
     );

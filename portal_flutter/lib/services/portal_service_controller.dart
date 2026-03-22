@@ -71,4 +71,16 @@ class PortalServiceController {
       FlutterBackgroundService().invoke('reload');
     }
   }
+
+  /// После смены папки приёма / пароля: перезапустить сервис, если приём был включён.
+  static Future<void> reloadReceiveIfRunning() async {
+    if (Platform.isAndroid) {
+      await reloadAndroidReceive();
+      return;
+    }
+    if (Platform.isIOS && iosRunning) {
+      await stopIosReceive();
+      await startIosReceive();
+    }
+  }
 }

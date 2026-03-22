@@ -54,7 +54,15 @@ class _PeersScreenState extends State<PeersScreen> {
     final ok = await pingPortal(ip, secret: st.secret);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(ok ? 'Pong: $ip' : 'Нет ответа: $ip')),
+      SnackBar(
+        content: Text(
+          ok
+              ? 'Pong: $ip'
+              : 'Нет ответа: $ip. На ПК «Запустить портал», порт 12345, тот же пароль; '
+                  'файрвол / Tailscale.',
+        ),
+        duration: const Duration(seconds: 5),
+      ),
     );
   }
 
@@ -81,6 +89,7 @@ class _PeersScreenState extends State<PeersScreen> {
       peers: peers,
       secret: st.secret,
       receiveDir: st.receiveDir,
+      portalAnimPreset: st.portalAnimPreset,
     ));
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(

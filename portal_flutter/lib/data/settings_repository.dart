@@ -26,16 +26,21 @@ class PortalSettings {
     required this.peers,
     required this.secret,
     required this.receiveDir,
+    this.portalAnimPreset = 'pulse',
   });
 
   final List<PeerDto> peers;
   final String secret;
   final String receiveDir;
 
+  /// Пресет анимации на экране «Приём»: pulse | static | rings
+  final String portalAnimPreset;
+
   Map<String, dynamic> toJson() => {
         'peers': peers.map((e) => e.toJson()).toList(),
         'secret': secret,
         'receive_dir': receiveDir,
+        'portal_anim': portalAnimPreset,
       };
 
   static PortalSettings fromJson(Map<String, dynamic> m) {
@@ -52,11 +57,16 @@ class PortalSettings {
       peers: list,
       secret: (m['secret'] ?? '').toString(),
       receiveDir: (m['receive_dir'] ?? '').toString(),
+      portalAnimPreset: (m['portal_anim'] ?? 'pulse').toString(),
     );
   }
 
-  static PortalSettings empty() =>
-      PortalSettings(peers: [], secret: '', receiveDir: '');
+  static PortalSettings empty() => PortalSettings(
+        peers: [],
+        secret: '',
+        receiveDir: '',
+        portalAnimPreset: 'pulse',
+      );
 }
 
 class SettingsRepository {
