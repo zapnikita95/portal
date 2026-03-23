@@ -33,3 +33,30 @@ Future<String> resolveReceiveDir(String configured) async {
   }
   return sub.path;
 }
+
+/// Проверка, что в папку реально можно писать (SAF-путь с фона может не работать).
+Future<(bool ok, String err)> validateReceiveDirWritable(String configured) async {
+  final t = configured.trim();
+  if (t.isEmpty) return (true, '');
+  try {
+    final d = Directory(t);
+    await d.create(recursive: true);
+    final test = File(
+      p.join(
+        d.path,
+        '.portal_write_test_${DateTime.now().microsecondsSinceEpoch}',
+      ),
+    );
+    await test.writeAsString('ok', flush: true);
+    final ex = await test.exists();
+    try {
+      await test.delete();
+    } catch (_) {}
+    if (!ex) {
+      return (false, 'Не удалось создать тестовый файл в выбранной папке.');
+    }
+    return (true, '');
+  } catch (e) {
+    return (false, 'Папка недоступна для записи: $e');
+  }
+}

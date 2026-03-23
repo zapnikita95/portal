@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
@@ -12,6 +13,9 @@ class HistoryRepository {
     _db = await openDatabase(
       path,
       version: 1,
+      onConfigure: (db) async {
+        await db.rawQuery('PRAGMA journal_mode=WAL');
+      },
       onCreate: (db, v) async {
         await db.execute('''
 CREATE TABLE portal_events (
@@ -33,7 +37,7 @@ CREATE TABLE portal_events (
     return _db!;
   }
 
-  static Future<void> insert({
+  static Future<bool> insert({
     required String direction,
     required String kind,
     String peerIp = '',
@@ -58,7 +62,11 @@ CREATE TABLE portal_events (
         'route_json': routeJson,
         'filesize': filesize,
       });
-    } catch (_) {}
+      return true;
+    } catch (e, st) {
+      debugPrint('HistoryRepository.insert failed: $e\n$st');
+      return false;
+    }
   }
 
   static Future<List<Map<String, Object?>>> list({int limit = 150}) async {
@@ -83,7 +91,7 @@ CREATE TABLE portal_events (
   }
 
   /// Вызов из фонового изолята (отдельное открытие БД).
-  static Future<void> insertInBackground({
+  static Future<bool> insertInBackground({
     required String direction,
     required String kind,
     String peerIp = '',
@@ -94,7 +102,7 @@ CREATE TABLE portal_events (
     String routeJson = '',
     int? filesize,
   }) async {
-    await insert(
+    return insert(
       direction: direction,
       kind: kind,
       peerIp: peerIp,

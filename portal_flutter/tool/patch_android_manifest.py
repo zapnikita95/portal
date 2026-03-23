@@ -59,6 +59,15 @@ def main() -> None:
         if idx != -1:
             text = text[: idx + 1] + "\n" + insert + text[idx + 1 :]
 
+    # 2b. Старые API: запись в public Download/Portal (на 29+ — MediaStore в плагине).
+    if "WRITE_EXTERNAL_STORAGE" not in text and "android.permission.INTERNET" in text:
+        text = text.replace(
+            '<uses-permission android:name="android.permission.INTERNET"/>',
+            '<uses-permission android:name="android.permission.INTERNET"/>\n'
+            '    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>',
+            1,
+        )
+
     # 3. Добавить foregroundServiceType="dataSync" к сервису flutter_background_service.
     # Android 14+ (API 34) требует явного типа — без него FGS crash.
     def _patch_fgs_service_type(src: str) -> str:

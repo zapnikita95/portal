@@ -1,0 +1,19 @@
+name: portal_android_downloads
+description: Копия принятого файла в общие Загрузки/Portal (Android, MediaStore).
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+  flutter: ">=3.16.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: org.portal.portal_downloads
+        pluginClass: PortalAndroidDownloadsPlugin

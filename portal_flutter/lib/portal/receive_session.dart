@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
+import 'package:portal_android_downloads/portal_android_downloads.dart';
 import 'package:portal_flutter/data/history_repository.dart';
 
 import 'framing.dart';
@@ -218,20 +219,36 @@ Future<void> handlePortalSocket(
         socket.add(utf8.encode('OK'));
         await socket.flush();
       } catch (_) {}
-      final kb = (filesize / 1024).ceil().clamp(1, 1 << 30);
-      await onEvent(
-        'receive_file',
+
+      final kb = (stat / 1024).ceil().clamp(1, 1 << 30);
+      final parts = <String>[
         '[+] Файл от $peer: $fname ($kb КБ)',
-        outPath,
-      );
-      await HistoryRepository.insertInBackground(
+      ];
+      if (Platform.isAndroid) {
+        final okDl =
+            await PortalAndroidDownloads.copyToDownloadsPortal(outPath, fname);
+        if (okDl) {
+          parts.add('копия: Загрузки → Portal');
+        } else {
+          parts.add('в «Загрузки/Portal» не скопировалось (смотри папку приёма в настройках)');
+        }
+      }
+      final histOk = await HistoryRepository.insertInBackground(
         direction: 'receive',
         kind: 'file',
         peerIp: peer,
         peerLabel: peer,
         name: fname,
         storedPath: outPath,
-        filesize: filesize,
+        filesize: stat,
+      );
+      if (!histOk) {
+        parts.add('история не записалась (перезапусти приложение)');
+      }
+      await onEvent(
+        'receive_file',
+        parts.join(' · '),
+        outPath,
       );
       return;
     }

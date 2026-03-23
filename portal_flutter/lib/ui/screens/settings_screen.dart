@@ -1,8 +1,11 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:portal_flutter/data/settings_repository.dart';
 import 'package:portal_flutter/services/portal_service_controller.dart';
 import 'package:portal_flutter/ui/portal_onboarding.dart';
+import 'package:portal_flutter/util/receive_paths.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -54,6 +57,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _save() async {
+    final dir = _recvDir.text.trim();
+    if (Platform.isAndroid && dir.isNotEmpty) {
+      final v = await validateReceiveDirWritable(dir);
+      if (!v.$1) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Папка приёма: ${v.$2}\n'
+              'С фона Android часто нельзя писать в выбранную папку. '
+              'Оставь поле пустым — файл попадёт в приложение и копию в «Загрузки/Portal».',
+            ),
+            duration: const Duration(seconds: 10),
+          ),
+        );
+        return;
+      }
+    }
     final st = await SettingsRepository.load();
     await SettingsRepository.save(PortalSettings(
       peers: st.peers,
@@ -111,7 +132,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               labelText: 'Папка приёма',
               border: OutlineInputBorder(),
               helperText:
-                  'Пусто: Android — Android/data/…/files/PortalReceive; iOS — Documents/PortalReceive',
+                  'Пусто: приём в папку приложения + копия в «Загрузки/Portal» (Android). '
+                  'Своя папка: не всегда работает из фона — проверяется при сохранении.',
             ),
           ),
           const SizedBox(height: 8),
