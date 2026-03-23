@@ -65,6 +65,13 @@ void portalBackgroundMain(ServiceInstance service) async {
                 id: 904,
               );
             }
+            if (k == 'receive_fail' && Platform.isAndroid) {
+              await PortalNotifications.showAndroidAlert(
+                title: 'Portal · приём файла',
+                body: msg,
+                id: 905,
+              );
+            }
             if (Platform.isAndroid) {
               final line =
                   msg.length > 96 ? '${msg.substring(0, 96)}…' : msg;

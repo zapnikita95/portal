@@ -1,7 +1,7 @@
 name: portal_flutter
 description: Portal mobile client — замена Kivy (Android + iOS, один код).
 publish_to: "none"
-version: 1.0.17+18
+version: 1.0.18+19
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -42,3 +42,8 @@ flutter_launcher_icons:
   ios: true
   remove_alpha_ios: true
   image_path: assets/branding/portal_icon.png
+
+# Локальная копия: в апстриме setOngoing(true) — уведомление FGS нельзя смахнуть после приёма.
+dependency_overrides:
+  flutter_background_service_android:
+    path: packages/flutter_background_service_android

@@ -108,8 +108,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           TextField(
             controller: _recvDir,
             decoration: const InputDecoration(
-              labelText: 'Папка приёма (пусто = Documents/PortalReceive)',
+              labelText: 'Папка приёма',
               border: OutlineInputBorder(),
+              helperText:
+                  'Пусто: Android — Android/data/…/files/PortalReceive; iOS — Documents/PortalReceive',
             ),
           ),
           const SizedBox(height: 8),

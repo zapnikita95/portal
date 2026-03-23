@@ -120,7 +120,9 @@ Future<void> handlePortalSocket(
     }
 
     if (type == 'file') {
-      final fname = _safeName((h['filename'] ?? 'file').toString());
+      final rawFileLabel =
+          h['filename'] ?? h['name'] ?? h['file'] ?? 'file';
+      final fname = _safeName(rawFileLabel.toString());
       final filesize = int.tryParse((h['filesize'] ?? 0).toString()) ?? 0;
       if (filesize < 0) {
         return;
@@ -170,6 +172,11 @@ Future<void> handlePortalSocket(
         try {
           await File(outPath).delete();
         } catch (_) {}
+        await onEvent(
+          'receive_fail',
+          'Файл от $peer не сохранён: ошибка записи на диск.',
+          null,
+        );
         return;
       }
 
@@ -181,6 +188,12 @@ Future<void> handlePortalSocket(
         try {
           await File(outPath).delete();
         } catch (_) {}
+        await onEvent(
+          'receive_fail',
+          'Файл от $peer не сохранён: обрыв передачи ($got из $filesize байт). '
+              'Проверь Wi‑Fi / VPN и попробуй снова.',
+          null,
+        );
         return;
       }
 
@@ -193,6 +206,11 @@ Future<void> handlePortalSocket(
         try {
           await File(outPath).delete();
         } catch (_) {}
+        await onEvent(
+          'receive_fail',
+          'Файл от $peer не сохранён: размер на диске ($stat) не совпадает с заголовком ($filesize).',
+          null,
+        );
         return;
       }
 
