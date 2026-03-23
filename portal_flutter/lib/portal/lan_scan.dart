@@ -191,6 +191,33 @@ Future<List<String>> collectLocalIpv4Seeds() async {
   return seedsForScope(b, LanScanScope.all);
 }
 
+/// Сиды для LAN-скана с учётом режима вкладки.
+///
+/// Для **mesh** дополнительно подмешиваются сиды **Wi‑Fi / домашней LAN** (и подсказки),
+/// чтобы в одном проходе находить и 100.x, и 192.168.x — иначе iPhone без VPN в mesh-режиме
+/// вообще не попадал в перебор адресов.
+List<String> effectiveLanScanSeeds(
+  LanSeedBundle bundle,
+  LanScanScope scope, {
+  List<String> extraHints = const [],
+  List<String> manualWifiHints = const [],
+}) {
+  final primary = seedsForScope(
+    bundle,
+    scope,
+    extraHints: extraHints,
+    manualWifiHints: manualWifiHints,
+  );
+  if (scope != LanScanScope.tailscale) return primary;
+  final lanSide = seedsForScope(
+    bundle,
+    LanScanScope.wifi,
+    extraHints: extraHints,
+    manualWifiHints: manualWifiHints,
+  );
+  return {...primary, ...lanSide}.toList();
+}
+
 String? subnet24Prefix(String ip) {
   final p = ip.split('.');
   if (p.length != 4) return null;
@@ -201,7 +228,8 @@ String? subnet24Prefix(String ip) {
   return '${p[0]}.${p[1]}.${p[2]}';
 }
 
-/// Параллельный скан «третьего октета» (классический домашний сегмент .1–.254) для Portal (ping).
+/// Параллельный скан по IPv4-сегментам: для каждого известного префикса перебираются
+/// хосты `.1`–`.254` (типичный размер сегмента домашнего роутера).
 ///
 /// [peerHints] — IP из настроек пиров, используются как fallback-сиды если ОС
 /// не отдала Wi‑Fi IP (старый Android APK без ACCESS_WIFI_STATE).
@@ -219,7 +247,7 @@ Future<List<String>> scanLanForPortalHosts({
   final manualWifi = <String>[];
   final one = manualLanSeedIp.trim();
   if (one.isNotEmpty) manualWifi.add(one);
-  final seeds = seedsForScope(
+  final seeds = effectiveLanScanSeeds(
     bundle,
     scope,
     extraHints: peerHints,

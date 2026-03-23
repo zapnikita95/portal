@@ -40,9 +40,9 @@ Future<void> showPortalQuickStartSheet(BuildContext context) async {
               const SizedBox(height: 12),
               Text(
                 '• Установи Портал на компьютере и телефоне — сборки в релизах на GitHub.\n'
-                '• Задай один и тот же «пароль сети» в приложении и на ПК (config.json).\n'
+                '• Пароль: общий в «Настроить» или свой у каждого пира (как на ПК в config.json) — так можно не светить один пароль на все машины.\n'
                 '• Подключись по локальной сети или через mesh-VPN (Tailscale / NetBird / ZeroTier / Headscale).\n'
-                '• На вкладке «Пиры» выбери режим LAN-скана: Wi‑Fi (192.168.x) или mesh-VPN (100.x).\n'
+                '• LAN-скан: Wi‑Fi, mesh или «Все»; в mesh скан заодно обходит домашнюю LAN, если на телефоне есть её IP.\n'
                 '• Включи приём / фоновый сервис, добавь IP пира.\n\n'
                 'На iOS для приёма с ПК часто нужно держать приложение на экране — система режет фоновый TCP.',
                 style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(

@@ -232,8 +232,10 @@ class _PeersScreenState extends State<PeersScreen> {
               children: [
                 Text(
                   'Укажи IPv4 в нужной сети (как в «Настройки → Сеть» или адрес пира). '
-                  'По нему и другим известным адресам строятся диапазоны поиска (хосты .1–.254 '
-                  'в той же «третьей части» IPv4). Пусто — берём IP с интерфейсов ОС и из списка пиров.',
+                  'По каждому известному сегменту перебираются адреса .1–.254 (как у типичного роутера). '
+                  'Пусто — берём IP с интерфейсов ОС и из списка пиров.\n\n'
+                  'Режим mesh: в скан входят и 100.x (VPN), и домашняя Wi‑Fi/LAN, если на телефоне есть её адрес '
+                  'или ты указал подсказку / пира в 192.168…',
                   style: Theme.of(ctx).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 12),
@@ -278,7 +280,7 @@ class _PeersScreenState extends State<PeersScreen> {
 
     final manual = _lanSeed.text.trim();
     final bundle = await collectLanSeedBundle();
-    final seeds = seedsForScope(
+    final seeds = effectiveLanScanSeeds(
       bundle,
       _lanScope,
       extraHints: peerHints,
@@ -341,7 +343,8 @@ class _PeersScreenState extends State<PeersScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Никого не нашли. Wi‑Fi/mesh, ПК слушает :12345, пароль (общий или у пира) совпадает с ПК.',
+            'Никого не нашли. ПК/телефон слушают :12345, пароль совпадает с config.json; '
+            'на iPhone приём часто только с открытым приложением; mesh-режим теперь тоже обходит домашнюю LAN.',
           ),
           duration: Duration(seconds: 5),
         ),
@@ -409,9 +412,10 @@ class _PeersScreenState extends State<PeersScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Введи пароль как на ПК (config.json). Сохранится у каждого добавленного IP. '
-                  'Пусто — использовать только общий пароль из «Настроить». '
-                  'Разные пароли у разных машин можно задать потом в строке пира.',
+                  'Пароль с этого ПК/телефона (как в config.json). Сохранится у каждого выбранного IP — '
+                  'так можно дать доступ только к одной машине, не раскрывая пароли остальных.\n\n'
+                  'Оставь поле пустым и нажми «Только общий» — тогда сработает пароль из «Настроить» '
+                  '(удобно, но шаринг общего пароля открывает все пиры без своего поля).',
                   style: Theme.of(ctx).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 12),
@@ -431,6 +435,10 @@ class _PeersScreenState extends State<PeersScreen> {
               onPressed: () => Navigator.pop(ctx),
               child: const Text('Отмена'),
             ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, ''),
+              child: const Text('Только общий'),
+            ),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, c.text.trim()),
               child: const Text('Добавить'),
@@ -439,6 +447,7 @@ class _PeersScreenState extends State<PeersScreen> {
         );
       },
     );
+    // null = отмена; '' = только общий пароль из «Настроить».
     if (secretForNew == null || !mounted) return;
 
     final have = _rows.map((r) => r.ip.text.trim()).toSet();
@@ -530,7 +539,8 @@ class _PeersScreenState extends State<PeersScreen> {
                 const SizedBox(height: 6),
                 Text(
                   'Wi‑Fi — только пиры с типом «домашняя» или авто с LAN-IP. '
-                  'mesh — только mesh-VPN (100.64–127.x) или явно помеченные. '
+                  'mesh — в списке только mesh-VPN (100.64–127.x) или явно помеченные; '
+                  'кнопка «Найти в LAN» в mesh всё равно обходит и домашнюю LAN, и 100.x. '
                   '«Все» — весь список.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
@@ -615,20 +625,21 @@ class _PeersScreenState extends State<PeersScreen> {
                           ),
                           const SizedBox(height: 8),
                           TextField(
-                            controller: r.name,
+                            controller: r.peerSecret,
+                            obscureText: true,
                             decoration: const InputDecoration(
-                              labelText: 'Подпись',
+                              labelText: 'Пароль этого устройства (как на ПК)',
+                              helperText:
+                                  'Задаётся при добавлении пира или здесь. Пусто = общий из «Настроить»; '
+                                  'свой пароль изолирует доступ к этой машине.',
                               border: OutlineInputBorder(),
                             ),
                           ),
                           const SizedBox(height: 8),
                           TextField(
-                            controller: r.peerSecret,
-                            obscureText: true,
+                            controller: r.name,
                             decoration: const InputDecoration(
-                              labelText: 'Пароль этого Portal (необязательно)',
-                              helperText:
-                                  'Пусто = общий из «Настроить». Свой — если на этом ПК другой пароль.',
+                              labelText: 'Подпись',
                               border: OutlineInputBorder(),
                             ),
                           ),
