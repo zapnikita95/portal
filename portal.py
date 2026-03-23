@@ -2461,6 +2461,26 @@ class PortalApp(ctk.CTk):
             return
         path = (ev.get("stored_path") or "").strip()
         snip = (ev.get("snippet") or "").strip()
+        kind = (ev.get("kind") or "").strip()
+
+        # Запись о файле: в буфер нужен сам файл (Finder / вставка файла), а не строка пути.
+        if kind == "file":
+            if not path or not os.path.isfile(path):
+                self.log(i18n.tr("history.missing_file"))
+                return
+            try:
+                if set_system_clipboard_file_paths([path]):
+                    self.log(i18n.tr("history.copied_file"))
+                    return
+            except Exception:
+                pass
+            try:
+                pyperclip.copy(str(Path(path).resolve()))
+                self.log(i18n.tr("history.copied_path_fallback"))
+            except Exception as e:
+                self.log(str(e))
+            return
+
         if path:
             try:
                 pyperclip.copy(path)
