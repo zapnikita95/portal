@@ -11,6 +11,7 @@ class PortalNotifications {
   /// Канал обязан существовать до `FlutterBackgroundService.configure()` — иначе FGS:
   /// `RemoteServiceException: Bad notification for startForeground` (часто Huawei / Android 13+).
   static const String androidForegroundChannelId = 'portal_fg';
+  static const String _androidAlertsChannelId = 'portal_alerts';
 
   static final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
@@ -46,6 +47,15 @@ class PortalNotifications {
         showBadge: false,
       );
       await android?.createNotificationChannel(channel);
+      const alerts = AndroidNotificationChannel(
+        _androidAlertsChannelId,
+        'Важные уведомления Portal',
+        description: 'Ошибки пароля и другие предупреждения',
+        importance: Importance.high,
+        playSound: true,
+        enableVibration: true,
+      );
+      await android?.createNotificationChannel(alerts);
     }
 
     if (Platform.isIOS) {
@@ -54,6 +64,30 @@ class PortalNotifications {
               IOSFlutterLocalNotificationsPlugin>()
           ?.requestPermissions(alert: true, badge: true, sound: true);
     }
+  }
+
+  /// Заметное уведомление на Android (фоновый приём: нет диалога — только пуш).
+  static Future<void> showAndroidAlert({
+    required String title,
+    required String body,
+    int id = 903,
+  }) async {
+    if (!Platform.isAndroid) return;
+    final short = body.length > 350 ? '${body.substring(0, 350)}…' : body;
+    const det = AndroidNotificationDetails(
+      _androidAlertsChannelId,
+      'Важные',
+      channelDescription: 'Ошибки пароля и предупреждения',
+      importance: Importance.high,
+      priority: Priority.high,
+      ticker: 'Portal',
+    );
+    await _plugin.show(
+      id,
+      title,
+      short,
+      const NotificationDetails(android: det),
+    );
   }
 
   /// Показать строку о приёме (iOS; на Android — опционально из UI).

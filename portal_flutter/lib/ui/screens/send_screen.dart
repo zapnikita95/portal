@@ -20,6 +20,7 @@ class _SendScreenState extends State<SendScreen> {
   String? _filePath;
   bool _busy = false;
   String _status = '';
+  PortalSettings? _settingsSnap;
 
   @override
   void initState() {
@@ -29,6 +30,12 @@ class _SendScreenState extends State<SendScreen> {
     if (sh.isNotEmpty) {
       _filePath = sh.first;
     }
+    _reloadSettings();
+  }
+
+  Future<void> _reloadSettings() async {
+    final st = await SettingsRepository.load();
+    if (mounted) setState(() => _settingsSnap = st);
   }
 
   void _onShare() {
@@ -65,7 +72,8 @@ class _SendScreenState extends State<SendScreen> {
     }
     final tg = await _targets();
     if (tg.isEmpty) {
-      setState(() => _status = 'Нет получателей: пиры с галочкой или группа с «Отправка на группу»');
+      setState(() => _status =
+          'Нет получателей: пиры с галочкой или группа с «Отправка на группу»');
       return;
     }
     setState(() {
@@ -94,6 +102,7 @@ class _SendScreenState extends State<SendScreen> {
         filesize: await File(path).length(),
       );
     }
+    await _reloadSettings();
     if (mounted) {
       setState(() {
         _busy = false;
@@ -137,6 +146,7 @@ class _SendScreenState extends State<SendScreen> {
         routeJson: jsonEncode(ips),
       );
     }
+    await _reloadSettings();
     if (mounted) {
       setState(() {
         _busy = false;
@@ -145,8 +155,84 @@ class _SendScreenState extends State<SendScreen> {
     }
   }
 
+  Widget _buildTargetsCard(PortalSettings st) {
+    final tg = st.peersForSending();
+    final anyGroup = st.peerGroups.any((g) => g.sendToGroup);
+    if (tg.isEmpty) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Кому отправляем',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                anyGroup
+                    ? 'Нет пиров с IP из отмеченных групп (или группы пустые). '
+                        'Настрой в «Пиры».'
+                    : 'Нет пиров с галочкой «Отправка». Добавь адреса во вкладке «Пиры».',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    final groupNames = <String>{};
+    if (anyGroup) {
+      for (final g in st.peerGroups.where((x) => x.sendToGroup)) {
+        groupNames.add(g.name);
+      }
+    }
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(
+                  'Кому отправляем',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const Spacer(),
+                IconButton(
+                  tooltip: 'Обновить список',
+                  onPressed: _reloadSettings,
+                  icon: const Icon(Icons.refresh, size: 20),
+                ),
+              ],
+            ),
+            if (groupNames.isNotEmpty) ...[
+              Text(
+                'Группы: ${groupNames.join(', ')}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 8),
+            ],
+            ...tg.map(
+              (p) => ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.place_outlined, size: 22),
+                title: Text(p.name),
+                subtitle: Text(p.ip),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final st = _settingsSnap;
     return SafeArea(
       child: ListView(
         keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
@@ -154,6 +240,8 @@ class _SendScreenState extends State<SendScreen> {
         children: [
           Text('Отправить', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 12),
+          if (st != null) _buildTargetsCard(st) else const LinearProgressIndicator(),
+          const SizedBox(height: 16),
           ListTile(
             title: Text(_filePath ?? 'Файл не выбран'),
             subtitle: const Text('Из Share или кнопка ниже'),

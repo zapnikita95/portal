@@ -58,17 +58,6 @@ class _PeersScreenState extends State<PeersScreen> {
     }
   }
 
-  void _ensureDraftRowAtEnd() {
-    if (_rows.isEmpty) {
-      _rows.add(_newDraftRow());
-      return;
-    }
-    final last = _rows.last;
-    if (last.ip.text.trim().isNotEmpty) {
-      _rows.add(_newDraftRow());
-    }
-  }
-
   void _applyFromSettings(PortalSettings st) {
     _disposeRows();
     _disposeGroups();
@@ -81,7 +70,6 @@ class _PeersScreenState extends State<PeersScreen> {
         networkKind: p.networkKind,
       ));
     }
-    _ensureDraftRowAtEnd();
 
     _lanScope = lanScanScopeFromStorage(st.lanScanMode);
     _lanSeed.text = st.lanSeedHintIp;
@@ -90,7 +78,7 @@ class _PeersScreenState extends State<PeersScreen> {
       _groups.add(_GroupEdit(
         id: g.id.isNotEmpty ? g.id : _newId(),
         name: TextEditingController(text: g.name),
-        ipsCsv: TextEditingController(text: g.memberIps.join(', ')),
+        memberIps: List<String>.from(g.memberIps),
         sendToGroup: g.sendToGroup,
       ));
     }
@@ -147,12 +135,10 @@ class _PeersScreenState extends State<PeersScreen> {
     }
     final groups = <PeerGroupDto>[];
     for (final g in _groups) {
-      final raw = g.ipsCsv.text.split(RegExp(r'[,\s;]+'));
-      final ips = raw.map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
       groups.add(PeerGroupDto(
         id: g.id,
         name: g.name.text.trim().isEmpty ? 'Группа' : g.name.text.trim(),
-        memberIps: ips,
+        memberIps: List<String>.from(g.memberIps),
         sendToGroup: g.sendToGroup,
       ));
     }
@@ -412,7 +398,6 @@ class _PeersScreenState extends State<PeersScreen> {
       _rows.add(row);
       have.add(ip);
     }
-    _ensureDraftRowAtEnd();
     setState(() {});
     await _persist(showSnack: false);
     if (mounted) {
@@ -457,6 +442,7 @@ class _PeersScreenState extends State<PeersScreen> {
                   icon: const Icon(Icons.wifi_find),
                 ),
                 IconButton(
+                  tooltip: 'Добавить пира',
                   onPressed: () {
                     setState(() {
                       _rows.add(_newDraftRow());
@@ -518,12 +504,37 @@ class _PeersScreenState extends State<PeersScreen> {
                 const SizedBox(height: 12),
                 if (visible.isEmpty)
                   Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 24),
-                    child: Center(
-                      child: Text(
-                        'В этой вкладке нет пиров. Переключи Wi‑Fi / mesh / Все или добавь строку «+».',
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.bodyMedium,
+                    padding: const EdgeInsets.symmetric(vertical: 20),
+                    child: Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Column(
+                          children: [
+                            Icon(
+                              Icons.person_off_outlined,
+                              size: 40,
+                              color: Theme.of(context).colorScheme.outline,
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              _rows.isEmpty
+                                  ? 'Адресов пока нет'
+                                  : 'В этой вкладке нет пиров с IP',
+                              textAlign: TextAlign.center,
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              _rows.isEmpty
+                                  ? 'Нажми «+» (Добавить пира), введи IP и подпись, '
+                                      'затем «Сохранить».'
+                                  : 'Переключи Wi‑Fi / mesh / «Все» или добавь пира с IP '
+                                      'для этого режима.',
+                              textAlign: TextAlign.center,
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -598,7 +609,6 @@ class _PeersScreenState extends State<PeersScreen> {
                                   setState(() {
                                     _rows[i].dispose();
                                     _rows.removeAt(i);
-                                    _ensureDraftRowAtEnd();
                                   });
                                 },
                                 icon: const Icon(Icons.delete_outline),
@@ -624,7 +634,7 @@ class _PeersScreenState extends State<PeersScreen> {
                           _groups.add(_GroupEdit(
                             id: _newId(),
                             name: TextEditingController(text: 'Дом'),
-                            ipsCsv: TextEditingController(),
+                            memberIps: [],
                             sendToGroup: false,
                           ));
                         });
@@ -635,9 +645,18 @@ class _PeersScreenState extends State<PeersScreen> {
                   ],
                 ),
                 Text(
-                  'Если у группы включена «Отправка на группу», в «Отпр.» берутся только IP из отмеченных групп (и только те, что есть в списке пиров выше). Иначе — как раньше, по галочке у каждого пира.',
+                  'Если у группы включена «Отправка на группу», в «Отправить» берутся только IP из отмеченных групп (и только те, что есть в списке пиров выше). Иначе — по галочке у каждого пира.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
+                if (_groups.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    child: Text(
+                      'Групп пока нет. Нажми «Группа», выбери участников из списка пиров '
+                      '(сначала сохрани пиров с IP).',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ),
                 const SizedBox(height: 8),
                 ..._groups.map((g) {
                   return Card(
@@ -655,13 +674,18 @@ class _PeersScreenState extends State<PeersScreen> {
                             ),
                           ),
                           const SizedBox(height: 8),
-                          TextField(
-                            controller: g.ipsCsv,
-                            decoration: const InputDecoration(
-                              labelText: 'IP через запятую',
-                              border: OutlineInputBorder(),
-                              hintText: '100.1.2.3, 192.168.0.10',
-                            ),
+                          Text(
+                            'Участники (выбери IP из сохранённых пиров выше)',
+                            style: Theme.of(context).textTheme.labelLarge,
+                          ),
+                          const SizedBox(height: 6),
+                          _GroupMemberPicker(
+                            group: g,
+                            peerIps: _rows
+                                .map((r) => r.ip.text.trim())
+                                .where((s) => s.isNotEmpty)
+                                .toList(),
+                            onChanged: () => setState(() {}),
                           ),
                           CheckboxListTile(
                             contentPadding: EdgeInsets.zero,
@@ -719,16 +743,58 @@ class _GroupEdit {
   _GroupEdit({
     required this.id,
     required this.name,
-    required this.ipsCsv,
+    required List<String> memberIps,
     required this.sendToGroup,
-  });
+  }) : memberIps = List<String>.from(memberIps);
   final String id;
   final TextEditingController name;
-  final TextEditingController ipsCsv;
+  final List<String> memberIps;
   bool sendToGroup;
 
   void dispose() {
     name.dispose();
-    ipsCsv.dispose();
+  }
+}
+
+class _GroupMemberPicker extends StatelessWidget {
+  const _GroupMemberPicker({
+    required this.group,
+    required this.peerIps,
+    required this.onChanged,
+  });
+
+  final _GroupEdit group;
+  final List<String> peerIps;
+  final VoidCallback onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    if (peerIps.isEmpty) {
+      return Text(
+        'Нет IP в списке пиров — добавь и сохрани пиров, затем выбери участников.',
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.error,
+            ),
+      );
+    }
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: peerIps.map((ip) {
+        final sel = group.memberIps.contains(ip);
+        return FilterChip(
+          label: Text(ip),
+          selected: sel,
+          onSelected: (_) {
+            if (sel) {
+              group.memberIps.remove(ip);
+            } else {
+              group.memberIps.add(ip);
+            }
+            onChanged();
+          },
+        );
+      }).toList(),
+    );
   }
 }

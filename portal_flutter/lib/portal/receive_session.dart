@@ -9,11 +9,20 @@ import 'package:portal_flutter/data/history_repository.dart';
 
 import 'framing.dart';
 
+/// Сохраняем кириллицу и пробелы (Android нормально держит UTF‑8 имена).
+/// Раньше `[^\w]` превращал «тест снимок.png» в мусор вроде `__123.png`.
 String _safeName(String name) {
-  var n = p.basename(name.trim().isEmpty ? 'file' : name.trim());
-  n = n.replaceAll(RegExp(r'[^\w.\-]+', unicode: true), '_');
-  if (n.isEmpty || n.startsWith('.')) n = 'file_$n';
-  return n.length > 180 ? n.substring(0, 180) : n;
+  var n = name.trim().isEmpty ? 'file' : name.trim();
+  n = n.replaceAll('\\', '/');
+  final parts = n.split('/');
+  n = parts.isNotEmpty ? parts.last : n;
+  n = n.replaceAll(RegExp(r'[\x00\r\n]'), '');
+  n = n.replaceAll(RegExp(r'[<>:"|?*]'), '_');
+  n = n.trim();
+  if (n.isEmpty || n == '.' || n == '..') {
+    n = 'file_${DateTime.now().millisecondsSinceEpoch}';
+  }
+  return n.length > 200 ? n.substring(0, 200) : n;
 }
 
 /// Убрать ведущие \\n/\\r у тела файла (как portal_json_framing.strip_leading_tcp_json_delimiter).
@@ -73,6 +82,11 @@ Future<void> handlePortalSocket(
         socket.add(utf8.encode(jsonEncode({'type': 'portal_auth_failed'})));
         await socket.flush();
       } catch (_) {}
+      await onEvent(
+        'auth_failed',
+        'Отклонено: неверный пароль сети. На ПК и в приложении должен быть один и тот же пароль (config.json / Настройки).',
+        null,
+      );
       return;
     }
 

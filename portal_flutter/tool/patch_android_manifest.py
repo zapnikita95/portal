@@ -83,6 +83,9 @@ def main() -> None:
     # 4. Share sheet (receive_sharing_intent): без intent-filter Portal не в списке «Поделиться».
     text = _inject_portal_share_intent_filters(text)
 
+    # 5. Android 11+: url_launcher на https:// (релизы GitHub).
+    text = _inject_https_view_query(text)
+
     if text != orig:
         MANIFEST.write_text(text, encoding="utf-8")
         print("AndroidManifest.xml обновлён.")
@@ -145,6 +148,25 @@ def _inject_background_service_fgs_merge(src: str) -> str:
         print("WARN: <application> не найден — FGS merge для BackgroundService не добавлен.")
         return src
     return src[: m.end()] + "\n" + snippet + src[m.end() :]
+
+
+def _inject_https_view_query(src: str) -> str:
+    if "android.intent.action.VIEW" in src and 'android:scheme="https"' in src:
+        return src
+    marker = "<!-- PortalQueryHttps -->"
+    if marker in src:
+        return src
+    snippet = f"""
+        {marker}
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>"""
+    closing = "</queries>"
+    if closing not in src:
+        return src
+    idx = src.rfind(closing)
+    return src[:idx] + snippet + "\n    " + src[idx:]
 
 
 if __name__ == "__main__":

@@ -123,6 +123,39 @@ class _HomeReceiveScreenState extends State<HomeReceiveScreen>
   }
 
   Future<void> _toggle(bool v) async {
+    if (v) {
+      final st = await SettingsRepository.load();
+      if (st.secret.trim().isEmpty && mounted) {
+        final go = await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            icon: const Icon(Icons.warning_amber_rounded, size: 40),
+            title: const Text('Пароль сети не задан'),
+            content: const SingleChildScrollView(
+              child: Text(
+                'В настройках приложения поле «Пароль сети» пустое.\n\n'
+                'Если на компьютере в config.json указан пароль — приём будет '
+                'молча отклоняться (ПК считает соединение неавторизованным), '
+                'и отдельного уведомления может не быть.\n\n'
+                'Задай тот же пароль, что на ПК, или оставь пустым везде.',
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Отмена'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Всё равно включить приём'),
+              ),
+            ],
+          ),
+        );
+        if (go != true) return;
+      }
+    }
     setState(() => _busy = true);
     try {
       if (v) {

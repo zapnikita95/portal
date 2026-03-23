@@ -6,6 +6,7 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:portal_flutter/config.dart';
 import 'package:portal_flutter/data/settings_repository.dart';
 import 'package:portal_flutter/portal/receive_session.dart';
+import 'package:portal_flutter/services/portal_notifications.dart';
 import 'package:portal_flutter/util/receive_paths.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -57,6 +58,13 @@ void portalBackgroundMain(ServiceInstance service) async {
           secret: st.secret,
           onEvent: (k, msg, p) async {
             service.invoke('log', {'t': msg});
+            if (k == 'auth_failed' && Platform.isAndroid) {
+              await PortalNotifications.showAndroidAlert(
+                title: 'Portal · пароль сети',
+                body: msg,
+                id: 904,
+              );
+            }
             if (Platform.isAndroid) {
               final line =
                   msg.length > 96 ? '${msg.substring(0, 96)}…' : msg;

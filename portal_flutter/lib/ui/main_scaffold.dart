@@ -164,7 +164,7 @@ class _MainScaffoldState extends State<MainScaffold>
                 kind: PortalTabKind.send, selected: false),
             selectedIcon: PortalTabIcon(
                 kind: PortalTabKind.send, selected: true),
-            label: 'Отпр.',
+            label: 'Отправить',
           ),
           NavigationDestination(
             icon: PortalTabIcon(
@@ -178,7 +178,7 @@ class _MainScaffoldState extends State<MainScaffold>
                 kind: PortalTabKind.settings, selected: false),
             selectedIcon: PortalTabIcon(
                 kind: PortalTabKind.settings, selected: true),
-            label: 'Настр.',
+            label: 'Настроить',
           ),
         ],
       ),

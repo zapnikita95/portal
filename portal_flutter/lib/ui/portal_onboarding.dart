@@ -54,8 +54,32 @@ Future<void> showPortalQuickStartSheet(BuildContext context) async {
               FilledButton.icon(
                 onPressed: () async {
                   final uri = Uri.parse(kPortalReleasesUrl);
-                  if (await canLaunchUrl(uri)) {
-                    await launchUrl(uri, mode: LaunchMode.externalApplication);
+                  try {
+                    final ok = await launchUrl(
+                      uri,
+                      mode: LaunchMode.externalApplication,
+                    );
+                    if (!ok && ctx.mounted) {
+                      ScaffoldMessenger.of(ctx).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Браузер не открылся. Ссылка:\n$kPortalReleasesUrl',
+                          ),
+                          duration: const Duration(seconds: 12),
+                        ),
+                      );
+                    }
+                  } catch (e) {
+                    if (ctx.mounted) {
+                      ScaffoldMessenger.of(ctx).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Ошибка открытия: $e\n$kPortalReleasesUrl',
+                          ),
+                          duration: const Duration(seconds: 14),
+                        ),
+                      );
+                    }
                   }
                 },
                 icon: const Icon(Icons.download_outlined),

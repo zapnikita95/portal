@@ -92,7 +92,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         padding: const EdgeInsets.all(20),
         children: [
-          Text('Настройки', style: Theme.of(context).textTheme.titleLarge),
+          Text('Настроить', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 16),
           TextField(
             controller: _secret,

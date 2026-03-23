@@ -61,9 +61,9 @@ Future<void> maybeShowUpdateHint(BuildContext context) async {
         label: 'Релизы',
         onPressed: () async {
           final u = Uri.parse(kPortalReleasesUrl);
-          if (await canLaunchUrl(u)) {
+          try {
             await launchUrl(u, mode: LaunchMode.externalApplication);
-          }
+          } catch (_) {}
           await prefs.setString(_kDismissedTag, tag);
         },
       ),
