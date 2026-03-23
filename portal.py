@@ -494,6 +494,12 @@ def collect_lan_scan_seed_ips(primary_ip: Optional[str]) -> List[str]:
         ordered.append(s)
 
     add(primary_ip)
+    try:
+        mh = (portal_config.load_manual_mesh_ip_hint() or "").strip()
+        if mh and not mh.startswith("127."):
+            add(mh)
+    except Exception:
+        pass
 
     if sys.platform == "darwin":
         for iface in ("en0", "en1", "en2", "en3", "en4", "en5"):
@@ -566,6 +572,45 @@ def collect_lan_scan_seed_ips(primary_ip: Optional[str]) -> List[str]:
         add(ip)
 
     return ordered
+
+
+def _is_tailscale_cg_nat_ipv4(ip: str) -> bool:
+    p = (ip or "").strip().split(".")
+    if len(p) != 4:
+        return False
+    try:
+        a, b = int(p[0]), int(p[1])
+    except ValueError:
+        return False
+    return a == 100 and 64 <= b <= 127
+
+
+def _is_private_lan_ipv4(ip: str) -> bool:
+    p = (ip or "").strip().split(".")
+    if len(p) != 4:
+        return False
+    try:
+        a, b = int(p[0]), int(p[1])
+    except ValueError:
+        return False
+    if a == 10:
+        return True
+    if a == 172 and 16 <= b <= 31:
+        return True
+    if a == 192 and b == 168:
+        return True
+    return False
+
+
+def primary_lan_ipv4_for_ui(tailscale_primary: Optional[str]) -> Optional[str]:
+    """Первый частный LAN IPv4 (не Tailscale 100.64–127.x) — для подписи на главной."""
+    seeds = collect_lan_scan_seed_ips((tailscale_primary or "").strip() or None)
+    for ip in seeds:
+        if _is_tailscale_cg_nat_ipv4(ip):
+            continue
+        if _is_private_lan_ipv4(ip):
+            return ip
+    return None
 
 
 def scan_lan_subnet_for_portal_hosts(
@@ -1124,7 +1169,54 @@ class PortalApp(ctk.CTk):
             return local_ip
         except:
             return None
-    
+
+    def _refresh_main_connection_labels(self) -> None:
+        """Обновить подписи LAN / mesh на главной (и после сохранения ручного mesh)."""
+        if not hasattr(self, "_main_lan_label"):
+            return
+        try:
+            ts = self.get_tailscale_ip()
+            self.tailscale_ip = ts
+        except Exception:
+            ts = getattr(self, "tailscale_ip", None)
+        lan = primary_lan_ipv4_for_ui(ts)
+        manual = (portal_config.load_manual_mesh_ip_hint() or "").strip()
+        if manual:
+            mesh_txt = i18n.tr("main.ip_mesh_manual_row", ip=manual)
+        elif ts and _is_tailscale_cg_nat_ipv4(ts):
+            mesh_txt = i18n.tr("main.ip_mesh_auto_row", ip=ts)
+        elif ts:
+            mesh_txt = i18n.tr("main.ip_mesh_non_ts", ip=ts)
+        else:
+            mesh_txt = i18n.tr("main.ip_mesh_missing")
+
+        if lan:
+            self._main_lan_label.configure(
+                text=i18n.tr("main.ip_lan_row", ip=lan),
+                text_color=("gray10", "gray90"),
+            )
+        else:
+            self._main_lan_label.configure(
+                text=i18n.tr("main.ip_lan_missing"),
+                text_color="orange",
+            )
+        self._main_mesh_label.configure(
+            text=mesh_txt,
+            text_color=("gray10", "gray90"),
+        )
+
+    def _notify_settings_saved(self) -> None:
+        """Всплывающее подтверждение после сохранения настроек (виджет, геометрия и т.д.)."""
+        from tkinter import messagebox
+
+        try:
+            messagebox.showinfo(
+                i18n.tr("settings.generic_saved_title"),
+                i18n.tr("settings.generic_saved_ok"),
+            )
+        except Exception:
+            pass
+
     def create_ui(self):
         """Создание интерфейса: верхняя панель + главный скролл; настройки/APP/лог/справка — отдельные окна."""
         self.grid_columnconfigure(0, weight=1)
@@ -1239,34 +1331,40 @@ class PortalApp(ctk.CTk):
                 font=ctk.CTkFont(size=12),
             ).pack(side="left", padx=4)
         
-        # Информация о подключении
+        # Информация о подключении (LAN + mesh отдельно)
         info_frame = ctk.CTkFrame(main_frame)
         info_frame.pack(fill="x", padx=20, pady=10)
-        
-        if self.tailscale_ip:
-            if self.tailscale_ip.startswith("100."):
-                ip_label = ctk.CTkLabel(
-                    info_frame,
-                    text=i18n.tr("main.ip_tailscale", ip=self.tailscale_ip),
-                    font=ctk.CTkFont(size=12)
-                )
-                ip_label.pack(pady=10)
-            else:
-                ip_label = ctk.CTkLabel(
-                    info_frame,
-                    text=i18n.tr("main.ip_local", ip=self.tailscale_ip),
-                    font=ctk.CTkFont(size=12),
-                    text_color="orange"
-                )
-                ip_label.pack(pady=10)
-        else:
-            warning_label = ctk.CTkLabel(
-                info_frame,
-                text=i18n.tr("main.ip_unknown"),
-                font=ctk.CTkFont(size=12),
-                text_color="orange"
-            )
-            warning_label.pack(pady=10)
+        ctk.CTkLabel(
+            info_frame,
+            text=i18n.tr("main.conn_addresses_title"),
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", pady=(0, 4))
+        self._main_lan_label = ctk.CTkLabel(
+            info_frame,
+            text="",
+            font=ctk.CTkFont(size=12),
+            justify="left",
+            anchor="w",
+        )
+        self._main_lan_label.pack(anchor="w", pady=2)
+        self._main_mesh_label = ctk.CTkLabel(
+            info_frame,
+            text="",
+            font=ctk.CTkFont(size=12),
+            justify="left",
+            anchor="w",
+        )
+        self._main_mesh_label.pack(anchor="w", pady=2)
+        ctk.CTkLabel(
+            info_frame,
+            text=i18n.tr("main.conn_addresses_hint"),
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=720,
+            justify="left",
+            anchor="w",
+        ).pack(anchor="w", pady=(6, 0))
+        self._refresh_main_connection_labels()
         
         peer_frame = ctk.CTkFrame(main_frame)
         peer_frame.pack(fill="x", padx=20, pady=(0, 10))
@@ -1465,6 +1563,8 @@ class PortalApp(ctk.CTk):
     def _save_mdns_display_name_from_settings(self) -> None:
         if not hasattr(self, "mdns_display_entry"):
             return
+        from tkinter import messagebox
+
         raw = self.mdns_display_entry.get().strip()
         if portal_config.save_portal_mdns_display_name(raw):
             self.log(i18n.tr("settings.mdns_saved"))
@@ -1476,8 +1576,42 @@ class PortalApp(ctk.CTk):
                     portal_mdns.start_advertise(PORTAL_PORT)
             except Exception:
                 pass
+            try:
+                messagebox.showinfo(
+                    i18n.tr("settings.mdns_saved_title"),
+                    i18n.tr("settings.mdns_saved_dialog"),
+                )
+            except Exception:
+                pass
         else:
             self.log("⚠️ Не удалось сохранить имя устройства (mDNS)")
+
+    def _save_manual_mesh_from_settings(self) -> None:
+        if not hasattr(self, "mesh_manual_entry"):
+            return
+        from tkinter import messagebox
+
+        raw = self.mesh_manual_entry.get().strip()
+        if portal_config.save_manual_mesh_ip_hint(raw):
+            self._refresh_main_connection_labels()
+            if hasattr(self, "mesh_manual_feedback"):
+                self.mesh_manual_feedback.configure(
+                    text=i18n.tr("recv.mesh_saved_short"),
+                    text_color="#3dd68c",
+                )
+            try:
+                messagebox.showinfo(
+                    i18n.tr("recv.mesh_saved_title"),
+                    i18n.tr("recv.mesh_saved_body"),
+                )
+            except Exception:
+                pass
+        else:
+            if hasattr(self, "mesh_manual_feedback"):
+                self.mesh_manual_feedback.configure(
+                    text=i18n.tr("recv.mesh_save_fail"),
+                    text_color="#e74c3c",
+                )
 
     def _refresh_main_secret_banner_visibility(self) -> None:
         if not hasattr(self, "_main_secret_frame") or not hasattr(
@@ -1650,6 +1784,69 @@ class PortalApp(ctk.CTk):
         t_widget = tab.add(i18n.tr("settings.tab_widget"))
         t_peers = tab.add(i18n.tr("settings.tab_peers"))
         t_secret = tab.add(i18n.tr("settings.tab_secret"))
+
+        ctk.CTkLabel(
+            t_recv,
+            text=i18n.tr("recv.addresses_title"),
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=8, pady=(10, 4))
+        ctk.CTkLabel(
+            t_recv,
+            text=i18n.tr("recv.addresses_hint"),
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=680,
+            justify="left",
+        ).pack(anchor="w", padx=8, pady=(0, 6))
+        _ts_set = self.get_tailscale_ip()
+        _lan_set = primary_lan_ipv4_for_ui(_ts_set)
+        ctk.CTkLabel(
+            t_recv,
+            text=i18n.tr(
+                "recv.addresses_lan_line",
+                ip=_lan_set or "—",
+            ),
+            font=ctk.CTkFont(size=12),
+            anchor="w",
+        ).pack(anchor="w", padx=8, pady=(0, 2))
+        _mesh_manual = (portal_config.load_manual_mesh_ip_hint() or "").strip()
+        _mesh_show = _mesh_manual or (_ts_set or "").strip() or "—"
+        ctk.CTkLabel(
+            t_recv,
+            text=i18n.tr("recv.addresses_mesh_line", ip=_mesh_show),
+            font=ctk.CTkFont(size=12),
+            anchor="w",
+        ).pack(anchor="w", padx=8, pady=(0, 6))
+        mesh_edit_row = ctk.CTkFrame(t_recv, fg_color="transparent")
+        mesh_edit_row.pack(fill="x", padx=8, pady=(0, 10))
+        ctk.CTkLabel(
+            mesh_edit_row,
+            text=i18n.tr("recv.mesh_manual_label"),
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 8))
+        self.mesh_manual_entry = ctk.CTkEntry(
+            mesh_edit_row,
+            width=220,
+            placeholder_text=i18n.tr("recv.mesh_manual_ph"),
+            font=ctk.CTkFont(size=12),
+        )
+        self.mesh_manual_entry.pack(side="left", padx=(0, 8))
+        try:
+            self.mesh_manual_entry.insert(0, portal_config.load_manual_mesh_ip_hint())
+        except Exception:
+            pass
+        wire_ctk_entry_paste(self.mesh_manual_entry)
+        ctk.CTkButton(
+            mesh_edit_row,
+            text=i18n.tr("recv.save_mesh_hint"),
+            width=200,
+            command=self._save_manual_mesh_from_settings,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 8))
+        self.mesh_manual_feedback = ctk.CTkLabel(
+            mesh_edit_row, text="", font=ctk.CTkFont(size=11), text_color="gray"
+        )
+        self.mesh_manual_feedback.pack(side="left")
 
         ctk.CTkLabel(
             t_recv,
@@ -2561,7 +2758,8 @@ class PortalApp(ctk.CTk):
                 self._lan_win = None
         w = ctk.CTkToplevel(self)
         w.title(i18n.tr("lan.title"))
-        w.geometry("520x500")
+        w.geometry("700x580")
+        w.minsize(560, 440)
         try:
             w.transient(self)
         except Exception:
@@ -2569,22 +2767,36 @@ class PortalApp(ctk.CTk):
         self._lan_win = w
         ctk.CTkLabel(
             w,
-            text=i18n.tr("lan.mobile_receive_hint"),
-            wraplength=460,
+            text=i18n.tr("lan.scan_hint"),
+            wraplength=640,
             font=ctk.CTkFont(size=11),
             text_color="gray",
             justify="left",
         ).pack(anchor="w", padx=14, pady=(10, 0))
+        status_box = ctk.CTkFrame(w, fg_color="transparent")
+        status_box.pack(fill="x", padx=14, pady=(8, 4))
+        pb = ctk.CTkProgressBar(status_box, mode="indeterminate")
+        pb.pack(fill="x", pady=(0, 8))
+        pb.start()
         st = ctk.CTkLabel(
-            w,
-            text=i18n.tr("lan.scan_start", subnets=subnet_labels or "…"),
+            status_box,
+            text=i18n.tr("lan.scanning_detail", subnets=subnet_labels or "…"),
+            wraplength=640,
+            justify="left",
+            anchor="w",
+            font=ctk.CTkFont(size=11),
         )
-        st.pack(pady=8)
+        st.pack(anchor="w", fill="x")
         scroll = ctk.CTkScrollableFrame(w)
         scroll.pack(fill="both", expand=True, padx=10, pady=4)
         check_vars: Dict[str, tk.BooleanVar] = {}
 
         def finish(found_labels: Dict[str, str]) -> None:
+            try:
+                pb.stop()
+                pb.pack_forget()
+            except Exception:
+                pass
             st.configure(text=i18n.tr("lan.done", n=len(found_labels)))
             for ch in scroll.winfo_children():
                 ch.destroy()
@@ -2608,7 +2820,7 @@ class PortalApp(ctk.CTk):
             try:
                 import portal_mdns
 
-                mdns_map = dict(portal_mdns.browse_peers(timeout=2.6))
+                mdns_map = dict(portal_mdns.browse_peers(timeout=3.2))
             except Exception:
                 pass
             tcp_found = scan_lan_subnets_merged(
@@ -3979,6 +4191,7 @@ class PortalApp(ctk.CTk):
             return
         self.log("✅ Внешний вид портала сохранён")
         self.apply_widget_media_reload()
+        self._notify_settings_saved()
 
     def clear_widget_media_from_ui(self) -> None:
         fb = portal_config.default_widget_media_fallback_path()
@@ -4029,6 +4242,7 @@ class PortalApp(ctk.CTk):
         ):
             self.log("✅ Размер и положение виджета сохранены")
             self._apply_widget_geometry_live()
+            self._notify_settings_saved()
         else:
             self.log("⚠️ Не удалось записать настройки геометрии")
 
@@ -4047,6 +4261,7 @@ class PortalApp(ctk.CTk):
             self.log("⚠️ Не удалось сохранить цвет фона")
             return
         self.log("✅ Фон виджета (macOS) сохранён")
+        self._notify_settings_saved()
         w = getattr(self, "portal_widget_ref", None)
         if w is not None and hasattr(w, "apply_mac_panel_background"):
             try:

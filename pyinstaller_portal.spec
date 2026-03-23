@@ -36,6 +36,11 @@ try:
     datas += collect_data_files("certifi")
 except Exception:
     pass
+# zeroconf (mDNS) — иногда нужны данные пакета
+try:
+    datas += collect_data_files("zeroconf")
+except Exception:
+    pass
 
 binaries = []
 if sys.platform == "win32":
@@ -67,6 +72,8 @@ hiddenimports = [
     "tkinterdnd2",
     "portal_mac_hotkey_helper",
     "portal_mac_permissions",
+    "zeroconf",
+    "portal_mdns",
 ]
 
 if sys.platform == "win32":

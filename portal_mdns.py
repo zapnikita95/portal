@@ -1,7 +1,7 @@
 """
 mDNS (Bonjour / Zeroconf): объявление и поиск Portal в LAN (_portal._tcp).
 
-Нужен пакет: pip install zeroconf (см. requirements.txt).
+Для запуска из исходников: pip install -r requirements.txt (zeroconf). В Portal.exe / Portal.app зависимость уже в сборке.
 """
 from __future__ import annotations
 

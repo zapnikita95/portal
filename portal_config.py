@@ -111,6 +111,22 @@ def save_portal_mdns_display_name(name: str) -> bool:
     return _write_all(data)
 
 
+def load_manual_mesh_ip_hint() -> str:
+    """Подсказка mesh IP (100.x), если автоопределение Tailscale не сработало."""
+    data = _load_all()
+    return str(data.get("manual_mesh_ip_hint") or "").strip()[:45]
+
+
+def save_manual_mesh_ip_hint(ip: str) -> bool:
+    s = str(ip or "").strip()
+    data = _load_all()
+    if not s:
+        data.pop("manual_mesh_ip_hint", None)
+    else:
+        data["manual_mesh_ip_hint"] = s[:45]
+    return _write_all(data)
+
+
 def _load_all() -> Dict[str, Any]:
     p = config_path()
     if not p.exists():

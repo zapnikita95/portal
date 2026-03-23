@@ -27,6 +27,8 @@ class _HomeReceiveScreenState extends State<HomeReceiveScreen>
   String _animPreset = 'branding';
   Timer? _heartbeat;
   String _pcReachability = '—';
+  String _lanSelfIp = '—';
+  String _meshSelfIp = '—';
 
   @override
   void initState() {
@@ -125,8 +127,36 @@ class _HomeReceiveScreenState extends State<HomeReceiveScreen>
     }
   }
 
+  Future<void> _refreshLocalAddresses() async {
+    try {
+      final b = await collectLanSeedBundle();
+      var lan = (b.wifiIp ?? '').trim();
+      if (lan.isEmpty) {
+        for (final ip in b.allIpv4) {
+          if (isPrivateLanIpv4(ip) && !isTailscaleCgNatIpv4(ip)) {
+            lan = ip;
+            break;
+          }
+        }
+      }
+      String? mesh;
+      for (final ip in b.allIpv4) {
+        if (isTailscaleCgNatIpv4(ip)) {
+          mesh = ip;
+          break;
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _lanSelfIp = lan.isNotEmpty ? lan : '—';
+        _meshSelfIp = mesh ?? '—';
+      });
+    } catch (_) {}
+  }
+
   Future<void> _refreshAll() async {
     await _refreshLocalReceive();
+    await _refreshLocalAddresses();
     await _probePeersReachability();
   }
 
@@ -231,6 +261,20 @@ class _HomeReceiveScreenState extends State<HomeReceiveScreen>
                   size: 100,
                 ),
               ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Этот телефон',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'LAN: $_lanSelfIp',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            Text(
+              'mesh-VPN: $_meshSelfIp',
+              style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
             Text(
