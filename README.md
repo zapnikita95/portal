@@ -120,6 +120,33 @@
 
 Нужны Python 3.8+ и `pip install -r requirements.txt`. На macOS при ошибке `_tkinter` — `./fix.sh`. Запуск: `python3 portal.py` или `Portal.command` (виджет по умолчанию; `--no-widget` — без виджета).
 
+### Linux
+
+Да, **Портал рассчитан и на Linux** (окно + виджет, тот же Python-код, что на Windows/macOS). Сборка `.deb`/AppImage в релизах может не выкладываться — удобный путь **из репозитория**:
+
+```bash
+# Debian / Ubuntu — Tkinter и типичные зависимости
+sudo apt update
+sudo apt install -y python3-pip python3-tk python3-venv
+
+# Чтобы в буфер попадали именно файлы (история «Копировать», приём «в буфер»):
+#   X11:  sudo apt install -y xclip
+#   Wayland (GNOME/KDE): sudo apt install -y wl-clipboard
+```
+
+```bash
+cd portal   # корень клона репозитория
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python3 portal.py              # с виджетом
+python3 portal.py --no-widget  # только главное окно
+```
+
+Конфиг и история: **`~/.config/portal/`** (`config.json`, `portal_history.sqlite3`).
+
+**Горячие клавиши** (`Ctrl+Alt+P` и т.д.) зависят от `keyboard` / `pynput`; на части дистрибутивов нужны права на устройство ввода (или запуск в среде, где глобальный хоткей разрешён). Если хоткеи молчат — пользуйся кнопками в окне; приём/отправка по сети **не** зависят от хоткеев.
+
 ## 📖 Использование
 
 ### Запуск портала

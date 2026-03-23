@@ -209,6 +209,49 @@ def set_system_clipboard_png(png_bytes: bytes) -> bool:
     return False
 
 
+def _linux_clipboard_uri_list_from_paths(resolved_paths: List[str]) -> bool:
+    """Linux: «скопированные файлы» через MIME text/uri-list (wl-copy / xclip).
+
+    Wayland: пакет wl-clipboard (`wl-copy`). X11: `xclip`. Без них — False (fallback на путь текстом).
+    """
+    if not resolved_paths:
+        return False
+    # freedesktop.org: text/uri-list, строки с \r\n
+    uris = "\r\n".join(Path(p).as_uri() for p in resolved_paths) + "\r\n"
+    payload = uris.encode("utf-8")
+
+    # Сессия Wayland
+    if os.environ.get("WAYLAND_DISPLAY"):
+        try:
+            r = subprocess.run(
+                ["wl-copy", "--type", "text/uri-list"],
+                input=payload,
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+            if r.returncode == 0:
+                return True
+        except (FileNotFoundError, subprocess.SubprocessError, OSError):
+            pass
+
+    # X11 (и часто XWayland)
+    try:
+        r = subprocess.run(
+            ["xclip", "-selection", "clipboard", "-t", "text/uri-list"],
+            input=payload,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        if r.returncode == 0:
+            return True
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        pass
+
+    return False
+
+
 def set_system_clipboard_file_paths(paths: List[str]) -> bool:
     """Один или несколько файлов в буфере как «скопированные файлы»."""
     clean = [str(Path(p).resolve()) for p in paths if p and Path(p).is_file()]
@@ -253,6 +296,8 @@ def set_system_clipboard_file_paths(paths: List[str]) -> bool:
             finally:
                 win32clipboard.CloseClipboard()
             return True
+        if platform.system() == "Linux":
+            return _linux_clipboard_uri_list_from_paths(clean)
     except Exception:
         pass
     return False
@@ -5404,13 +5449,23 @@ class PortalApp(ctk.CTk):
             mode = portal_config.load_peer_receive_clipboard_mode_ui(peer_ip)
             msg = ""
             if mode in ("clipboard", "both"):
-                # macOS: сначала NSPasteboard (NSURL) в процессе приложения — надёжнее для Finder, чем osascript
-                if platform.system() == "Darwin" and set_system_clipboard_file_paths(paths):
-                    msg = (
-                        f"файлы в буфере ({len(paths)} шт.) — в Finder: открой нужную папку, "
-                        "кликни в список файлов, Cmd+V. "
-                        "(Cmd+Ctrl+V у Портала = «забрать буфер с пира», не вставка; legacy: Cmd+Shift+V.)"
-                    )
+                # macOS / Windows / Linux (xclip, wl-copy): нативные «файлы в буфере»
+                if set_system_clipboard_file_paths(paths):
+                    sysn = platform.system()
+                    if sysn == "Darwin":
+                        msg = (
+                            f"файлы в буфере ({len(paths)} шт.) — в Finder: открой нужную папку, "
+                            "кликни в список файлов, Cmd+V. "
+                            "(Cmd+Ctrl+V у Портала = «забрать буфер с пира», не вставка; legacy: Cmd+Shift+V.)"
+                        )
+                    elif sysn == "Linux":
+                        msg = i18n.tr("recv.incoming.files_clipboard_linux").format(
+                            n=len(paths)
+                        )
+                    else:
+                        msg = i18n.tr("recv.incoming.files_clipboard_generic").format(
+                            n=len(paths)
+                        )
                 else:
                     msg = portal_clip_rich.apply_clipboard_payload(
                         "files", file_paths=paths
@@ -5531,7 +5586,7 @@ class PortalApp(ctk.CTk):
             )
         else:
             self._log_from_thread(
-                "📋 Не удалось положить файлы в буфер ОС (CF_HDROP) — открой папку приёма"
+                i18n.tr("log.clipboard_files_os_fail")
             )
             try:
                 pyperclip.copy("\n".join(paths_str))
