@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:portal_flutter/config.dart';
 import 'package:portal_flutter/data/settings_repository.dart';
+import 'package:portal_flutter/portal/portal_receive_mdns.dart';
 import 'package:portal_flutter/portal/portal_secrets.dart';
 import 'package:portal_flutter/portal/receive_session.dart';
 import 'package:portal_flutter/services/portal_notifications.dart';
@@ -38,9 +39,11 @@ class IosReceiveRunner {
         },
       );
     });
+    await PortalReceiveMdns.start(mdnsDisplayName: st.mdnsDisplayName);
   }
 
   static Future<void> stop() async {
+    await PortalReceiveMdns.stop();
     try {
       await _server?.close();
     } catch (_) {}

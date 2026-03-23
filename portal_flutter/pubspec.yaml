@@ -1,7 +1,7 @@
 name: portal_flutter
 description: Portal mobile client — замена Kivy (Android + iOS, один код).
 publish_to: "none"
-version: 1.0.24+25
+version: 1.0.25+26
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -26,6 +26,7 @@ dependencies:
   portal_android_downloads:
     path: packages/portal_android_downloads
   multicast_dns: ^0.3.3
+  bonsoir: ^6.0.2
 
 dev_dependencies:
   flutter_test:

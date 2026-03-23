@@ -16,6 +16,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final _secret = TextEditingController();
+  final _mdnsDisplay = TextEditingController();
   final _recvDir = TextEditingController();
   bool _loading = true;
   String _animPreset = 'pulse';
@@ -36,6 +37,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _load() async {
     final st = await SettingsRepository.load();
     _secret.text = st.secret;
+    _mdnsDisplay.text = st.mdnsDisplayName;
     _recvDir.text = st.receiveDir;
     final a = st.portalAnimPreset.trim().toLowerCase();
     _animPreset = _animLabels.containsKey(a) ? a : 'branding';
@@ -84,6 +86,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       peerGroups: st.peerGroups,
       lanScanMode: st.lanScanMode,
       lanSeedHintIp: st.lanSeedHintIp,
+      mdnsDisplayName: _mdnsDisplay.text.trim(),
     ));
     await PortalServiceController.reloadReceiveIfRunning();
     if (!mounted) return;
@@ -99,6 +102,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void dispose() {
     _secret.dispose();
+    _mdnsDisplay.dispose();
     _recvDir.dispose();
     super.dispose();
   }
@@ -126,6 +130,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   'Приём принимает любой из заданных паролей.',
             ),
             obscureText: true,
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _mdnsDisplay,
+            decoration: const InputDecoration(
+              labelText: 'Имя телефона в LAN (mDNS)',
+              border: OutlineInputBorder(),
+              helperText:
+                  'Видно другим в «Найти в LAN», пока включён приём. Пусто — «Portal-iPhone» / «Portal-Android». '
+                  'Тот же смысл, что «Имя в LAN» на ПК (config.json: portal_mdns_display_name).',
+            ),
           ),
           const SizedBox(height: 16),
           TextField(

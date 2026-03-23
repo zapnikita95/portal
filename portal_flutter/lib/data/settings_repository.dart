@@ -88,6 +88,7 @@ class PortalSettings {
     this.peerGroups = const [],
     this.lanScanMode = 'wifi',
     this.lanSeedHintIp = '',
+    this.mdnsDisplayName = '',
   });
 
   final List<PeerDto> peers;
@@ -105,6 +106,9 @@ class PortalSettings {
   /// Подсказка для LAN-скана: IP телефона в Wi‑Fi (как в настройках сети).
   final String lanSeedHintIp;
 
+  /// Имя в LAN для mDNS (как `portal_mdns_display_name` на ПК). Пусто — подставится «Portal-iPhone» / «Portal-Android».
+  final String mdnsDisplayName;
+
   Map<String, dynamic> toJson() => {
         'peers': peers.map((e) => e.toJson()).toList(),
         'secret': secret,
@@ -113,6 +117,7 @@ class PortalSettings {
         'peer_groups': peerGroups.map((e) => e.toJson()).toList(),
         'lan_scan_mode': lanScanMode,
         'lan_seed_hint_ip': lanSeedHintIp,
+        'portal_mdns_display_name': mdnsDisplayName,
       };
 
   static PortalSettings fromJson(Map<String, dynamic> m) {
@@ -142,6 +147,7 @@ class PortalSettings {
       peerGroups: groups,
       lanScanMode: (m['lan_scan_mode'] ?? 'wifi').toString(),
       lanSeedHintIp: (m['lan_seed_hint_ip'] ?? '').toString(),
+      mdnsDisplayName: (m['portal_mdns_display_name'] ?? '').toString(),
     );
   }
 
@@ -153,6 +159,7 @@ class PortalSettings {
         peerGroups: [],
         lanScanMode: 'wifi',
         lanSeedHintIp: '',
+        mdnsDisplayName: '',
       );
 
   /// Кому слать: если у хотя бы одной группы sendToGroup — только IP из отмеченных групп (пересечение с peers).

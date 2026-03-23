@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:portal_flutter/config.dart';
 import 'package:portal_flutter/data/settings_repository.dart';
+import 'package:portal_flutter/portal/portal_receive_mdns.dart';
 import 'package:portal_flutter/portal/portal_secrets.dart';
 import 'package:portal_flutter/portal/receive_session.dart';
 import 'package:portal_flutter/services/portal_notifications.dart';
@@ -19,6 +20,7 @@ void portalBackgroundMain(ServiceInstance service) async {
   ServerSocket? server;
 
   Future<void> startServer() async {
+    await PortalReceiveMdns.stop();
     try {
       await server?.close();
     } catch (_) {}
@@ -93,6 +95,16 @@ void portalBackgroundMain(ServiceInstance service) async {
       },
       cancelOnError: false,
     );
+    final mdnsOk =
+        await PortalReceiveMdns.start(mdnsDisplayName: st.mdnsDisplayName);
+    if (mdnsOk) {
+      service.invoke('log', {'t': 'mDNS: объявляю Portal в LAN (как на ПК)'});
+    } else {
+      service.invoke('log', {
+        't': 'mDNS объявление недоступно (изолят/ОС) — приём :$portalPort работает; '
+            'искать этот телефон по IP или TCP-скану.',
+      });
+    }
   }
 
   try {
@@ -109,6 +121,7 @@ void portalBackgroundMain(ServiceInstance service) async {
   }
 
   service.on('stopIt').listen((_) async {
+    await PortalReceiveMdns.stop();
     try {
       await server?.close();
     } catch (_) {}

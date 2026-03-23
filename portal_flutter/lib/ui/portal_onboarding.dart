@@ -42,7 +42,7 @@ Future<void> showPortalQuickStartSheet(BuildContext context) async {
                 '• Установи Портал на компьютере и телефоне — сборки в релизах на GitHub.\n'
                 '• Пароль: общий в «Настроить» или свой у каждого пира (как на ПК в config.json) — так можно не светить один пароль на все машины.\n'
                 '• Подключись по локальной сети или через mesh-VPN (Tailscale / NetBird / ZeroTier / Headscale).\n'
-                '• «Найти в LAN»: mDNS (имена как на ПК) + TCP-скан; Wi‑Fi / mesh / «Все».\n'
+                '• «Найти в LAN»: mDNS + TCP-скан; пока включён приём, телефон тоже объявляется в mDNS (имя в «Настроить»).\n'
                 '• Включи приём / фоновый сервис, добавь IP пира.\n\n'
                 'На iOS для приёма с ПК часто нужно держать приложение на экране — система режет фоновый TCP.',
                 style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(

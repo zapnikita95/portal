@@ -155,6 +155,7 @@ class _PeersScreenState extends State<PeersScreen> {
       peerGroups: groups,
       lanScanMode: lanScanScopeStorageValue(_lanScope),
       lanSeedHintIp: _lanSeed.text.trim(),
+      mdnsDisplayName: base.mdnsDisplayName,
     );
   }
 
