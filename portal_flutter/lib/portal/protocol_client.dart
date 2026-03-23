@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -10,6 +11,32 @@ Map<String, dynamic> _withSecret(Map<String, dynamic> msg, String secret) {
   final s = secret.trim();
   if (s.isEmpty) return msg;
   return {...msg, 'secret': s};
+}
+
+/// Читает короткий ответ сервера (OK / ERR / portal_auth_failed) с таймаутом простоя.
+Future<(bool ok, String err)> _readPortalTcpAck(Socket socket) async {
+  final buf = BytesBuilder(copy: false);
+  try {
+    await for (final chunk in socket.timeout(const Duration(seconds: 60))) {
+      buf.add(chunk);
+      if (buf.length > 1024) {
+        return (false, 'bad_response');
+      }
+      final s = utf8.decode(buf.toBytes(), allowMalformed: true);
+      if (s.contains('portal_auth_failed')) {
+        return (false, 'auth');
+      }
+      if (s.startsWith('OK')) {
+        return (true, 'ok');
+      }
+      if (s.startsWith('ERR')) {
+        return (false, 'bad_response');
+      }
+    }
+  } on TimeoutException {
+    return (false, 'no_response');
+  }
+  return (false, 'no_response');
 }
 
 /// Пробует секреты по очереди, пока один не даст pong (для скана LAN / mesh).
@@ -134,11 +161,16 @@ Future<(bool ok, String err)> sendFileToPeer(
       secret,
     );
     socket = await Socket.connect(h, port, timeout: const Duration(seconds: 30));
-    // Не addStream(): на Android возможен другой порядок flush → битый JPEG на ПК.
+    // Не addStream(): на части сборок возможен рассинхрон с filesize (любой бинарник).
+    // JPEG/PDF/DOCX — одни и те же байты; отдельной логики по типу файла не нужно.
     socket.add(utf8.encode('${jsonEncode(hdr)}\n'));
     const maxMem = 48 * 1024 * 1024;
     if (len <= maxMem) {
-      socket.add(await f.readAsBytes());
+      final bytes = await f.readAsBytes();
+      if (bytes.length != len) {
+        return (false, 'size_changed');
+      }
+      socket.add(bytes);
     } else {
       var sent = 0;
       await for (final chunk in f.openRead(65536)) {
@@ -150,17 +182,7 @@ Future<(bool ok, String err)> sendFileToPeer(
       }
     }
     await socket.flush();
-    try {
-      final resp = await socket.timeout(const Duration(seconds: 120)).first;
-      final s = utf8.decode(resp);
-      if (s.contains('portal_auth_failed')) {
-        return (false, 'auth');
-      }
-      final ok = s.startsWith('OK');
-      return (ok, ok ? 'ok' : 'bad_response');
-    } catch (_) {
-      return (false, 'no_response');
-    }
+    return _readPortalTcpAck(socket);
   } catch (e) {
     return (false, e.toString());
   } finally {

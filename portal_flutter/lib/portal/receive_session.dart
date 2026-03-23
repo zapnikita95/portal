@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
@@ -142,18 +141,29 @@ Future<void> handlePortalSocket(
 
       final sink = File(outPath).openWrite();
 
-      var body = _stripLeadingBodyNoise(
+      // Остаток первого чанка + хвосты TCP: нельзя отрезать байты за пределами need —
+      // иначе теряется кусок файла и размер/содержимое не сходятся.
+      Uint8List? pend = _stripLeadingBodyNoise(
         Uint8List.sublistView(full, bodyStart),
       );
+      var pendOff = 0;
       var got = 0;
 
       try {
-        if (body.isNotEmpty) {
-          final take = math.min(body.length, filesize);
-          sink.add(body.sublist(0, take));
-          got = take;
-        }
         while (got < filesize) {
+          final need = filesize - got;
+          if (pend != null && pendOff < pend.length) {
+            final avail = pend.length - pendOff;
+            final take = avail < need ? avail : need;
+            sink.add(pend.sublist(pendOff, pendOff + take));
+            pendOff += take;
+            got += take;
+            if (pendOff >= pend.length) {
+              pend = null;
+              pendOff = 0;
+            }
+            continue;
+          }
           bool more;
           try {
             more = await it.moveNext();
@@ -163,10 +173,8 @@ Future<void> handlePortalSocket(
           if (!more) break;
           final part = it.current;
           if (part.isEmpty) continue;
-          final need = filesize - got;
-          final take = part.length > need ? need : part.length;
-          sink.add(part.sublist(0, take));
-          got += take;
+          pend = Uint8List.fromList(part);
+          pendOff = 0;
         }
         await sink.flush();
         await sink.close();

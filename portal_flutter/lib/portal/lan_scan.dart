@@ -240,7 +240,7 @@ Future<List<String>> scanLanForPortalHosts({
 
   /// IP из настроек Wi‑Fi телефона (или прошлый сохранённый) — усиливает скан домашней /24.
   String manualLanSeedIp = '',
-  Duration connectTimeout = const Duration(milliseconds: 900),
+  Duration connectTimeout = const Duration(milliseconds: 1400),
   int workers = 48,
 }) async {
   final bundle = await collectLanSeedBundle();

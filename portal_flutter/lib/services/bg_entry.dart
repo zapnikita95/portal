@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/widgets.dart';
+import 'package:path/path.dart' as p;
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:portal_flutter/config.dart';
 import 'package:portal_flutter/data/settings_repository.dart';
@@ -30,6 +31,22 @@ void portalBackgroundMain(ServiceInstance service) async {
     String dir;
     try {
       dir = await resolveReceiveDir(st.receiveDir);
+      // С фона Android запись в выбранный пользователем путь часто падает, хотя в UI проверка прошла.
+      if (Platform.isAndroid && st.receiveDir.trim().isNotEmpty) {
+        try {
+          final probe = File(
+            p.join(dir, '.portal_bg_write_${DateTime.now().microsecondsSinceEpoch}'),
+          );
+          await probe.writeAsString('1', flush: true);
+          await probe.delete();
+        } catch (_) {
+          final fallback = await resolveReceiveDir('');
+          service.invoke('log', {
+            't': 'Папка из настроек недоступна из фона — пишу в приложение и копию в «Загрузки/Portal».',
+          });
+          dir = fallback;
+        }
+      }
     } catch (e) {
       service.invoke('log', {
         't': 'Папка приёма: $e — проверь настройки.',

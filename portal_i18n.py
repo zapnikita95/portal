@@ -105,13 +105,6 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "update.open_download": "Открыть загрузку",
         "update.later": "Позже",
         "main.subtitle": "Передача файлов и общий буфер · пиры и папки — в ⚙ Настройки",
-        "onboarding.title": "Быстрый старт",
-        "onboarding.body": "• Установи Портал на каждом устройстве (ПК — из релизов GitHub, телефон — APK/IPA оттуда же).\n"
-        "• Задай один и тот же «пароль сети» на всех своих устройствах.\n"
-        "• Подключись по локальной сети — или через mesh-VPN (Tailscale / NetBird / ZeroTier / Headscale).\n"
-        "• Нажми «Запустить портал», добавь IP пира вручную или «Найти локально» (mDNS + скан подсети).",
-        "onboarding.open_releases": "Открыть релизы (скачать)",
-        "onboarding.dismiss": "Скрыть навсегда",
         "main.ip_tailscale": "📍 IP mesh-VPN: {ip}",
         "main.ip_local": "📍 Локальный IP: {ip} (mesh-VPN / 100.x не найден)",
         "main.ip_unknown": "⚠️ IP адрес не определен",
@@ -254,7 +247,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "log.clipboard_push_generic_n": "📤 Буфер → {n} устр.",
         "log.clipboard_files_os_fail": "📋 Не удалось положить файлы в буфер ОС — открой папку приёма. Linux: sudo apt install xclip или wl-clipboard; Windows: CF_HDROP; macOS: см. лог.",
         "peers.list_title": "Список пиров (один IP на строку или «IP Имя»):",
-        "peers.rows_intro": "Каждая строка — отдельный пир: IP, подпись, тип сети (LAN / mesh-VPN / авто). Сохрани список — на главной появятся галочки пиров и групп.",
+        "peers.rows_intro": "Каждая строка — отдельный пир: IP, подпись, тип сети (LAN / mesh-VPN / авто). Сохрани список — на главной появятся галочки пиров и групп. Пароль для входящих на этот ПК один — вкладка «Пароль» (тот же кладётся в JSON при отправке с телефона в поле secret).",
         "peers.add_ip_row": "➕ Строка IP",
         "peers.name_ph": "Подпись",
         "peers.net_auto": "Сеть: авто",
@@ -384,13 +377,6 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "update.open_download": "Open download",
         "update.later": "Later",
         "main.subtitle": "File transfer & shared clipboard · peers and folders in ⚙ Settings",
-        "onboarding.title": "Quick start",
-        "onboarding.body": "• Install Portal on each device (desktop builds from GitHub Releases; phone — APK/IPA there).\n"
-        "• Use the same network password on all your devices.\n"
-        "• Use local Wi‑Fi — or mesh-VPN (Tailscale / NetBird / ZeroTier / Headscale).\n"
-        "• Tap Start Portal, add peer IPs manually or Find on LAN (mDNS + subnet scan).",
-        "onboarding.open_releases": "Open releases (download)",
-        "onboarding.dismiss": "Dismiss forever",
         "main.ip_tailscale": "📍 mesh-VPN IP: {ip}",
         "main.ip_local": "📍 Local IP: {ip} (no mesh-VPN / 100.x found)",
         "main.ip_unknown": "⚠️ IP address not detected",
@@ -533,7 +519,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "log.clipboard_push_generic_n": "📤 Clipboard → {n} peer(s)",
         "log.clipboard_files_os_fail": "📋 Could not put files on the system clipboard — open the receive folder. Linux: install xclip or wl-clipboard; Windows: CF_HDROP; see README.",
         "peers.list_title": "Peer list (one IP per line or “IP Name”):",
-        "peers.rows_intro": "Each row is one peer: IP, label, network type (LAN / mesh-VPN / auto). Save — checkboxes for peers and groups appear on the main screen.",
+        "peers.rows_intro": "Each row is one peer: IP, label, network type (LAN / mesh-VPN / auto). Save — checkboxes for peers and groups appear on the main screen. Incoming auth on this PC uses one password — Password tab (same value mobile clients put in the secret field).",
         "peers.add_ip_row": "➕ IP row",
         "peers.name_ph": "Label",
         "peers.net_auto": "Net: auto",

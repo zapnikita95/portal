@@ -1286,51 +1286,6 @@ class PortalApp(ctk.CTk):
             text_color="gray",
         ).pack(pady=(10, 14))
 
-        if not portal_config.load_onboarding_v1_dismissed():
-            import portal_github
-
-            rel_url = portal_github.all_releases_page_url(portal_config.load_github_repo())
-
-            def _dismiss_onboarding(frame: ctk.CTkFrame) -> None:
-                portal_config.save_onboarding_v1_dismissed(True)
-                try:
-                    frame.destroy()
-                except Exception:
-                    pass
-
-            ob = ctk.CTkFrame(main_frame, fg_color=("gray20", "gray90"))
-            ob.pack(fill="x", padx=12, pady=(0, 12))
-            ctk.CTkLabel(
-                ob,
-                text=i18n.tr("onboarding.title"),
-                font=ctk.CTkFont(size=14, weight="bold"),
-            ).pack(anchor="w", padx=12, pady=(10, 4))
-            ctk.CTkLabel(
-                ob,
-                text=i18n.tr("onboarding.body"),
-                font=ctk.CTkFont(size=12),
-                justify="left",
-                anchor="w",
-            ).pack(anchor="w", padx=12, pady=(0, 8))
-            ob_btn = ctk.CTkFrame(ob, fg_color="transparent")
-            ob_btn.pack(fill="x", padx=8, pady=(0, 10))
-            ctk.CTkButton(
-                ob_btn,
-                text=i18n.tr("onboarding.open_releases"),
-                width=200,
-                command=lambda u=rel_url: webbrowser.open(u),
-                font=ctk.CTkFont(size=12),
-            ).pack(side="left", padx=4)
-            ctk.CTkButton(
-                ob_btn,
-                text=i18n.tr("onboarding.dismiss"),
-                width=140,
-                fg_color="transparent",
-                border_width=1,
-                command=lambda fr=ob: _dismiss_onboarding(fr),
-                font=ctk.CTkFont(size=12),
-            ).pack(side="left", padx=4)
-        
         # Информация о подключении (LAN + mesh отдельно)
         info_frame = ctk.CTkFrame(main_frame)
         info_frame.pack(fill="x", padx=20, pady=10)
@@ -2307,19 +2262,20 @@ class PortalApp(ctk.CTk):
             wraplength=720,
             justify="left",
         ).pack(anchor="w", padx=8, pady=(0, 4))
-        self._peer_groups_scroll = ctk.CTkScrollableFrame(
-            t_peers, height=240, fg_color="transparent"
-        )
-        self._peer_groups_scroll.pack(fill="both", expand=True, padx=8, pady=(0, 6))
+        # Кнопку «Добавить группу» выше списка — иначе на узком окне она уезжает под предел скролла вкладки.
         grp_btn_row = ctk.CTkFrame(t_peers, fg_color="transparent")
-        grp_btn_row.pack(fill="x", padx=8, pady=(0, 8))
+        grp_btn_row.pack(fill="x", padx=8, pady=(0, 6))
         ctk.CTkButton(
             grp_btn_row,
             text=i18n.tr("peers.add_group_row"),
-            width=140,
+            width=160,
             command=self._add_peer_group_settings_row_ui,
             font=ctk.CTkFont(size=12),
         ).pack(side="left")
+        self._peer_groups_scroll = ctk.CTkScrollableFrame(
+            t_peers, height=220, fg_color="transparent"
+        )
+        self._peer_groups_scroll.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         self._peer_group_checkbox_vars: Dict[str, Any] = {}
         self._reload_peer_settings_from_config()
 
@@ -4591,7 +4547,8 @@ class PortalApp(ctk.CTk):
                     try:
                         if hasattr(w, "clear_transient_portal_media"):
                             w.clear_transient_portal_media()
-                        if not was_visible:
+                        # После приёма файла закрываем виджет всегда (в т.ч. если открыт хоткеем).
+                        if ev == "receive_file" or not was_visible:
                             try:
                                 if w.is_visible():
                                     w.hide()

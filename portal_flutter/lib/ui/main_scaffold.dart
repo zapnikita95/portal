@@ -26,10 +26,20 @@ class _MainScaffoldState extends State<MainScaffold>
   int _index = 0;
   StreamSubscription<List<SharedMediaFile>>? _shareSub;
   bool _iosResumeHintShown = false;
+  late final List<Widget> _pages;
 
   @override
   void initState() {
     super.initState();
+    _pages = [
+      const HomeReceiveScreen(),
+      const PeersScreen(),
+      SendScreen(
+        onOpenSettings: () => setState(() => _index = 4),
+      ),
+      const HistoryScreen(),
+      const SettingsScreen(),
+    ];
     WidgetsBinding.instance.addObserver(this);
     _initShare();
   }
@@ -89,26 +99,24 @@ class _MainScaffoldState extends State<MainScaffold>
 
   @override
   Widget build(BuildContext context) {
-    final pages = [
-      const HomeReceiveScreen(),
-      const PeersScreen(),
-      SendScreen(
-        onOpenSettings: () => setState(() => _index = 4),
-      ),
-      const HistoryScreen(),
-      const SettingsScreen(),
-    ];
     return Scaffold(
       resizeToAvoidBottomInset: true,
       body: Builder(
         builder: (context) {
-          final page = pages[_index];
-          if (!Platform.isIOS) return page;
+          if (!Platform.isIOS) {
+            return IndexedStack(
+              index: _index,
+              children: _pages,
+            );
+          }
           final kb = MediaQuery.viewInsetsOf(context).bottom;
           return Stack(
             fit: StackFit.expand,
             children: [
-              page,
+              IndexedStack(
+                index: _index,
+                children: _pages,
+              ),
               if (kb > 0)
                 Positioned(
                   left: 0,
