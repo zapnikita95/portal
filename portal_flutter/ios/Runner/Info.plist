@@ -41,6 +41,12 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Portal ищет компьютеры в локальной сети (mDNS), чтобы показать их в «Найти в LAN».</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_portal._tcp</string>
+	</array>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Чтобы отправлять фото и видео через Portal из «Поделиться».</string>
 	<key>UIApplicationSceneManifest</key>

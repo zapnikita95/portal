@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:portal_flutter/data/settings_repository.dart';
 import 'package:portal_flutter/portal/lan_scan.dart';
+import 'package:portal_flutter/portal/portal_mdns_discover.dart';
 import 'package:portal_flutter/portal/portal_secrets.dart';
 import 'package:portal_flutter/portal/protocol_client.dart';
 
@@ -231,11 +232,10 @@ class _PeersScreenState extends State<PeersScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Укажи IPv4 в нужной сети (как в «Настройки → Сеть» или адрес пира). '
-                  'По каждому известному сегменту перебираются адреса .1–.254 (как у типичного роутера). '
-                  'Пусто — берём IP с интерфейсов ОС и из списка пиров.\n\n'
-                  'Режим mesh: в скан входят и 100.x (VPN), и домашняя Wi‑Fi/LAN, если на телефоне есть её адрес '
-                  'или ты указал подсказку / пира в 192.168…',
+                  'Сначала mDNS (как на ПК «Найти локально»): имена и IP за пару секунд в одной Wi‑Fi. '
+                  'Параллельно — перебор адресов .1–.254 по сегментам (mesh + домашняя LAN при необходимости).\n\n'
+                  'Подсказка IPv4 (необязательно): как в «Настройки → Сеть» или IP пира — усиливает TCP-скан. '
+                  'Пусто — берём адреса с интерфейсов ОС и из списка пиров.',
                   style: Theme.of(ctx).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 12),
@@ -312,41 +312,49 @@ class _PeersScreenState extends State<PeersScreen> {
             const SizedBox(width: 20),
             Expanded(
               child: Text(
-                'Ищем Portal (${lanScanScopeLabel(_lanScope)})…',
+                'Ищем Portal: mDNS + скан (${lanScanScopeLabel(_lanScope)})…',
               ),
             ),
           ],
         ),
       ),
     );
-    List<String> found;
-    try {
-      found = await scanLanForPortalHosts(
+    final results = await Future.wait([
+      discoverPortalMdnsPeers()
+          .catchError((Object _, StackTrace __) => <PortalMdnsPeer>[]),
+      scanLanForPortalHosts(
         candidateSecrets: PortalSecrets.orderedCandidateSecrets(st),
         scope: _lanScope,
         peerHints: peerHints,
         manualLanSeedIp: manual,
-      );
-    } catch (e) {
-      found = [];
-      if (mounted) {
-        Navigator.of(context).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Скан: $e')),
-        );
-      }
-      return;
-    }
+      ).catchError((Object _, StackTrace __) => <String>[]),
+    ]);
     if (!mounted) return;
     Navigator.of(context).pop();
+
+    final mdnsPeers = results[0] as List<PortalMdnsPeer>;
+    final scanIps = results[1] as List<String>;
+    final mdnsNames = <String, String>{};
+    for (final p in mdnsPeers) {
+      mdnsNames[p.ipv4] = p.displayName.trim().isEmpty ? p.ipv4 : p.displayName.trim();
+    }
+    final foundIps = <String>{...scanIps, ...mdnsNames.keys};
+    final found = foundIps.toList()
+      ..sort((a, b) {
+        final ta = mdnsNames.containsKey(a) ? '${mdnsNames[a]} ($a)' : a;
+        final tb = mdnsNames.containsKey(b) ? '${mdnsNames[b]} ($b)' : b;
+        return ta.toLowerCase().compareTo(tb.toLowerCase());
+      });
+
     if (found.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Никого не нашли. ПК/телефон слушают :12345, пароль совпадает с config.json; '
-            'на iPhone приём часто только с открытым приложением; mesh-режим теперь тоже обходит домашнюю LAN.',
+            'Никого не нашли. mDNS — только в одной локальной сети с ПК (zeroconf); '
+            'TCP-скан: :12345 и пароль как в config.json. '
+            'Чистый mesh без LAN часто не виден по mDNS; iPhone без открытого Portal может не ответить на ping.',
           ),
-          duration: Duration(seconds: 5),
+          duration: Duration(seconds: 7),
         ),
       );
       return;
@@ -366,8 +374,13 @@ class _PeersScreenState extends State<PeersScreen> {
                   keyboardDismissBehavior:
                       ScrollViewKeyboardDismissBehavior.onDrag,
                   children: found.map((ip) {
+                    final fromMdns = mdnsNames.containsKey(ip);
+                    final title = fromMdns ? '${mdnsNames[ip]} ($ip)' : ip;
                     return CheckboxListTile(
-                      title: Text(ip),
+                      title: Text(title),
+                      subtitle: fromMdns
+                          ? const Text('mDNS', style: TextStyle(fontSize: 12))
+                          : const Text('ping :12345', style: TextStyle(fontSize: 12)),
                       value: sel.contains(ip),
                       onChanged: (v) {
                         setLocal(() {
