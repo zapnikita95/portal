@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:multicast_dns/multicast_dns.dart';
+import 'package:portal_flutter/util/android_multicast_lock.dart';
 
 /// Совпадает с [portal_mdns.SERVICE_TYPE] на десктопе (Python zeroconf).
 const String kPortalMdnsServicePointer = '_portal._tcp.local';
@@ -135,6 +136,7 @@ Future<PortalMdnsPeer?> _resolveOneInstance(
 Future<List<PortalMdnsPeer>> discoverPortalMdnsPeers({
   Duration ptrListen = const Duration(milliseconds: 2800),
 }) async {
+  await androidMulticastLockAcquire();
   final MDnsClient client = MDnsClient();
   try {
     await client.start();
@@ -142,6 +144,7 @@ Future<List<PortalMdnsPeer>> discoverPortalMdnsPeers({
     try {
       client.stop();
     } catch (_) {}
+    await androidMulticastLockRelease();
     return [];
   }
 
@@ -180,6 +183,7 @@ Future<List<PortalMdnsPeer>> discoverPortalMdnsPeers({
     try {
       client.stop();
     } catch (_) {}
+    await androidMulticastLockRelease();
   }
 }
 
