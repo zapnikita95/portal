@@ -113,7 +113,11 @@ Future<(bool ok, String err)> sendFileToPeer(
     await socket.flush();
     try {
       final resp = await socket.timeout(const Duration(seconds: 120)).first;
-      final ok = utf8.decode(resp).startsWith('OK');
+      final s = utf8.decode(resp);
+      if (s.contains('portal_auth_failed')) {
+        return (false, 'auth');
+      }
+      final ok = s.startsWith('OK');
       return (ok, ok ? 'ok' : 'bad_response');
     } catch (_) {
       return (false, 'no_response');

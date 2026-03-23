@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:portal_flutter/config.dart';
 import 'package:portal_flutter/data/settings_repository.dart';
+import 'package:portal_flutter/portal/lan_scan.dart';
 import 'package:portal_flutter/portal/protocol_client.dart';
 import 'package:portal_flutter/services/portal_service_controller.dart';
 import 'package:portal_flutter/ui/widgets/portal_receive_animation.dart';
@@ -110,9 +111,14 @@ class _HomeReceiveScreenState extends State<HomeReceiveScreen>
       }
     }
     if (mounted) {
+      final anyTs = ips.any(isTailscaleCgNatIpv4);
       setState(() {
-        _pcReachability =
-            'Нет pong (${ips.take(3).join(', ')}…). ПК: «Запустить портал», пароль, mesh-VPN/файрвол.';
+        _pcReachability = anyTs
+            ? 'Нет pong по адресам mesh (100.x…). Включи Tailscale на телефоне, '
+                'на ПК — «Запустить портал», пароль как в «Настроить». '
+                'Проверяли: ${ips.take(3).join(', ')}…'
+            : 'Нет pong (${ips.take(3).join(', ')}…). ПК: «Запустить портал», '
+                'пароль, одна сеть Wi‑Fi/VPN, файрвол :$portalPort.';
       });
     }
   }

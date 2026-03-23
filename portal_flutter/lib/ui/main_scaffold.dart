@@ -92,7 +92,9 @@ class _MainScaffoldState extends State<MainScaffold>
     final pages = [
       const HomeReceiveScreen(),
       const PeersScreen(),
-      const SendScreen(),
+      SendScreen(
+        onOpenSettings: () => setState(() => _index = 4),
+      ),
       const HistoryScreen(),
       const SettingsScreen(),
     ];
