@@ -169,11 +169,14 @@ List<String> seedsForScope(
       }
       return out.toList();
     case LanScanScope.tailscale:
-      final out = bundle.allIpv4.where(isTailscaleCgNatIpv4).toSet();
-      if (out.isEmpty) {
-        for (final ip in hints) {
-          if (isTailscaleCgNatIpv4(ip)) out.add(ip);
-        }
+      // Всегда объединяем IP интерфейса и подсказки из пиров — иначе при своём
+      // 100.x сканируется только один /24, а остальные mesh-узлы в других /24 не видны.
+      final out = <String>{};
+      for (final ip in bundle.allIpv4) {
+        if (isTailscaleCgNatIpv4(ip)) out.add(ip);
+      }
+      for (final ip in hints) {
+        if (isTailscaleCgNatIpv4(ip)) out.add(ip);
       }
       return out.toList();
     case LanScanScope.all:
@@ -198,12 +201,12 @@ String? subnet24Prefix(String ip) {
   return '${p[0]}.${p[1]}.${p[2]}';
 }
 
-/// Параллельный скан /24 для Portal (ping).
+/// Параллельный скан «третьего октета» (классический домашний сегмент .1–.254) для Portal (ping).
 ///
 /// [peerHints] — IP из настроек пиров, используются как fallback-сиды если ОС
 /// не отдала Wi‑Fi IP (старый Android APK без ACCESS_WIFI_STATE).
 Future<List<String>> scanLanForPortalHosts({
-  required String secret,
+  required List<String> candidateSecrets,
   LanScanScope scope = LanScanScope.wifi,
   List<String> peerHints = const [],
 
@@ -242,12 +245,16 @@ Future<List<String>> scanLanForPortalHosts({
   final n = hosts.length;
   final per = (n / workers).ceil().clamp(1, n);
 
+  /// Пустой список = пробовать ping без secret (как на ПК без пароля).
+  final secrets =
+      candidateSecrets.isNotEmpty ? candidateSecrets : <String>[''];
+
   Future<void> runSlice(int start, int end) async {
     for (var j = start; j < end; j++) {
       final ip = hosts[j];
-      final ok = await pingPortal(
+      final ok = await pingPortalTrySecrets(
         ip,
-        secret: secret,
+        secrets: secrets,
         connectTimeout: connectTimeout,
       );
       if (ok) found.add(ip);

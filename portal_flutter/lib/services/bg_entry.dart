@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:portal_flutter/config.dart';
 import 'package:portal_flutter/data/settings_repository.dart';
+import 'package:portal_flutter/portal/portal_secrets.dart';
 import 'package:portal_flutter/portal/receive_session.dart';
 import 'package:portal_flutter/services/portal_notifications.dart';
 import 'package:portal_flutter/util/receive_paths.dart';
@@ -55,7 +56,7 @@ void portalBackgroundMain(ServiceInstance service) async {
         handlePortalSocket(
           client,
           receiveDir: dir,
-          secret: st.secret,
+          acceptedSecrets: PortalSecrets.acceptedSecretsForReceive(st),
           onEvent: (k, msg, p) async {
             service.invoke('log', {'t': msg});
             if (k == 'auth_failed' && Platform.isAndroid) {

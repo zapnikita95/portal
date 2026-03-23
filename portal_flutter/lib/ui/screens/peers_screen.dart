@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:portal_flutter/data/settings_repository.dart';
 import 'package:portal_flutter/portal/lan_scan.dart';
+import 'package:portal_flutter/portal/portal_secrets.dart';
 import 'package:portal_flutter/portal/protocol_client.dart';
 
 class PeersScreen extends StatefulWidget {
@@ -42,6 +43,7 @@ class _PeersScreenState extends State<PeersScreen> {
     return _PeerRow(
       ip: TextEditingController(),
       name: TextEditingController(),
+      peerSecret: TextEditingController(),
       send: true,
       networkKind: _defaultKindForTab(),
     );
@@ -66,6 +68,7 @@ class _PeersScreenState extends State<PeersScreen> {
       _rows.add(_PeerRow(
         ip: TextEditingController(text: p.ip),
         name: TextEditingController(text: p.name),
+        peerSecret: TextEditingController(text: p.peerSecret),
         send: p.send,
         networkKind: p.networkKind,
       ));
@@ -131,6 +134,7 @@ class _PeersScreenState extends State<PeersScreen> {
         name: nm.isEmpty ? ip : nm,
         send: r.send,
         networkKind: r.networkKind,
+        peerSecret: r.peerSecret.text.trim(),
       ));
     }
     final groups = <PeerGroupDto>[];
@@ -183,15 +187,21 @@ class _PeersScreenState extends State<PeersScreen> {
       return;
     }
     final st = await SettingsRepository.load();
-    final ok = await pingPortal(ip, secret: st.secret);
+    final rowSecret = r.peerSecret.text.trim();
+    final secrets = <String>[
+      if (rowSecret.isNotEmpty) rowSecret,
+      ...PortalSecrets.orderedCandidateSecrets(st)
+          .where((s) => s != rowSecret),
+    ];
+    final ok = await pingPortalTrySecrets(ip, secrets: secrets);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
           ok
               ? 'Pong: $ip'
-              : 'Нет ответа: $ip. На ПК «Запустить портал», порт 12345; пароль как в config.json '
-                  '(если на ПК пароль пустой — очисти поле в приложении); файрвол / mesh-VPN.',
+              : 'Нет ответа: $ip. ПК: «Запустить портал», :12345; пароль — общий в «Настроить» '
+                  'или свой в строке пира (как в config.json); файрвол / mesh-VPN.',
         ),
         duration: const Duration(seconds: 6),
       ),
@@ -221,9 +231,9 @@ class _PeersScreenState extends State<PeersScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Укажи IPv4 телефона в Wi‑Fi (как в «Настройки → Сеть»). '
-                  'По нему берётся подсеть /24 для скана. Можно оставить пустым — '
-                  'тогда используются интерфейсы ОС и IP из списка пиров.',
+                  'Укажи IPv4 в нужной сети (как в «Настройки → Сеть» или адрес пира). '
+                  'По нему и другим известным адресам строятся диапазоны поиска (хосты .1–.254 '
+                  'в той же «третьей части» IPv4). Пусто — берём IP с интерфейсов ОС и из списка пиров.',
                   style: Theme.of(ctx).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 12),
@@ -300,7 +310,7 @@ class _PeersScreenState extends State<PeersScreen> {
             const SizedBox(width: 20),
             Expanded(
               child: Text(
-                'Скан ${lanScanScopeLabel(_lanScope)} (${seeds.length} подсетей)…',
+                'Ищем Portal (${lanScanScopeLabel(_lanScope)})…',
               ),
             ),
           ],
@@ -310,7 +320,7 @@ class _PeersScreenState extends State<PeersScreen> {
     List<String> found;
     try {
       found = await scanLanForPortalHosts(
-        secret: st.secret,
+        candidateSecrets: PortalSecrets.orderedCandidateSecrets(st),
         scope: _lanScope,
         peerHints: peerHints,
         manualLanSeedIp: manual,
@@ -331,7 +341,7 @@ class _PeersScreenState extends State<PeersScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Никого не нашли. Проверь Wi‑Fi, что ПК слушает :12345 и пароль совпадает.',
+            'Никого не нашли. Wi‑Fi/mesh, ПК слушает :12345, пароль (общий или у пира) совпадает с ПК.',
           ),
           duration: Duration(seconds: 5),
         ),
@@ -385,6 +395,52 @@ class _PeersScreenState extends State<PeersScreen> {
       },
     );
     if (pick == null || pick.isEmpty || !mounted) return;
+
+    final secretForNew = await showDialog<String?>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        final c = TextEditingController(text: st.secret);
+        return AlertDialog(
+          title: const Text('Пароль для новых Portal'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Введи пароль как на ПК (config.json). Сохранится у каждого добавленного IP. '
+                  'Пусто — использовать только общий пароль из «Настроить». '
+                  'Разные пароли у разных машин можно задать потом в строке пира.',
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: c,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Пароль Portal для этих адресов',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Отмена'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, c.text.trim()),
+              child: const Text('Добавить'),
+            ),
+          ],
+        );
+      },
+    );
+    if (secretForNew == null || !mounted) return;
+
     final have = _rows.map((r) => r.ip.text.trim()).toSet();
     for (final ip in pick) {
       if (have.contains(ip)) continue;
@@ -392,6 +448,7 @@ class _PeersScreenState extends State<PeersScreen> {
       final row = _PeerRow(
         ip: TextEditingController(text: ip),
         name: TextEditingController(),
+        peerSecret: TextEditingController(text: secretForNew),
         send: true,
         networkKind: kind,
       );
@@ -565,6 +622,17 @@ class _PeersScreenState extends State<PeersScreen> {
                             ),
                           ),
                           const SizedBox(height: 8),
+                          TextField(
+                            controller: r.peerSecret,
+                            obscureText: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Пароль этого Portal (необязательно)',
+                              helperText:
+                                  'Пусто = общий из «Настроить». Свой — если на этом ПК другой пароль.',
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
                           DropdownButtonFormField<String>(
                             value: r.networkKind == 'lan' ||
                                     r.networkKind == 'tailscale' ||
@@ -725,17 +793,20 @@ class _PeerRow {
   _PeerRow({
     required this.ip,
     required this.name,
+    required this.peerSecret,
     required this.send,
     this.networkKind = 'auto',
   });
   final TextEditingController ip;
   final TextEditingController name;
+  final TextEditingController peerSecret;
   bool send;
   String networkKind;
 
   void dispose() {
     ip.dispose();
     name.dispose();
+    peerSecret.dispose();
   }
 }
 

@@ -8,6 +8,7 @@ class PeerDto {
     required this.name,
     required this.send,
     this.networkKind = 'auto',
+    this.peerSecret = '',
   });
   final String ip;
   final String name;
@@ -16,11 +17,15 @@ class PeerDto {
   /// auto | lan | tailscale — для фильтра вкладок Wi‑Fi / mesh на экране «Пиры».
   final String networkKind;
 
+  /// Пароль Portal именно для этого IP (если пусто — используется общий из настроек).
+  final String peerSecret;
+
   Map<String, dynamic> toJson() => {
         'ip': ip,
         'name': name,
         'send': send,
         'network_kind': networkKind,
+        'peer_secret': peerSecret,
       };
 
   static PeerDto fromJson(Map<String, dynamic> m) {
@@ -30,6 +35,7 @@ class PeerDto {
       name: (m['name'] ?? '').toString(),
       send: m['send'] == true,
       networkKind: (nk == 'lan' || nk == 'tailscale') ? nk : 'auto',
+      peerSecret: (m['peer_secret'] ?? '').toString(),
     );
   }
 }

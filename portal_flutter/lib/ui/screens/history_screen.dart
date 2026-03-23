@@ -4,8 +4,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:portal_flutter/data/history_repository.dart';
-import 'package:portal_flutter/portal/protocol_client.dart';
 import 'package:portal_flutter/data/settings_repository.dart';
+import 'package:portal_flutter/portal/portal_secrets.dart';
+import 'package:portal_flutter/portal/protocol_client.dart';
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
@@ -69,7 +70,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
     if (ips.isEmpty) return;
     final st = await SettingsRepository.load();
     for (final ip in ips) {
-      await sendFileToPeer(ip, path, secret: st.secret);
+      final sec = PortalSecrets.effectiveSecretForPeerIp(ip, st);
+      await sendFileToPeer(ip, path, secret: sec);
     }
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(

@@ -118,10 +118,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           TextField(
             controller: _secret,
             decoration: const InputDecoration(
-              labelText: 'Пароль сети (как на ПК, config.json)',
+              labelText: 'Общий пароль Portal (как на ПК, config.json)',
               border: OutlineInputBorder(),
               helperText:
-                  'Должен совпадать с паролем настольного Portal — иначе ping и приём отклонятся.',
+                  'По умолчанию для всех пиров. У конкретного IP может быть свой пароль в «Пиры». '
+                  'Приём принимает любой из заданных паролей.',
             ),
             obscureText: true,
           ),

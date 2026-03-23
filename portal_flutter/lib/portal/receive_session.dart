@@ -42,7 +42,7 @@ Uint8List _stripLeadingBodyNoise(Uint8List raw) {
 Future<void> handlePortalSocket(
   Socket socket, {
   required String receiveDir,
-  required String secret,
+  required Set<String> acceptedSecrets,
   required Future<void> Function(String kind, String message, String? localPath)
       onEvent,
 }) async {
@@ -78,14 +78,16 @@ Future<void> handlePortalSocket(
 
     final h = hdr.header;
     final msgSecret = (h['secret'] ?? '').toString().trim();
-    if (secret.trim().isNotEmpty && msgSecret != secret.trim()) {
+    // Пустой acceptedSecrets = не проверять (как раньше при пустом общем пароле).
+    if (acceptedSecrets.isNotEmpty && !acceptedSecrets.contains(msgSecret)) {
       try {
         socket.add(utf8.encode(jsonEncode({'type': 'portal_auth_failed'})));
         await socket.flush();
       } catch (_) {}
       await onEvent(
         'auth_failed',
-        'Отклонено: неверный пароль сети. На ПК и в приложении должен быть один и тот же пароль (config.json / Настройки).',
+        'Отклонено: неверный пароль. На устройстве-приёмнике в настройках и у пира должен быть '
+            'тот же пароль, что в config.json на ПК (общий или свой у строки пира).',
         null,
       );
       return;

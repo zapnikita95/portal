@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:portal_flutter/data/history_repository.dart';
 import 'package:portal_flutter/data/settings_repository.dart';
+import 'package:portal_flutter/portal/portal_secrets.dart';
 import 'package:portal_flutter/portal/protocol_client.dart';
 import 'package:portal_flutter/ui/pending_share.dart';
 import 'package:portal_flutter/util/send_errors.dart';
@@ -92,18 +93,19 @@ class _SendScreenState extends State<SendScreen> {
     return pool.where((p) => _selectedSendIps.contains(p.ip.trim())).toList();
   }
 
-  Future<bool> _ensureSecretAllowsSend() async {
+  Future<bool> _ensureSecretAllowsSend(List<PeerDto> targets) async {
     final st = await SettingsRepository.load();
-    if (st.secret.trim().isNotEmpty) return true;
+    if (PortalSecrets.sendSecretsLookConfigured(st, targets)) return true;
     if (!mounted) return false;
     final r = await showDialog<String>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        title: const Text('Пароль сети не указан'),
+        title: const Text('Нужен пароль для отправки'),
         content: const Text(
-          'Без пароля Portal на компьютере с заданным паролем отклонит передачу.\n\n'
-          'Укажи тот же пароль во вкладке «Настроить», что в настройках Portal на ПК.',
+          'Общий пароль пустой, а у выбранных пиров нет своего пароля в строке — '
+          'ПК с паролем отклонит передачу.\n\n'
+          'Укажи общий пароль в «Настроить» или свой у каждого пира в «Пиры».',
         ),
         actions: [
           TextButton(
@@ -136,7 +138,9 @@ class _SendScreenState extends State<SendScreen> {
   }
 
   Future<void> _sendFile() async {
-    if (!await _ensureSecretAllowsSend()) return;
+    final st0 = await SettingsRepository.load();
+    final tg0 = _selectedTargets(st0);
+    if (!await _ensureSecretAllowsSend(tg0)) return;
 
     final path = _filePath;
     if (path == null || !await File(path).exists()) {
@@ -160,11 +164,11 @@ class _SendScreenState extends State<SendScreen> {
       _busy = true;
       _status = 'Отправка...';
     });
-    final secret = st.secret;
     final ips = tg.map((e) => e.ip.trim()).toList();
     final errs = <String>[];
     for (final p in tg) {
-      final r = await sendFileToPeer(p.ip.trim(), path, secret: secret);
+      final sec = PortalSecrets.effectiveSecretForPeerIp(p.ip, st);
+      final r = await sendFileToPeer(p.ip.trim(), path, secret: sec);
       if (!r.$1) {
         errs.add(humanizePortalSendError(r.$2, host: p.ip.trim()));
       }
@@ -195,7 +199,9 @@ class _SendScreenState extends State<SendScreen> {
   }
 
   Future<void> _sendText() async {
-    if (!await _ensureSecretAllowsSend()) return;
+    final st0 = await SettingsRepository.load();
+    final tg0 = _selectedTargets(st0);
+    if (!await _ensureSecretAllowsSend(tg0)) return;
 
     final t = _text.text;
     if (t.trim().isEmpty) {
@@ -218,11 +224,11 @@ class _SendScreenState extends State<SendScreen> {
       _busy = true;
       _status = 'Отправка текста...';
     });
-    final secret = st.secret;
     final ips = tg.map((e) => e.ip.trim()).toList();
     final errs = <String>[];
     for (final p in tg) {
-      final r = await sendTextToPeer(p.ip.trim(), t, secret: secret);
+      final sec = PortalSecrets.effectiveSecretForPeerIp(p.ip, st);
+      final r = await sendTextToPeer(p.ip.trim(), t, secret: sec);
       if (!r.$1) {
         errs.add(humanizePortalSendError(r.$2, host: p.ip.trim()));
       }

@@ -6,6 +6,7 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:portal_flutter/config.dart';
 import 'package:portal_flutter/data/settings_repository.dart';
 import 'package:portal_flutter/portal/lan_scan.dart';
+import 'package:portal_flutter/portal/portal_secrets.dart';
 import 'package:portal_flutter/portal/protocol_client.dart';
 import 'package:portal_flutter/services/portal_service_controller.dart';
 import 'package:portal_flutter/ui/widgets/portal_receive_animation.dart';
@@ -102,8 +103,9 @@ class _HomeReceiveScreenState extends State<HomeReceiveScreen>
       return a.compareTo(b);
     });
     // Не ддосим десятки IP каждые 6 с — проверяем приоритетные (Tailscale первыми).
+    final secrets = PortalSecrets.orderedCandidateSecrets(st);
     for (final ip in ips.take(6)) {
-      final ok = await pingPortal(ip, secret: st.secret);
+      final ok = await pingPortalTrySecrets(ip, secrets: secrets);
       if (!mounted) return;
       if (ok) {
         setState(() => _pcReachability = 'ПК $ip отвечает (pong по :$portalPort)');
@@ -131,20 +133,19 @@ class _HomeReceiveScreenState extends State<HomeReceiveScreen>
   Future<void> _toggle(bool v) async {
     if (v) {
       final st = await SettingsRepository.load();
-      if (st.secret.trim().isEmpty && mounted) {
+      if (PortalSecrets.acceptedSecretsForReceive(st).isEmpty && mounted) {
         final go = await showDialog<bool>(
           context: context,
           barrierDismissible: false,
           builder: (ctx) => AlertDialog(
             icon: const Icon(Icons.warning_amber_rounded, size: 40),
-            title: const Text('Пароль сети не задан'),
+            title: const Text('Пароль приёма не задан'),
             content: const SingleChildScrollView(
               child: Text(
-                'В настройках приложения поле «Пароль сети» пустое.\n\n'
-                'Если на компьютере в config.json указан пароль — приём будет '
-                'молча отклоняться (ПК считает соединение неавторизованным), '
-                'и отдельного уведомления может не быть.\n\n'
-                'Задай тот же пароль, что на ПК, или оставь пустым везде.',
+                'Ни общий пароль, ни пароли у пиров в «Пиры» не заполнены — '
+                'этот телефон не проверяет поле secret во входящем (открытый приём).\n\n'
+                'Чтобы принимать только от машин с известным паролем — задай общий в «Настроить» '
+                'или пароль у строки пира для того IP, с которого шлют.',
               ),
             ),
             actions: [

@@ -12,6 +12,45 @@ Map<String, dynamic> _withSecret(Map<String, dynamic> msg, String secret) {
   return {...msg, 'secret': s};
 }
 
+/// Пробует секреты по очереди, пока один не даст pong (для скана LAN / mesh).
+Future<bool> pingPortalTrySecrets(
+  String host, {
+  required List<String> secrets,
+  int port = portalPort,
+  Duration? connectTimeout,
+  Duration readTimeout = const Duration(seconds: 5),
+}) async {
+  final uniq = <String>[];
+  final seen = <String>{};
+  for (final s in secrets) {
+    final t = s.trim();
+    if (seen.contains(t)) continue;
+    seen.add(t);
+    uniq.add(t);
+  }
+  if (uniq.isEmpty) {
+    return pingPortal(
+      host,
+      secret: '',
+      port: port,
+      connectTimeout: connectTimeout,
+      readTimeout: readTimeout,
+    );
+  }
+  for (final sec in uniq) {
+    if (await pingPortal(
+      host,
+      secret: sec,
+      port: port,
+      connectTimeout: connectTimeout,
+      readTimeout: readTimeout,
+    )) {
+      return true;
+    }
+  }
+  return false;
+}
+
 Future<bool> pingPortal(
   String host, {
   String secret = '',

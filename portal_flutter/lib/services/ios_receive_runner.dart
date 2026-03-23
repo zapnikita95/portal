@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:portal_flutter/config.dart';
 import 'package:portal_flutter/data/settings_repository.dart';
+import 'package:portal_flutter/portal/portal_secrets.dart';
 import 'package:portal_flutter/portal/receive_session.dart';
 import 'package:portal_flutter/services/portal_notifications.dart';
 import 'package:portal_flutter/util/receive_paths.dart';
@@ -31,7 +32,7 @@ class IosReceiveRunner {
       handlePortalSocket(
         client,
         receiveDir: dir,
-        secret: st.secret,
+        acceptedSecrets: PortalSecrets.acceptedSecretsForReceive(st),
         onEvent: (_, msg, __) async {
           await PortalNotifications.showReceiveLine(msg);
         },
