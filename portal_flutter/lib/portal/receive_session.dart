@@ -37,6 +37,96 @@ Uint8List _stripLeadingBodyNoise(Uint8List raw) {
   return Uint8List.sublistView(raw, i);
 }
 
+/// Чтение ровно [n] байт из первого чанка после JSON и дальше из [it] (как ПК: clipboard_files).
+class _PendingTcpReader {
+  _PendingTcpReader(Uint8List initialAfterHeader)
+      : _pend = _stripLeadingBodyNoise(initialAfterHeader),
+        _pendOff = 0;
+
+  Uint8List? _pend;
+  int _pendOff;
+
+  Future<int> writeExactly(IOSink sink, int n, StreamIterator<List<int>> it) async {
+    var got = 0;
+    while (got < n) {
+      final need = n - got;
+      if (_pend != null && _pendOff < _pend!.length) {
+        final avail = _pend!.length - _pendOff;
+        final take = avail < need ? avail : need;
+        sink.add(_pend!.sublist(_pendOff, _pendOff + take));
+        _pendOff += take;
+        got += take;
+        if (_pendOff >= _pend!.length) {
+          _pend = null;
+          _pendOff = 0;
+        }
+        continue;
+      }
+      bool more;
+      try {
+        more = await it.moveNext();
+      } catch (_) {
+        break;
+      }
+      if (!more) break;
+      final part = it.current;
+      if (part.isEmpty) continue;
+      _pend = Uint8List.fromList(part);
+      _pendOff = 0;
+    }
+    return got;
+  }
+}
+
+const _maxClipboardRichImageBytes = 48 * 1024 * 1024;
+
+Future<void> _finalizeSavedFile({
+  required Socket socket,
+  required String peer,
+  required String outPath,
+  required String fname,
+  required Future<void> Function(String kind, String message, String? localPath)
+      onEvent,
+  String historyKind = 'file',
+}) async {
+  try {
+    socket.add(utf8.encode('OK'));
+    await socket.flush();
+  } catch (_) {}
+
+  final stat = await File(outPath).length();
+  final kb = (stat / 1024).ceil().clamp(1, 1 << 30);
+  final parts = <String>[
+    '[+] Файл от $peer: $fname ($kb КБ)',
+  ];
+  if (Platform.isAndroid) {
+    final okDl =
+        await PortalAndroidDownloads.copyToDownloadsPortal(outPath, fname);
+    if (okDl) {
+      parts.add('копия: Загрузки → Portal');
+    } else {
+      parts.add('в «Загрузки/Portal» не скопировалось (смотри папку приёма в настройках)');
+    }
+  }
+  final histOk = await HistoryRepository.insertInBackground(
+    direction: 'receive',
+    kind: historyKind,
+    peerIp: peer,
+    peerLabel: peer,
+    name: fname,
+    storedPath: outPath,
+    filesize: stat,
+  );
+  if (!histOk) {
+    parts.add('история не записалась (перезапусти приложение)');
+  }
+  await onEvent(
+    'receive_file',
+    parts.join(' · '),
+    outPath,
+  );
+}
+
 /// Один последовательный читатель сокета — нельзя многократно вешать `.first` на Socket.
 Future<void> handlePortalSocket(
   Socket socket, {
@@ -121,7 +211,8 @@ Future<void> handlePortalSocket(
       return;
     }
 
-    if (type == 'file') {
+    // Обычный файл и один файл из буфера ПК (Ctrl+Alt+C / «Отправить буфер») — одно и то же тело TCP.
+    if (type == 'file' || type == 'clipboard_file') {
       final rawFileLabel =
           h['filename'] ?? h['name'] ?? h['file'] ?? 'file';
       final fname = _safeName(rawFileLabel.toString());
@@ -140,42 +231,10 @@ Future<void> handlePortalSocket(
       }
 
       final sink = File(outPath).openWrite();
-
-      // Остаток первого чанка + хвосты TCP: нельзя отрезать байты за пределами need —
-      // иначе теряется кусок файла и размер/содержимое не сходятся.
-      Uint8List? pend = _stripLeadingBodyNoise(
-        Uint8List.sublistView(full, bodyStart),
-      );
-      var pendOff = 0;
+      final reader = _PendingTcpReader(Uint8List.sublistView(full, bodyStart));
       var got = 0;
-
       try {
-        while (got < filesize) {
-          final need = filesize - got;
-          if (pend != null && pendOff < pend.length) {
-            final avail = pend.length - pendOff;
-            final take = avail < need ? avail : need;
-            sink.add(pend.sublist(pendOff, pendOff + take));
-            pendOff += take;
-            got += take;
-            if (pendOff >= pend.length) {
-              pend = null;
-              pendOff = 0;
-            }
-            continue;
-          }
-          bool more;
-          try {
-            more = await it.moveNext();
-          } catch (_) {
-            break;
-          }
-          if (!more) break;
-          final part = it.current;
-          if (part.isEmpty) continue;
-          pend = Uint8List.fromList(part);
-          pendOff = 0;
-        }
+        got = await reader.writeExactly(sink, filesize, it);
         await sink.flush();
         await sink.close();
       } catch (_) {
@@ -225,40 +284,179 @@ Future<void> handlePortalSocket(
         return;
       }
 
-      try {
-        socket.add(utf8.encode('OK'));
-        await socket.flush();
-      } catch (_) {}
-
-      final kb = (stat / 1024).ceil().clamp(1, 1 << 30);
-      final parts = <String>[
-        '[+] Файл от $peer: $fname ($kb КБ)',
-      ];
-      if (Platform.isAndroid) {
-        final okDl =
-            await PortalAndroidDownloads.copyToDownloadsPortal(outPath, fname);
-        if (okDl) {
-          parts.add('копия: Загрузки → Portal');
-        } else {
-          parts.add('в «Загрузки/Portal» не скопировалось (смотри папку приёма в настройках)');
-        }
-      }
-      final histOk = await HistoryRepository.insertInBackground(
-        direction: 'receive',
-        kind: 'file',
-        peerIp: peer,
-        peerLabel: peer,
-        name: fname,
-        storedPath: outPath,
-        filesize: stat,
+      await _finalizeSavedFile(
+        socket: socket,
+        peer: peer,
+        outPath: outPath,
+        fname: fname,
+        onEvent: onEvent,
       );
-      if (!histOk) {
-        parts.add('история не записалась (перезапусти приложение)');
+      return;
+    }
+
+    if (type == 'clipboard_files') {
+      final rawList = h['files'];
+      if (rawList is! List || rawList.isEmpty) {
+        try {
+          socket.add(utf8.encode('ERR'));
+          await socket.flush();
+        } catch (_) {}
+        return;
       }
-      await onEvent(
-        'receive_file',
-        parts.join(' · '),
-        outPath,
+      final specs = <({String name, int size})>[];
+      for (final x in rawList) {
+        if (x is! Map) continue;
+        final m = Map<String, dynamic>.from(x);
+        final nm = _safeName((m['filename'] ?? 'file').toString());
+        final sz = int.tryParse((m['filesize'] ?? 0).toString()) ?? 0;
+        if (sz < 0) continue;
+        specs.add((name: nm, size: sz));
+      }
+      if (specs.isEmpty) {
+        try {
+          socket.add(utf8.encode('ERR'));
+          await socket.flush();
+        } catch (_) {}
+        return;
+      }
+
+      await Directory(receiveDir).create(recursive: true);
+      final reader = _PendingTcpReader(Uint8List.sublistView(full, bodyStart));
+      final saved = <String>[];
+      final savedNames = <String>[];
+
+      try {
+        for (final spec in specs) {
+          var fname = spec.name;
+          var outPath = p.join(receiveDir, fname);
+          if (await File(outPath).exists()) {
+            final stem = p.basenameWithoutExtension(fname);
+            final suf = p.extension(fname);
+            final ts = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+            fname = '${stem}_$ts$suf';
+            outPath = p.join(receiveDir, fname);
+          }
+          final sink = File(outPath).openWrite();
+          final got = await reader.writeExactly(sink, spec.size, it);
+          await sink.flush();
+          await sink.close();
+          if (got < spec.size) {
+            throw StateError('truncated $got/${spec.size}');
+          }
+          final st = await File(outPath).length();
+          if (st != spec.size) {
+            throw StateError('size mismatch');
+          }
+          saved.add(outPath);
+          savedNames.add(fname);
+          if (Platform.isAndroid) {
+            await PortalAndroidDownloads.copyToDownloadsPortal(outPath, fname);
+          }
+          await HistoryRepository.insertInBackground(
+            direction: 'receive',
+            kind: 'file',
+            peerIp: peer,
+            peerLabel: peer,
+            name: fname,
+            storedPath: outPath,
+            filesize: st,
+          );
+        }
+        try {
+          socket.add(utf8.encode('OK'));
+          await socket.flush();
+        } catch (_) {}
+        final summary =
+            '[+] От $peer из буфера ПК: ${saved.length} файл(ов) — ${savedNames.join(', ')}';
+        await onEvent('receive_file', summary, saved.isNotEmpty ? saved.last : null);
+      } catch (_) {
+        for (final pth in saved) {
+          try {
+            await File(pth).delete();
+          } catch (_) {}
+        }
+        try {
+          socket.add(utf8.encode('ERR'));
+          await socket.flush();
+        } catch (_) {}
+        await onEvent(
+          'receive_fail',
+          'Несколько файлов из буфера ПК не сохранены (обрыв или ошибка диска).',
+          null,
+        );
+      }
+      return;
+    }
+
+    if (type == 'clipboard_rich') {
+      final clipKind = (h['clip_kind'] ?? '').toString().trim();
+      final size = int.tryParse((h['size'] ?? 0).toString()) ?? 0;
+      if (clipKind != 'image' ||
+          size <= 0 ||
+          size > _maxClipboardRichImageBytes) {
+        try {
+          socket.add(utf8.encode('ERR'));
+          await socket.flush();
+        } catch (_) {}
+        return;
+      }
+
+      await Directory(receiveDir).create(recursive: true);
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final fname = 'portal_clipboard_$ts.png';
+      var outPath = p.join(receiveDir, fname);
+      if (await File(outPath).exists()) {
+        outPath = p.join(receiveDir, 'portal_clipboard_${ts}_2.png');
+      }
+
+      final sink = File(outPath).openWrite();
+      final reader = _PendingTcpReader(Uint8List.sublistView(full, bodyStart));
+      var got = 0;
+      try {
+        got = await reader.writeExactly(sink, size, it);
+        await sink.flush();
+        await sink.close();
+      } catch (_) {
+        await sink.close();
+        try {
+          await File(outPath).delete();
+        } catch (_) {}
+        try {
+          socket.add(utf8.encode('ERR'));
+          await socket.flush();
+        } catch (_) {}
+        return;
+      }
+
+      if (got < size) {
+        try {
+          await File(outPath).delete();
+        } catch (_) {}
+        try {
+          socket.add(utf8.encode('ERR'));
+          await socket.flush();
+        } catch (_) {}
+        return;
+      }
+
+      final stat = await File(outPath).length();
+      if (stat != size) {
+        try {
+          await File(outPath).delete();
+        } catch (_) {}
+        try {
+          socket.add(utf8.encode('ERR'));
+          await socket.flush();
+        } catch (_) {}
+        return;
+      }
+
+      await _finalizeSavedFile(
+        socket: socket,
+        peer: peer,
+        outPath: outPath,
+        fname: fname,
+        onEvent: onEvent,
       );
       return;
     }
