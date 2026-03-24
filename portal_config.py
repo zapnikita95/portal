@@ -19,7 +19,7 @@ _SHARED_SECRET_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 # Версия десктоп-сборки (PyInstaller CFBundleShortVersionString / проверка обновлений).
 # Поднимай вместе с pyinstaller_portal.spec → CFBundleShortVersionString.
-PORTAL_DESKTOP_VERSION = "1.0.0"
+PORTAL_DESKTOP_VERSION = "1.2.0"
 
 _UPDATE_CHECK_INTERVAL_SEC = 86400 * 2  # не чаще раз в 2 суток авто-проверка
 
@@ -888,6 +888,39 @@ def load_shared_secret() -> str:
     return s
 
 
+def load_extra_shared_secrets() -> List[str]:
+    """Дополнительные пароли сети: входящее соединение принимается, если secret совпадает с любым."""
+    raw = _load_all().get("extra_shared_secrets")
+    if not isinstance(raw, list):
+        return []
+    out: List[str] = []
+    seen = set()
+    for x in raw:
+        s = str(x).strip()
+        if s and s not in seen and len(s) <= 512:
+            seen.add(s)
+            out.append(s)
+    return out[:32]
+
+
+def save_extra_shared_secrets(secrets: List[str]) -> bool:
+    data = _load_all()
+    clean: List[str] = []
+    seen = set()
+    for x in secrets or []:
+        s = str(x).strip()
+        if not s or len(s) > 512 or s in seen:
+            continue
+        seen.add(s)
+        clean.append(s)
+    clean = clean[:32]
+    if clean:
+        data["extra_shared_secrets"] = clean
+    else:
+        data.pop("extra_shared_secrets", None)
+    return _write_all(data)
+
+
 def save_shared_secret(secret: Optional[str]) -> bool:
     """Пустая строка или None — убрать пароль из конфига."""
     data = _load_all()
@@ -1004,6 +1037,29 @@ def load_widget_size() -> int:
     return max(80, min(n, 600))
 
 
+def load_widget_size_pct() -> Optional[float]:
+    """Доля от min(ширина, высота) рабочей области, например 0.06; None — только пиксели."""
+    raw = _load_all().get("widget_size_pct")
+    if raw is None or raw == "":
+        return None
+    try:
+        v = float(raw)
+        return v if v > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def resolve_widget_pixel_size(work_w: int, work_h: int) -> int:
+    """Итоговый размер виджета в пикселях с учётом widget_size_pct или widget_size."""
+    ww = max(1, int(work_w))
+    wh = max(1, int(work_h))
+    base = min(ww, wh)
+    pct = load_widget_size_pct()
+    if pct is not None:
+        return max(80, min(int(base * pct), 600))
+    return load_widget_size()
+
+
 def load_widget_corner() -> str:
     c = str(_load_all().get("widget_corner", "br") or "br").strip().lower()
     if c in _VALID_WIDGET_CORNERS:
@@ -1020,31 +1076,53 @@ def load_widget_margin_x() -> int:
 
 def load_widget_margin_y() -> int:
     try:
-        return max(0, min(int(_load_all().get("widget_margin_y", 96)), 500))
+        return max(0, min(int(_load_all().get("widget_margin_y", 24)), 500))
     except (TypeError, ValueError):
-        return 96
+        return 24
+
+
+def load_widget_easy_drag() -> bool:
+    return bool(_load_all().get("widget_easy_drag", False))
+
+
+def save_widget_easy_drag(on: bool) -> bool:
+    data = _load_all()
+    data["widget_easy_drag"] = bool(on)
+    return _write_all(data)
 
 
 def widget_window_xy(
-    screen_w: int, screen_h: int, size: int, corner: str, margin_x: int, margin_y: int
+    origin_x: int,
+    origin_y: int,
+    work_w: int,
+    work_h: int,
+    size: int,
+    corner: str,
+    margin_x: int,
+    margin_y: int,
 ) -> Tuple[int, int]:
     """
-    Левый верхний угол окна виджета.
-    margin_x / margin_y — отступ от ближайших рёбер экрана (как раньше: справа 24, снизу 96).
+    Левый верхний угол окна виджета в координатах экрана.
+    origin_x/origin_y/work_w/work_h — рабочая область (на Windows без панели задач).
+    margin_x / margin_y — отступ от ближайших рёбер этой области.
     """
     c = corner if corner in _VALID_WIDGET_CORNERS else "br"
     mx = max(0, int(margin_x))
     my = max(0, int(margin_y))
     s = max(1, int(size))
+    ox = int(origin_x)
+    oy = int(origin_y)
+    ww = max(1, int(work_w))
+    wh = max(1, int(work_h))
     if c == "br":
-        return screen_w - s - mx, screen_h - s - my
+        return ox + ww - s - mx, oy + wh - s - my
     if c == "bl":
-        return mx, screen_h - s - my
+        return ox + mx, oy + wh - s - my
     if c == "tr":
-        return screen_w - s - mx, my
+        return ox + ww - s - mx, oy + my
     if c == "tl":
-        return mx, my
-    return screen_w - s - mx, screen_h - s - my
+        return ox + mx, oy + my
+    return ox + ww - s - mx, oy + wh - s - my
 
 
 def save_widget_geometry_settings(
@@ -1053,6 +1131,7 @@ def save_widget_geometry_settings(
     corner_key: str,
     margin_x: int,
     margin_y: int,
+    size_pct: Optional[float] = None,
 ) -> bool:
     data = _load_all()
     try:
@@ -1060,6 +1139,8 @@ def save_widget_geometry_settings(
     except (TypeError, ValueError):
         sz = 220
     data["widget_size"] = max(80, min(sz, 600))
+    if size_pct is not None and float(size_pct) > 0:
+        data["widget_size_pct"] = max(0.02, min(float(size_pct), 0.5))
     ck = str(corner_key or "br").strip().lower()
     if ck not in _VALID_WIDGET_CORNERS:
         ck = "br"
@@ -1071,8 +1152,40 @@ def save_widget_geometry_settings(
     try:
         data["widget_margin_y"] = max(0, min(int(margin_y), 500))
     except (TypeError, ValueError):
-        data["widget_margin_y"] = 96
+        data["widget_margin_y"] = 24
     return _write_all(data)
+
+
+def infer_widget_margins_from_window(
+    *,
+    win_x: int,
+    win_y: int,
+    size: int,
+    corner_key: str,
+    origin_x: int,
+    origin_y: int,
+    work_w: int,
+    work_h: int,
+) -> Tuple[int, int]:
+    """Вычислить margin_x/margin_y по фактической позиции окна и выбранному углу."""
+    ck = corner_key if corner_key in _VALID_WIDGET_CORNERS else "br"
+    s = max(1, int(size))
+    ox, oy = int(origin_x), int(origin_y)
+    ww, wh = max(1, int(work_w)), max(1, int(work_h))
+    wx, wy = int(win_x), int(win_y)
+    if ck == "br":
+        mx = ox + ww - wx - s
+        my = oy + wh - wy - s
+    elif ck == "bl":
+        mx = wx - ox
+        my = oy + wh - wy - s
+    elif ck == "tr":
+        mx = ox + ww - wx - s
+        my = wy - oy
+    else:
+        mx = wx - ox
+        my = wy - oy
+    return max(0, min(mx, 500)), max(0, min(my, 500))
 
 
 # macOS: фон «окошка» виджета (режим с рамкой), #RRGGBB
@@ -1274,6 +1387,10 @@ def _normalize_widget_preset_rules(raw: List[Any]) -> List[Dict[str, str]]:
         if not isinstance(x, dict):
             continue
         peer = str(x.get("peer", "*")).strip() or "*"
+        if peer != "*" and not peer.startswith("group:") and not _is_ipv4(peer):
+            continue
+        if peer.startswith("group:") and len(peer) < 8:
+            continue
         ev = str(x.get("event", "")).strip()
         if ev not in _VALID_WIDGET_PRESET_EVENTS:
             continue
@@ -1304,8 +1421,8 @@ def format_widget_preset_rules_for_editor(
     if rules is None:
         rules = load_widget_preset_rules()
     lines = [
-        "# IP или *     receive | receive_file | send     id_пресета",
-        "# Порядок: сначала совпадёт конкретный IP, затем *.",
+        "# peer: * | IPv4 | group:<id>     receive | receive_file | send     preset_id",
+        "# Приоритет: точный IP > группа > *.",
         "",
     ]
     for r in rules:
@@ -1398,31 +1515,57 @@ def resolve_widget_preset_file_path(preset_id: str) -> Optional[str]:
     return None
 
 
+def _widget_rule_target_rank(peer_ip: str, target: str, groups_by_id: Dict[str, Dict[str, Any]]) -> Optional[int]:
+    """
+    None — правило не подходит.
+    0 — точный IP (выше приоритет группы), 1 — группа, 2 — *.
+    """
+    t = (target or "*").strip() or "*"
+    if t == "*":
+        return 2
+    if t == peer_ip:
+        return 0
+    if t.startswith("group:"):
+        gid = t[6:].strip()
+        g = groups_by_id.get(gid)
+        if not g:
+            return None
+        raw = g.get("member_ips") or []
+        members = {str(x).strip() for x in raw if str(x).strip()}
+        if peer_ip in members:
+            return 1
+    return None
+
+
 def resolve_widget_pulse_media_path(event: str, peer_ip: Optional[str]) -> Optional[str]:
     """
     Абсолютный путь к GIF/WebP/PNG для короткого импульса виджета.
     None — не менять медиа (остаётся как в поле «Медиа» / assets).
+
+    Приоритет: точный IP > группа (peer в member_ips) > *.
     """
     ev = (event or "").strip()
     if ev not in _VALID_WIDGET_PRESET_EVENTS:
         ev = "receive"
     peer_ip = (peer_ip or "").strip()
     rules = load_widget_preset_rules()
-
-    def _sort_key(r: Dict[str, str]) -> Tuple[int, int]:
-        wild = 1 if str(r.get("peer", "*")).strip() == "*" else 0
-        return (wild, 0)
+    groups = load_peer_groups()
+    groups_by_id = {str(g.get("id", "")).strip(): g for g in groups if str(g.get("id", "")).strip()}
 
     def _pick(for_ev: str) -> Optional[str]:
+        best_rank: Optional[int] = None
         preset_id: Optional[str] = None
-        for rule in sorted(rules, key=_sort_key):
+        for rule in rules:
             if str(rule.get("event", "")).strip() != for_ev:
                 continue
             rp = str(rule.get("peer", "*")).strip() or "*"
-            if rp != "*" and rp != peer_ip:
+            rk = _widget_rule_target_rank(peer_ip, rp, groups_by_id)
+            if rk is None:
                 continue
-            preset_id = str(rule.get("preset", "main")).strip() or "main"
-            break
+            pid = str(rule.get("preset", "main")).strip() or "main"
+            if best_rank is None or rk < best_rank:
+                best_rank = rk
+                preset_id = pid
         if preset_id is None:
             return None
         return resolve_widget_preset_file_path(preset_id)

@@ -74,6 +74,10 @@ hiddenimports = [
     "portal_mac_permissions",
     "zeroconf",
     "portal_mdns",
+    "portal_netinfo",
+    "portal_win_metrics",
+    "portal_tray_win",
+    "pystray",
 ]
 
 if sys.platform == "win32":
@@ -155,7 +159,7 @@ if sys.platform == "darwin":
             "NSHighResolutionCapable": True,
             "CFBundleName": "Portal",
             "CFBundleDisplayName": "Portal",
-            "CFBundleShortVersionString": "1.0.0",
+            "CFBundleShortVersionString": "1.2.0",
             "NSHumanReadableCopyright": "MIT",
         },
     )
