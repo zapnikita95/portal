@@ -9,6 +9,7 @@ import 'package:portal_flutter/portal/portal_secrets.dart';
 import 'package:portal_flutter/portal/protocol_client.dart';
 import 'package:portal_flutter/ui/pending_share.dart';
 import 'package:portal_flutter/util/send_errors.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class SendScreen extends StatefulWidget {
   const SendScreen({super.key, this.onOpenSettings});
@@ -21,15 +22,22 @@ class SendScreen extends StatefulWidget {
 }
 
 class _SendScreenState extends State<SendScreen> {
+  static const _kDefaultSendGroupId = 'portal_flutter_default_send_group_id';
+
   final _text = TextEditingController();
   String? _filePath;
   bool _busy = false;
   String _status = '';
   PortalSettings? _settingsSnap;
 
-  /// Кому слать в этом сеансе (подмножество пиров с галочкой «Отправка» / группы).
-  final Set<String> _selectedSendIps = {};
+  /// Активные группы (чипы): при снятии группы IP убираются, если их не покрывает другая активная группа.
+  final Set<String> _activeGroupIds = <String>{};
+
+  /// Итоговые IP для отправки (чекбоксы + члены активных групп).
+  final Set<String> _selectedSendIps = <String>{};
+
   bool _sendSelectionTouched = false;
+  bool _appliedDefaultGroupOnce = false;
 
   @override
   void initState() {
@@ -44,33 +52,94 @@ class _SendScreenState extends State<SendScreen> {
 
   Future<void> _reloadSettings() async {
     final st = await SettingsRepository.load();
+    final prefs = await SharedPreferences.getInstance();
+    var defId = prefs.getString(_kDefaultSendGroupId) ?? '';
+    if (defId.isNotEmpty && !st.peerGroups.any((g) => g.id == defId)) {
+      await prefs.remove(_kDefaultSendGroupId);
+      defId = '';
+    }
     if (!mounted) return;
     setState(() {
       _settingsSnap = st;
-      _mergeSendSelectionFromPool(_poolIps(st));
+      _pruneSelection(st);
+      if (!_sendSelectionTouched && !_appliedDefaultGroupOnce) {
+        _appliedDefaultGroupOnce = true;
+        if (defId.isNotEmpty) {
+          PeerGroupDto? g;
+          for (final x in st.peerGroups) {
+            if (x.id == defId) {
+              g = x;
+              break;
+            }
+          }
+          if (g != null && _validMemberIps(st, g).isNotEmpty) {
+            _activeGroupIds
+              ..clear()
+              ..add(defId);
+            _selectedSendIps
+              ..clear()
+              ..addAll(_validMemberIps(st, g));
+          }
+        }
+      }
     });
   }
 
-  Set<String> _poolIps(PortalSettings st) {
-    return st
-        .peersForSending()
-        .map((p) => p.ip.trim())
-        .where((s) => s.isNotEmpty)
-        .toSet();
+  void _pruneSelection(PortalSettings st) {
+    final pool =
+        st.peersWithIpForSendUi().map((p) => p.ip.trim()).where((s) => s.isNotEmpty).toSet();
+    _selectedSendIps.removeWhere((ip) => !pool.contains(ip));
+    _activeGroupIds.removeWhere(
+      (id) => !st.peerGroups.any((g) => g.id == id),
+    );
   }
 
-  void _mergeSendSelectionFromPool(Set<String> pool) {
-    _selectedSendIps.removeWhere((ip) => !pool.contains(ip));
-    if (!_sendSelectionTouched) {
-      _selectedSendIps
-        ..clear()
-        ..addAll(pool);
+  Set<String> _validMemberIps(PortalSettings st, PeerGroupDto g) {
+    final have = st.peers.map((p) => p.ip.trim()).where((x) => x.isNotEmpty).toSet();
+    return g.memberIps.map((e) => e.trim()).where((e) => e.isNotEmpty && have.contains(e)).toSet();
+  }
+
+  void _activateGroup(PortalSettings st, PeerGroupDto g) {
+    _activeGroupIds.add(g.id);
+    _selectedSendIps.addAll(_validMemberIps(st, g));
+  }
+
+  void _deactivateGroup(PortalSettings st, PeerGroupDto g) {
+    _activeGroupIds.remove(g.id);
+    final mine = _validMemberIps(st, g);
+    for (final ip in mine) {
+      var inOther = false;
+      for (final og in st.peerGroups) {
+        if (og.id == g.id) continue;
+        if (!_activeGroupIds.contains(og.id)) continue;
+        if (_validMemberIps(st, og).contains(ip)) inOther = true;
+      }
+      if (!inOther) {
+        _selectedSendIps.remove(ip);
+      }
+    }
+  }
+
+  Future<void> _setPinnedDefaultGroup(String? groupId) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (groupId == null || groupId.isEmpty) {
+      await prefs.remove(_kDefaultSendGroupId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Сброшена основная группа для отправки')),
+        );
+      }
       return;
     }
-    for (final ip in pool) {
-      if (!_selectedSendIps.contains(ip)) {
-        _selectedSendIps.add(ip);
-      }
+    await prefs.setString(_kDefaultSendGroupId, groupId);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Эта группа будет выбрана при следующем открытии «Отправить» (долгое нажатие снова — сменить)',
+          ),
+        ),
+      );
     }
   }
 
@@ -89,7 +158,7 @@ class _SendScreenState extends State<SendScreen> {
   }
 
   List<PeerDto> _selectedTargets(PortalSettings st) {
-    final pool = st.peersForSending();
+    final pool = st.peersWithIpForSendUi();
     return pool.where((p) => _selectedSendIps.contains(p.ip.trim())).toList();
   }
 
@@ -149,14 +218,14 @@ class _SendScreenState extends State<SendScreen> {
     }
     final st = await SettingsRepository.load();
     final tg = _selectedTargets(st);
-    if (st.peersForSending().isEmpty) {
+    if (st.peersWithIpForSendUi().isEmpty) {
       setState(() => _status =
-          'Нет получателей в списке: добавь пиров во вкладке «Пиры» и включи «Отправка» или группу.');
+          'Нет адресов: добавь пиров во вкладке «Пиры».');
       return;
     }
     if (tg.isEmpty) {
-      setState(() =>
-          _status = 'Отметь хотя бы одного получателя внизу («Кому отправить»).');
+      setState(() => _status =
+          'Выбери группу (чип сверху) или отметь адреса в списке.');
       return;
     }
 
@@ -210,13 +279,13 @@ class _SendScreenState extends State<SendScreen> {
     }
     final st = await SettingsRepository.load();
     final tg = _selectedTargets(st);
-    if (st.peersForSending().isEmpty) {
-      setState(() => _status = 'Нет получателей — настрой пиров во вкладке «Пиры».');
+    if (st.peersWithIpForSendUi().isEmpty) {
+      setState(() => _status = 'Нет адресов — добавь пиров во вкладке «Пиры».');
       return;
     }
     if (tg.isEmpty) {
-      setState(() =>
-          _status = 'Отметь хотя бы одного получателя внизу («Кому отправить»).');
+      setState(() => _status =
+          'Выбери группу или отметь адреса в списке «Кому отправить».');
       return;
     }
 
@@ -258,14 +327,14 @@ class _SendScreenState extends State<SendScreen> {
   }
 
   Widget _buildTargetsCard(PortalSettings st) {
-    final tg = st.peersForSending();
-    final anyGroup = st.peerGroups.any((g) => g.sendToGroup);
+    final tg = st.peersWithIpForSendUi();
+    final groups = st.peerGroups;
 
     if (tg.isEmpty) {
       return Card(
         margin: EdgeInsets.zero,
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(12),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -273,12 +342,9 @@ class _SendScreenState extends State<SendScreen> {
                 'Кому отправить',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
               Text(
-                anyGroup
-                    ? 'Нет пиров с IP из отмеченных групп (или группы пустые). '
-                        'Настрой во вкладке «Пиры».'
-                    : 'Нет пиров с галочкой «Отправка». Добавь адреса во вкладке «Пиры».',
+                'Нет сохранённых адресов. Добавь их во вкладке «Пиры».',
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
             ],
@@ -287,17 +353,10 @@ class _SendScreenState extends State<SendScreen> {
       );
     }
 
-    final groupNames = <String>{};
-    if (anyGroup) {
-      for (final g in st.peerGroups.where((x) => x.sendToGroup)) {
-        groupNames.add(g.name);
-      }
-    }
-
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+        padding: const EdgeInsets.fromLTRB(8, 8, 8, 10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -315,20 +374,27 @@ class _SendScreenState extends State<SendScreen> {
                       : () {
                           setState(() {
                             _sendSelectionTouched = true;
-                            final pool = _poolIps(st);
-                            if (_selectedSendIps.length == pool.length) {
+                            final all =
+                                tg.map((p) => p.ip.trim()).where((s) => s.isNotEmpty).toSet();
+                            if (_selectedSendIps.length == all.length &&
+                                all.isNotEmpty) {
                               _selectedSendIps.clear();
+                              _activeGroupIds.clear();
                             } else {
                               _selectedSendIps
                                 ..clear()
-                                ..addAll(pool);
+                                ..addAll(all);
+                              _activeGroupIds.clear();
                             }
                           });
                         },
                   child: Text(
-                    _selectedSendIps.length == _poolIps(st).length
-                        ? 'Снять все'
-                        : 'Выбрать все',
+                    () {
+                      final all = tg.map((p) => p.ip.trim()).where((s) => s.isNotEmpty).toSet();
+                      return _selectedSendIps.length == all.length && all.isNotEmpty
+                          ? 'Снять все'
+                          : 'Все адреса';
+                    }(),
                   ),
                 ),
                 IconButton(
@@ -338,18 +404,60 @@ class _SendScreenState extends State<SendScreen> {
                 ),
               ],
             ),
-            if (groupNames.isNotEmpty) ...[
-              Padding(
-                padding: const EdgeInsets.only(left: 8, bottom: 4),
-                child: Text(
-                  'Группы: ${groupNames.join(', ')}',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
+            if (groups.isNotEmpty) ...[
+              Text(
+                'Группы (нажми — включить/выключить все адреса группы). Долгое нажатие — сделать основной при следующем входе.',
+                style: Theme.of(context).textTheme.bodySmall,
               ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: groups.map((g) {
+                  final active = _activeGroupIds.contains(g.id);
+                  final label = g.name.trim().isEmpty ? 'Группа' : g.name.trim();
+                  return GestureDetector(
+                    onLongPress: _busy
+                        ? null
+                        : () => _setPinnedDefaultGroup(g.id),
+                    child: FilterChip(
+                      label: Text(label),
+                      selected: active,
+                      showCheckmark: true,
+                      visualDensity: VisualDensity.compact,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      onSelected: _busy
+                          ? null
+                          : (v) {
+                              setState(() {
+                                _sendSelectionTouched = true;
+                                if (v) {
+                                  _activateGroup(st, g);
+                                } else {
+                                  _deactivateGroup(st, g);
+                                }
+                              });
+                            },
+                    ),
+                  );
+                }).toList(),
+              ),
+              TextButton(
+                onPressed: _busy
+                    ? null
+                    : () => _setPinnedDefaultGroup(null),
+                child: const Text('Сбросить «основную группу»'),
+              ),
+              const SizedBox(height: 4),
             ],
+            Text(
+              'Адреса',
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
+            const SizedBox(height: 2),
             ConstrainedBox(
               constraints: BoxConstraints(
-                maxHeight: (tg.length * 52.0).clamp(120.0, 280.0),
+                maxHeight: (tg.length * 40.0).clamp(96.0, 200.0),
               ),
               child: ListView(
                 shrinkWrap: true,
@@ -374,16 +482,24 @@ class _SendScreenState extends State<SendScreen> {
                       p.networkKind == 'tailscale'
                           ? Icons.vpn_key_outlined
                           : Icons.lan_outlined,
-                      size: 22,
+                      size: 20,
                     ),
                     title: Text(
                       p.name.isNotEmpty ? p.name : ip,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium,
                     ),
-                    subtitle: Text(ip, maxLines: 1, overflow: TextOverflow.ellipsis),
+                    subtitle: Text(
+                      ip,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                     controlAffinity: ListTileControlAffinity.leading,
                     dense: true,
+                    visualDensity: VisualDensity.compact,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 4),
                   );
                 }).toList(),
               ),
@@ -407,7 +523,12 @@ class _SendScreenState extends State<SendScreen> {
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
               children: [
                 Text('Отправить', style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
+                if (st != null)
+                  _buildTargetsCard(st)
+                else
+                  const LinearProgressIndicator(),
+                const SizedBox(height: 16),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   title: Text(_filePath ?? 'Файл не выбран'),
@@ -450,12 +571,6 @@ class _SendScreenState extends State<SendScreen> {
                   ),
               ],
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: st != null
-                ? _buildTargetsCard(st)
-                : const LinearProgressIndicator(),
           ),
         ],
       ),

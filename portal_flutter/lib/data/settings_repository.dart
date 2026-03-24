@@ -40,7 +40,8 @@ class PeerDto {
   }
 }
 
-/// Именованная группа IP: галочка «отправка на группу» включает все member_ips из сохранённых пиров.
+/// Именованная группа IP. На мобильном выбор «куда слать» делается на экране «Отправить» (чипы групп);
+/// поле send_to_group в JSON сохраняется как false с клиента для совместимости с десктопом.
 class PeerGroupDto {
   PeerGroupDto({
     required this.id,
@@ -162,29 +163,13 @@ class PortalSettings {
         mdnsDisplayName: '',
       );
 
-  /// Кому слать: если у хотя бы одной группы sendToGroup — только IP из отмеченных групп (пересечение с peers).
-  /// Иначе — классика: peer.send.
-  List<PeerDto> peersForSending() {
-    final fromGroups = <String>{};
-    var anyGroupOn = false;
-    for (final g in peerGroups) {
-      if (g.sendToGroup) {
-        anyGroupOn = true;
-        for (final ip in g.memberIps) {
-          final t = ip.trim();
-          if (t.isNotEmpty) fromGroups.add(t);
-        }
-      }
-    }
-    if (anyGroupOn) {
-      final filtered = peers
-          .where((p) => p.send && fromGroups.contains(p.ip.trim()))
-          .toList();
-      // Галочка «на группу» с пустым/непересекающимся списком IP резала всех — «ничего не работает».
-      if (filtered.isNotEmpty) return filtered;
-    }
-    return peers.where((p) => p.send && p.ip.trim().isNotEmpty).toList();
+  /// Все пиры с непустым IP — кандидаты на экране «Отправить» (без фильтра peer.send / групп из «Пиры»).
+  List<PeerDto> peersWithIpForSendUi() {
+    return peers.where((p) => p.ip.trim().isNotEmpty).toList();
   }
+
+  /// Совместимость со старым кодом; на мобильном эквивалентно [peersWithIpForSendUi].
+  List<PeerDto> peersForSending() => peersWithIpForSendUi();
 }
 
 class SettingsRepository {

@@ -16,6 +16,10 @@ class _PeersScreenState extends State<PeersScreen> {
   final _rows = <_PeerRow>[];
   final _groups = <_GroupEdit>[];
   final _lanSeed = TextEditingController();
+  final _draftIp = TextEditingController();
+  final _draftName = TextEditingController();
+  final _draftSecret = TextEditingController();
+  String _draftKind = 'lan';
   bool _loading = true;
   LanScanScope _lanScope = LanScanScope.wifi;
 
@@ -39,17 +43,6 @@ class _PeersScreenState extends State<PeersScreen> {
     _groups.clear();
   }
 
-  /// Строка-черновик в конце списка (пустой IP).
-  _PeerRow _newDraftRow() {
-    return _PeerRow(
-      ip: TextEditingController(),
-      name: TextEditingController(),
-      peerSecret: TextEditingController(),
-      send: true,
-      networkKind: _defaultKindForTab(),
-    );
-  }
-
   String _defaultKindForTab() {
     switch (_lanScope) {
       case LanScanScope.wifi:
@@ -70,20 +63,21 @@ class _PeersScreenState extends State<PeersScreen> {
         ip: TextEditingController(text: p.ip),
         name: TextEditingController(text: p.name),
         peerSecret: TextEditingController(text: p.peerSecret),
-        send: p.send,
+        send: true,
         networkKind: p.networkKind,
       ));
     }
 
     _lanScope = lanScanScopeFromStorage(st.lanScanMode);
     _lanSeed.text = st.lanSeedHintIp;
+    _draftKind = _defaultKindForTab();
 
     for (final g in st.peerGroups) {
       _groups.add(_GroupEdit(
         id: g.id.isNotEmpty ? g.id : _newId(),
         name: TextEditingController(text: g.name),
         memberIps: List<String>.from(g.memberIps),
-        sendToGroup: g.sendToGroup,
+        sendToGroup: false,
       ));
     }
   }
@@ -133,7 +127,7 @@ class _PeersScreenState extends State<PeersScreen> {
       peers.add(PeerDto(
         ip: ip,
         name: nm.isEmpty ? ip : nm,
-        send: r.send,
+        send: true,
         networkKind: r.networkKind,
         peerSecret: r.peerSecret.text.trim(),
       ));
@@ -144,7 +138,7 @@ class _PeersScreenState extends State<PeersScreen> {
         id: g.id,
         name: g.name.text.trim().isEmpty ? 'Группа' : g.name.text.trim(),
         memberIps: List<String>.from(g.memberIps),
-        sendToGroup: g.sendToGroup,
+        sendToGroup: false,
       ));
     }
     return PortalSettings(
@@ -208,6 +202,78 @@ class _PeersScreenState extends State<PeersScreen> {
         duration: const Duration(seconds: 6),
       ),
     );
+  }
+
+  Future<void> _pingDraft() async {
+    final ip = _draftIp.text.trim();
+    if (ip.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Введи IP')),
+      );
+      return;
+    }
+    final st = await SettingsRepository.load();
+    final rowSecret = _draftSecret.text.trim();
+    final secrets = <String>[
+      if (rowSecret.isNotEmpty) rowSecret,
+      ...PortalSecrets.orderedCandidateSecrets(st)
+          .where((s) => s != rowSecret),
+    ];
+    final ok = await pingPortalTrySecrets(ip, secrets: secrets);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ok
+              ? 'Pong: $ip'
+              : 'Нет ответа: $ip. ПК: «Запустить портал», :12345; пароль — общий или в поле ниже.',
+        ),
+        duration: const Duration(seconds: 5),
+      ),
+    );
+  }
+
+  Future<void> _commitDraft() async {
+    final ip = _draftIp.text.trim();
+    if (ip.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Введи IP')),
+      );
+      return;
+    }
+    if (_rows.any((r) => r.ip.text.trim() == ip)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Уже есть: $ip')),
+      );
+      return;
+    }
+    setState(() {
+      _rows.insert(
+        0,
+        _PeerRow(
+          ip: TextEditingController(text: ip),
+          name: TextEditingController(text: _draftName.text.trim()),
+          peerSecret: TextEditingController(text: _draftSecret.text.trim()),
+          send: true,
+          networkKind: _draftKind == 'lan' || _draftKind == 'tailscale'
+              ? _draftKind
+              : _defaultKindForTab(),
+        ),
+      );
+      _draftIp.clear();
+      _draftName.clear();
+      _draftSecret.clear();
+      _draftKind = _defaultKindForTab();
+    });
+    await _persist(showSnack: false);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Добавлено: $ip')),
+      );
+    }
   }
 
   Future<void> _lanScan() async {
@@ -475,7 +541,7 @@ class _PeersScreenState extends State<PeersScreen> {
         send: true,
         networkKind: kind,
       );
-      _rows.add(row);
+      _rows.insert(0, row);
       have.add(ip);
     }
     setState(() {});
@@ -492,6 +558,9 @@ class _PeersScreenState extends State<PeersScreen> {
     _disposeRows();
     _disposeGroups();
     _lanSeed.dispose();
+    _draftIp.dispose();
+    _draftName.dispose();
+    _draftSecret.dispose();
     super.dispose();
   }
 
@@ -521,15 +590,6 @@ class _PeersScreenState extends State<PeersScreen> {
                   onPressed: _lanScan,
                   icon: const Icon(Icons.wifi_find),
                 ),
-                IconButton(
-                  tooltip: 'Добавить пира',
-                  onPressed: () {
-                    setState(() {
-                      _rows.add(_newDraftRow());
-                    });
-                  },
-                  icon: const Icon(Icons.add),
-                ),
                 FilledButton(onPressed: _saveNow, child: const Text('Сохранить')),
               ],
             ),
@@ -541,21 +601,8 @@ class _PeersScreenState extends State<PeersScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 12),
               children: [
                 Text(
-                  'Вкладки Wi‑Fi / mesh / Все фильтруют список. Тип сети у строки задаётся вручную. '
-                  'Нажми «Сохранить», чтобы записать пиров, группы и подсказку для LAN-скана.',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'Вкладка = фильтр списка и режим сканирования',
-                  style: Theme.of(context).textTheme.titleSmall,
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Wi‑Fi — только пиры с типом «домашняя» или авто с LAN-IP. '
-                  'mesh — в списке только mesh-VPN (100.64–127.x) или явно помеченные; '
-                  'кнопка «Найти в LAN» в mesh всё равно обходит и домашнюю LAN, и 100.x. '
-                  '«Все» — весь список.',
+                  'Фильтр Wi‑Fi / mesh / Все. Куда слать — только вкладка «Отправить» (группы и галки). '
+                  '«Сохранить» — записать список и группы.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 8),
@@ -579,8 +626,115 @@ class _PeersScreenState extends State<PeersScreen> {
                   ],
                   selected: <LanScanScope>{_lanScope},
                   onSelectionChanged: (Set<LanScanScope> next) {
-                    setState(() => _lanScope = next.first);
+                    setState(() {
+                      _lanScope = next.first;
+                      _draftKind = _defaultKindForTab();
+                    });
                   },
+                ),
+                const SizedBox(height: 10),
+                Card(
+                  margin: EdgeInsets.zero,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          'Новый адрес',
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              flex: 3,
+                              child: TextField(
+                                controller: _draftIp,
+                                decoration: const InputDecoration(
+                                  labelText: 'IP',
+                                  isDense: true,
+                                  border: OutlineInputBorder(),
+                                ),
+                                keyboardType: TextInputType.url,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              flex: 2,
+                              child: TextField(
+                                controller: _draftName,
+                                decoration: const InputDecoration(
+                                  labelText: 'Подпись',
+                                  isDense: true,
+                                  border: OutlineInputBorder(),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _draftSecret,
+                          obscureText: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Пароль устройства (пусто = общий)',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: DropdownButtonFormField<String>(
+                                value: _draftKind == 'lan' ||
+                                        _draftKind == 'tailscale' ||
+                                        _draftKind == 'auto'
+                                    ? _draftKind
+                                    : 'auto',
+                                isDense: true,
+                                decoration: const InputDecoration(
+                                  labelText: 'Сеть',
+                                  isDense: true,
+                                  border: OutlineInputBorder(),
+                                  contentPadding: EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 8,
+                                  ),
+                                ),
+                                items: _kindLabels.entries
+                                    .map(
+                                      (e) => DropdownMenuItem(
+                                        value: e.key,
+                                        child: Text(
+                                          e.value,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    )
+                                    .toList(),
+                                onChanged: (v) {
+                                  if (v == null) return;
+                                  setState(() => _draftKind = v);
+                                },
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Ping',
+                              onPressed: _pingDraft,
+                              icon: const Icon(Icons.radar, size: 22),
+                            ),
+                            FilledButton.tonal(
+                              onPressed: _commitDraft,
+                              child: const Text('Добавить'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 12),
                 if (visible.isEmpty)
@@ -607,9 +761,9 @@ class _PeersScreenState extends State<PeersScreen> {
                             const SizedBox(height: 8),
                             Text(
                               _rows.isEmpty
-                                  ? 'Нажми «+» (Добавить пира), введи IP и подпись, '
-                                      'затем «Сохранить».'
-                                  : 'Переключи Wi‑Fi / mesh / «Все» или добавь пира с IP '
+                                  ? 'Заполни форму «Новый адрес» сверху и нажми «Добавить», '
+                                      'потом «Сохранить».'
+                                  : 'Переключи Wi‑Fi / mesh / «Все» или добавь IP '
                                       'для этого режима.',
                               textAlign: TextAlign.center,
                               style: Theme.of(context).textTheme.bodyMedium,
@@ -621,95 +775,105 @@ class _PeersScreenState extends State<PeersScreen> {
                   ),
                 ...visible.map((i) {
                   final r = _rows[i];
+                  final ip = r.ip.text.trim();
+                  final nm = r.name.text.trim();
+                  final title = nm.isEmpty ? ip : '$nm · $ip';
+                  final sub = _kindLabels[r.networkKind] ?? r.networkKind;
                   return Card(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          TextField(
-                            controller: r.ip,
-                            decoration: const InputDecoration(
-                              labelText: 'IP',
-                              border: OutlineInputBorder(),
-                            ),
-                            keyboardType: TextInputType.url,
-                            onChanged: (_) => setState(() {}),
-                          ),
-                          const SizedBox(height: 8),
-                          TextField(
-                            controller: r.peerSecret,
-                            obscureText: true,
-                            decoration: const InputDecoration(
-                              labelText: 'Пароль этого устройства (как на ПК)',
-                              helperText:
-                                  'Задаётся при добавлении пира или здесь. Пусто = общий из «Настроить»; '
-                                  'свой пароль изолирует доступ к этой машине.',
-                              border: OutlineInputBorder(),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          TextField(
-                            controller: r.name,
-                            decoration: const InputDecoration(
-                              labelText: 'Подпись',
-                              border: OutlineInputBorder(),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          DropdownButtonFormField<String>(
-                            value: r.networkKind == 'lan' ||
-                                    r.networkKind == 'tailscale' ||
-                                    r.networkKind == 'auto'
-                                ? r.networkKind
-                                : 'auto',
-                            decoration: const InputDecoration(
-                              labelText: 'Сеть',
-                              border: OutlineInputBorder(),
-                            ),
-                            items: _kindLabels.entries
-                                .map(
-                                  (e) => DropdownMenuItem(
-                                    value: e.key,
-                                    child: Text(e.value),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (v) {
-                              if (v == null) return;
-                              setState(() => r.networkKind = v);
-                            },
-                          ),
-                          Row(
-                            children: [
-                              Checkbox(
-                                value: r.send,
-                                onChanged: (v) {
-                                  setState(() => r.send = v ?? true);
-                                },
-                              ),
-                              const Expanded(
-                                child: Text('Отправка на этот адрес'),
-                              ),
-                              IconButton(
-                                tooltip: 'Ping (pong с ПК)',
-                                onPressed: () => _ping(i),
-                                icon: const Icon(Icons.radar),
-                              ),
-                              IconButton(
-                                onPressed: () {
-                                  setState(() {
-                                    _rows[i].dispose();
-                                    _rows.removeAt(i);
-                                  });
-                                },
-                                icon: const Icon(Icons.delete_outline),
-                              ),
-                            ],
-                          ),
-                        ],
+                    margin: const EdgeInsets.only(bottom: 6),
+                    child: ExpansionTile(
+                      tilePadding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: -2,
                       ),
+                      childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                      title: Text(
+                        title.isEmpty ? '…' : title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodyLarge,
+                      ),
+                      subtitle: Text(
+                        sub,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      children: [
+                        TextField(
+                          controller: r.ip,
+                          decoration: const InputDecoration(
+                            labelText: 'IP',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                          ),
+                          keyboardType: TextInputType.url,
+                          onChanged: (_) => setState(() {}),
+                        ),
+                        const SizedBox(height: 6),
+                        TextField(
+                          controller: r.peerSecret,
+                          obscureText: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Пароль устройства',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        TextField(
+                          controller: r.name,
+                          decoration: const InputDecoration(
+                            labelText: 'Подпись',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        DropdownButtonFormField<String>(
+                          value: r.networkKind == 'lan' ||
+                                  r.networkKind == 'tailscale' ||
+                                  r.networkKind == 'auto'
+                              ? r.networkKind
+                              : 'auto',
+                          isDense: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Сеть',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                          ),
+                          items: _kindLabels.entries
+                              .map(
+                                (e) => DropdownMenuItem(
+                                  value: e.key,
+                                  child: Text(e.value),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (v) {
+                            if (v == null) return;
+                            setState(() => r.networkKind = v);
+                          },
+                        ),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            TextButton.icon(
+                              onPressed: () => _ping(i),
+                              icon: const Icon(Icons.radar, size: 18),
+                              label: const Text('Ping'),
+                            ),
+                            TextButton.icon(
+                              onPressed: () {
+                                setState(() {
+                                  _rows[i].dispose();
+                                  _rows.removeAt(i);
+                                });
+                              },
+                              icon: const Icon(Icons.delete_outline, size: 18),
+                              label: const Text('Удалить'),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
                   );
                 }),
@@ -717,7 +881,7 @@ class _PeersScreenState extends State<PeersScreen> {
                 Row(
                   children: [
                     Text(
-                      'Группы для отправки',
+                      'Группы',
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const Spacer(),
@@ -738,7 +902,8 @@ class _PeersScreenState extends State<PeersScreen> {
                   ],
                 ),
                 Text(
-                  'Если у группы включена «Отправка на группу», в «Отправить» берутся только IP из отмеченных групп (и только те, что есть в списке пиров выше). Иначе — по галочке у каждого пира.',
+                  'Группы нужны для вкладки «Отправить»: там чипами выбираешь, на кого слать. '
+                  'Здесь только состав группы (IP из списка выше).',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 if (_groups.isEmpty)
@@ -753,55 +918,61 @@ class _PeersScreenState extends State<PeersScreen> {
                 const SizedBox(height: 8),
                 ..._groups.map((g) {
                   return Card(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          TextField(
-                            controller: g.name,
-                            decoration: const InputDecoration(
-                              labelText: 'Название группы',
-                              border: OutlineInputBorder(),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Участники (выбери IP из сохранённых пиров выше)',
-                            style: Theme.of(context).textTheme.labelLarge,
-                          ),
-                          const SizedBox(height: 6),
-                          _GroupMemberPicker(
-                            group: g,
-                            peerIps: _rows
-                                .map((r) => r.ip.text.trim())
-                                .where((s) => s.isNotEmpty)
-                                .toList(),
-                            onChanged: () => setState(() {}),
-                          ),
-                          CheckboxListTile(
-                            contentPadding: EdgeInsets.zero,
-                            title: const Text('Отправка на эту группу'),
-                            value: g.sendToGroup,
-                            onChanged: (v) {
-                              setState(() => g.sendToGroup = v ?? false);
-                            },
-                          ),
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: IconButton(
-                              onPressed: () {
-                                setState(() {
-                                  g.dispose();
-                                  _groups.remove(g);
-                                });
-                              },
-                              icon: const Icon(Icons.delete_outline),
-                            ),
-                          ),
-                        ],
+                    margin: const EdgeInsets.only(bottom: 6),
+                    child: ExpansionTile(
+                      tilePadding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: -2,
                       ),
+                      childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                      title: Text(
+                        g.name.text.trim().isEmpty
+                            ? 'Группа'
+                            : g.name.text.trim(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        '${g.memberIps.length} адр.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      children: [
+                        TextField(
+                          controller: g.name,
+                          decoration: const InputDecoration(
+                            labelText: 'Название',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Участники',
+                          style: Theme.of(context).textTheme.labelSmall,
+                        ),
+                        const SizedBox(height: 4),
+                        _GroupMemberPicker(
+                          group: g,
+                          peerIps: _rows
+                              .map((r) => r.ip.text.trim())
+                              .where((s) => s.isNotEmpty)
+                              .toList(),
+                          onChanged: () => setState(() {}),
+                        ),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: TextButton.icon(
+                            onPressed: () {
+                              setState(() {
+                                g.dispose();
+                                _groups.remove(g);
+                              });
+                            },
+                            icon: const Icon(Icons.delete_outline, size: 18),
+                            label: const Text('Удалить группу'),
+                          ),
+                        ),
+                      ],
                     ),
                   );
                 }),
