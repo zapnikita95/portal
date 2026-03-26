@@ -159,7 +159,7 @@ if sys.platform == "darwin":
             "NSHighResolutionCapable": True,
             "CFBundleName": "Portal",
             "CFBundleDisplayName": "Portal",
-            "CFBundleShortVersionString": "1.2.1",
+            "CFBundleShortVersionString": "1.2.2",
             "NSHumanReadableCopyright": "MIT",
         },
     )

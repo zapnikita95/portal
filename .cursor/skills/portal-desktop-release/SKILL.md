@@ -5,6 +5,21 @@ description: Сборка Portal (.app / .exe) через PyInstaller и GitHub 
 
 # Portal: десктоп-сборки и релизы
 
+## Один скрипт: версия → commit → тег → GitHub CI
+
+Из корня репозитория:
+
+- **Windows (PowerShell):**  
+  `.\scripts\release_desktop.ps1 -Version 1.2.0 -BumpConfig`  
+  Опции: `-LocalBuild` (проверочная сборка перед push), `-SkipPush`, `-DryRun`.
+
+- **macOS / Linux:**  
+  `bash scripts/release_desktop.sh --version 1.2.0 --bump`
+
+После `git push` тега `v*` workflow **Portal Desktop Build** прикрепляет **PortalSetup.exe** (Inno), **Portal-Windows.zip** и macOS-артефакты. На Windows проверка обновлений открывает загрузку **PortalSetup.exe** (см. `installer/PortalSetup.iss`, `portal_github.pick_desktop_download_url`).
+
+---
+
 ## Локально (Mac / Windows)
 
 Из корня репозитория `portal/`:

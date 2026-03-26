@@ -169,9 +169,17 @@ xattr -dr com.apple.quarantine dist/Portal.app
 
 ## 6. «Обычный» установщик (опционально)
 
-Сборка PyInstaller даёт **портативную папку** — это нормально. Если нужен мастер «Далее → Далее»:
+Сборка PyInstaller даёт **портативную папку** — это нормально. В репозитории лежит готовый скрипт **`installer/PortalSetup.iss`**: GitHub Actions на каждом релизе с тегом `v*` собирает **`PortalSetup.exe`** и кладёт его в Release (кнопка «Обновление» в приложении открывает именно его на Windows).
 
-### Windows (.exe установщик) — Inno Setup 6.7.x, что жать
+Локально после `pyinstaller -y pyinstaller_portal.spec`:
+
+```powershell
+& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\PortalSetup.iss /DMyAppVersion=1.2.0
+```
+
+Результат: `dist\PortalSetup.exe`. Или `.\scripts\release_desktop.ps1 -Version 1.2.0 -LocalBuild -BuildInstaller` (нужен установленный Inno Setup 6).
+
+### Windows (.exe установщик) — Inno Setup 6.7.x, что жать (мастер с нуля)
 
 **Перед Inno:** в корне проекта уже есть сборка PyInstaller:
 

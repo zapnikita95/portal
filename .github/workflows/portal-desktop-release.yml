@@ -2,7 +2,7 @@
 # (шаблон в корне — чтобы push с PAT без scope `workflow` не блокировался.)
 #
 # Сборка Portal для macOS (.app) и Windows (.exe) через PyInstaller.
-# Артефакты: Portal-macOS.zip, Portal.dmg (перетащи .app в «Программы»), Portal-Windows.zip
+# Артефакты: Portal-macOS.zip, Portal.dmg, Portal-Windows.zip, PortalSetup.exe (Inno Setup)
 # Релиз: push тега v* (например v1.2.0).
 # Ручной запуск: Actions → «Portal Desktop Build» → Run workflow.
 
@@ -18,8 +18,10 @@ on:
       - "portal_widget.py"
       - "portal_mac_hotkey_helper.py"
       - "portal.py"
+      - "portal_config.py"
       - "MAC_PORTAL_HOTKEYS.md"
       - "pyinstaller_portal.spec"
+      - "installer/**"
       - ".github/workflows/portal-desktop-release.yml"
 
 permissions:
@@ -94,14 +96,34 @@ jobs:
       - name: PyInstaller (Portal.exe + папка)
         run: pyinstaller -y pyinstaller_portal.spec
 
-      - name: ZIP для релиза
+      - name: ZIP для релиза (портатив)
         shell: pwsh
         run: Compress-Archive -Path dist/Portal -DestinationPath dist/Portal-Windows.zip -Force
+
+      - name: Inno Setup — PortalSetup.exe
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = "${env:ProgramFiles}\Inno Setup 6\ISCC.exe" }
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe not found (Inno Setup 6)" }
+          $ref = "${{ github.ref_name }}"
+          if ($ref -match '^v\d') {
+            $ver = $ref.TrimStart('v')
+          } else {
+            $m = Select-String -Path portal_config.py -Pattern 'PORTAL_DESKTOP_VERSION = "([^"]+)"'
+            $ver = $m.Matches[0].Groups[1].Value
+          }
+          Write-Host "Installer AppVersion: $ver"
+          & $iscc "installer\PortalSetup.iss" "/DMyAppVersion=$ver"
+          if (-not (Test-Path "dist\PortalSetup.exe")) { throw "dist\PortalSetup.exe missing" }
 
       - uses: actions/upload-artifact@v4
         with:
           name: Portal-Windows
-          path: dist/Portal-Windows.zip
+          path: |
+            dist/Portal-Windows.zip
+            dist/PortalSetup.exe
 
   release:
     needs: [build-macos, build-windows]
@@ -127,5 +149,6 @@ jobs:
             rel/Portal-macOS.zip
             rel/Portal.dmg
             rel/Portal-Windows.zip
+            rel/PortalSetup.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

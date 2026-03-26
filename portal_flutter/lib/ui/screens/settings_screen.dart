@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:portal_flutter/data/settings_repository.dart';
 import 'package:portal_flutter/services/portal_service_controller.dart';
 import 'package:portal_flutter/util/receive_paths.dart';
@@ -41,6 +42,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final a = st.portalAnimPreset.trim().toLowerCase();
     _animPreset = _animLabels.containsKey(a) ? a : 'branding';
     if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _copyReceiveFolderHint() async {
+    const t =
+        'Portal Android: если «Папка приёма» пустая — основной файл в каталоге приложения, '
+        'плюс копия в приложении «Загрузки» → папка Portal (видно без root). '
+        'Путь вроде /storage/emulated/0/Portal с фона часто недоступен — это ограничение ОС, не баг.';
+    await Clipboard.setData(const ClipboardData(text: t));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Подсказка про папки скопирована в буфер')),
+    );
   }
 
   Future<void> _pickFolder() async {
@@ -124,11 +137,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
               labelText: 'Общий пароль Portal (как на ПК, config.json)',
               border: OutlineInputBorder(),
               helperText:
-                  'Подставляется для пиров без своего пароля. Чтобы не «делиться одной сетью»: '
-                  'оставь здесь пусто и задай пароль у каждого IP в «Пиры» (или при добавлении со скана). '
-                  'Приём принимает любой из заданных паролей.',
+                  'Это пароль ЭТОГО телефона для входящих подключений (как portal_password на ПК). '
+                  'У каждого устройства свой. В строке пира в «Пиры» указываешь пароль ТОГО пира, '
+                  'к кому шлёшь (его portal_password). Оба могут быть разными: ты знаешь их оба и вписал. '
+                  'Пустой общий + пустой у пира = без пароля (только для доверенной сети).',
             ),
             obscureText: true,
+            maxLines: 1,
           ),
           const SizedBox(height: 16),
           TextField(
@@ -148,18 +163,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
               labelText: 'Папка приёма',
               border: OutlineInputBorder(),
               helperText:
-                  'Пусто: приём в папку приложения + копия в «Загрузки/Portal» (Android). '
-                  'Своя папка: не всегда работает из фона — проверяется при сохранении.',
+                  'Рекомендация: оставь пустым — тогда копии попадут в системные «Загрузки» → Portal. '
+                  '«Выбрать папку» лучше направляй в Download или Documents (SAF); корень карты часто запрещён.',
             ),
           ),
           const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: OutlinedButton.icon(
-              onPressed: _pickFolder,
-              icon: const Icon(Icons.folder_open),
-              label: const Text('Выбрать папку…'),
-            ),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: _pickFolder,
+                icon: const Icon(Icons.folder_open),
+                label: const Text('Выбрать папку…'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _copyReceiveFolderHint,
+                icon: const Icon(Icons.copy),
+                label: const Text('Подсказка в буфер'),
+              ),
+            ],
           ),
           const SizedBox(height: 20),
           Text(

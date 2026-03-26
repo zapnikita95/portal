@@ -155,9 +155,10 @@ def merge_outgoing_shared_secret(message: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def incoming_peer_secret_ok(message: Optional[dict]) -> bool:
-    """Проверка пароля сети на приёме (константное время)."""
+    """Проверка пароля сети на приёме (константное время). Учитывает extra_shared_secrets."""
     expected = portal_config.load_shared_secret()
-    if not expected:
+    extras = portal_config.load_extra_shared_secrets()
+    if not expected and not extras:
         return True
     if _portal_allow_legacy_no_auth():
         return True
@@ -168,12 +169,28 @@ def incoming_peer_secret_ok(message: Optional[dict]) -> bool:
         return False
     try:
         a = str(got).encode("utf-8")
-        b = expected.encode("utf-8")
     except Exception:
         return False
-    if len(a) > 512 or len(b) > 512:
+    if len(a) > 512:
         return False
-    return hmac.compare_digest(a, b)
+    candidates: List[bytes] = []
+    if expected:
+        try:
+            b = expected.encode("utf-8")
+            if len(b) <= 512:
+                candidates.append(b)
+        except Exception:
+            pass
+    for e in extras:
+        try:
+            eb = e.encode("utf-8")
+            if len(eb) <= 512:
+                candidates.append(eb)
+        except Exception:
+            continue
+    if not candidates:
+        return True
+    return any(hmac.compare_digest(a, c) for c in candidates)
 
 
 def set_system_clipboard_png(png_bytes: bytes) -> bool:
@@ -1053,6 +1070,8 @@ class PortalApp(ctk.CTk):
         self._history_scroll: Optional[Any] = None
         self._history_filter_entry: Optional[Any] = None
         self._lan_win: Optional[ctk.CTkToplevel] = None
+        self._onboarding_win: Optional[ctk.CTkToplevel] = None
+        self._tray_started = False
 
         # Стандартное медиа из assets → сразу в config, чтобы поле «Медиа» не было пустым
         try:
@@ -1062,6 +1081,7 @@ class PortalApp(ctk.CTk):
         
         # Создание UI
         self.create_ui()
+        self.protocol("WM_DELETE_WINDOW", self._on_main_window_close)
         
         # Drag & Drop в главном окне
         self.setup_main_window_drag_drop()
@@ -1170,6 +1190,29 @@ class PortalApp(ctk.CTk):
         except:
             return None
 
+    def _self_ipv4_addresses(self) -> Set[str]:
+        """Собственные IPv4 этого ПК — не показывать в LAN-скане и не добавлять в пиры/группы."""
+        out: Set[str] = set()
+        try:
+            import portal_netinfo
+
+            out.update(portal_netinfo.collect_non_loopback_ipv4())
+        except Exception:
+            pass
+        try:
+            ts = (getattr(self, "tailscale_ip", None) or self.get_tailscale_ip() or "").strip()
+        except Exception:
+            ts = (getattr(self, "tailscale_ip", None) or "").strip()
+        lan = primary_lan_ipv4_for_ui(ts)
+        if lan:
+            out.add(lan)
+        if ts and portal_config._is_ipv4(ts):
+            out.add(ts)
+        manual = (portal_config.load_manual_mesh_ip_hint() or "").strip()
+        if manual and portal_config._is_ipv4(manual):
+            out.add(manual)
+        return out
+
     def _refresh_main_connection_labels(self) -> None:
         """Обновить подписи LAN / mesh на главной (и после сохранения ручного mesh)."""
         if not hasattr(self, "_main_lan_label"):
@@ -1266,6 +1309,13 @@ class PortalApp(ctk.CTk):
         ).pack(side="left", padx=3)
         ctk.CTkButton(
             toolbar,
+            text=i18n.tr("toolbar.onboarding"),
+            width=120,
+            command=self._open_onboarding_window,
+            font=ctk.CTkFont(size=13),
+        ).pack(side="left", padx=3)
+        ctk.CTkButton(
+            toolbar,
             text=i18n.tr("toolbar.help"),
             width=40,
             command=self._open_help_window,
@@ -1357,14 +1407,43 @@ class PortalApp(ctk.CTk):
             text_color="gray",
         ).pack(anchor="w", padx=4, pady=(4, 0))
 
+        self._main_quick_ip_row = ctk.CTkFrame(peer_frame, fg_color="transparent")
+        ctk.CTkLabel(
+            self._main_quick_ip_row,
+            text=i18n.tr("main.quick_ip_title"),
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(anchor="w", padx=16, pady=(8, 2))
+        _qip = ctk.CTkFrame(self._main_quick_ip_row, fg_color="transparent")
+        _qip.pack(fill="x", padx=16)
+        self.main_quick_ip_entry = ctk.CTkEntry(
+            _qip, width=220, placeholder_text="192.168.x.x"
+        )
+        self.main_quick_ip_entry.pack(side="left", padx=(0, 8))
+        wire_ctk_entry_paste(self.main_quick_ip_entry)
+        ctk.CTkButton(
+            _qip,
+            text=i18n.tr("main.quick_ip_add"),
+            width=168,
+            command=self._save_main_quick_ip,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left")
+        ctk.CTkLabel(
+            self._main_quick_ip_row,
+            text=i18n.tr("main.quick_ip_hint"),
+            font=ctk.CTkFont(size=10),
+            text_color="gray",
+            wraplength=700,
+            justify="left",
+            anchor="w",
+        ).pack(anchor="w", padx=16, pady=(2, 0))
+
         self._peer_targets_heading.pack(anchor="w", padx=12, pady=(8, 4))
-        self.peer_select_frame = ctk.CTkFrame(peer_frame, fg_color="transparent", height=96)
-        self.peer_select_frame.pack(fill="x", padx=12, pady=(0, 4))
-        try:
-            self.peer_select_frame.pack_propagate(False)
-        except Exception:
-            pass
+        self.peer_select_scroll = ctk.CTkScrollableFrame(
+            peer_frame, height=168, fg_color="transparent"
+        )
+        self.peer_select_scroll.pack(fill="both", expand=True, padx=12, pady=(0, 4))
         self.rebuild_peer_checkboxes()
+        self._patch_main_scroll_excludes_peer_list()
         ctk.CTkButton(
             peer_frame,
             text=i18n.tr("main.save_recipients"),
@@ -1464,6 +1543,14 @@ class PortalApp(ctk.CTk):
         )
         self.clipboard_button.pack(side="left", padx=10, pady=10, fill="x", expand=True)
         
+        self._receive_progress = ctk.CTkProgressBar(
+            main_frame, orientation="horizontal", width=440, height=10, mode="determinate"
+        )
+        self._receive_progress.set(0)
+        self._receive_progress.pack(pady=(4, 0))
+        self._receive_progress.pack_forget()
+        self._receive_progress_min_bytes = 2 * 1024 * 1024
+
         # Статус
         self.status_label = ctk.CTkLabel(
             main_frame,
@@ -1592,6 +1679,111 @@ class PortalApp(ctk.CTk):
                 except Exception:
                     pass
 
+    def _on_main_window_close(self) -> None:
+        if platform.system() == "win32" and not getattr(
+            self, "_portal_force_quit", False
+        ):
+            try:
+                import portal_tray_win
+
+                if not self._tray_started:
+                    if portal_tray_win.start_tray(
+                        app=self,
+                        on_open=self._tray_restore_main_window,
+                        on_quit=self._tray_quit_application,
+                    ):
+                        self._tray_started = True
+                        self.log(i18n.tr("tray.hint_minimize"))
+                        self.withdraw()
+                        return
+            except Exception as ex:
+                self.log(f"⚠️ Трей: {ex}")
+        self._tray_quit_application()
+
+    def _tray_restore_main_window(self) -> None:
+        try:
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+        except Exception:
+            pass
+
+    def _tray_quit_application(self) -> None:
+        self._portal_force_quit = True
+        try:
+            import portal_tray_win
+
+            portal_tray_win.stop_tray(self)
+        except Exception:
+            pass
+        try:
+            w = getattr(self, "portal_widget_ref", None)
+            if w is not None and hasattr(w, "destroy"):
+                w.destroy()
+        except Exception:
+            pass
+        try:
+            if self.is_server_running:
+                self.stop_server()
+        except Exception:
+            pass
+        try:
+            self.destroy()
+        except Exception:
+            pass
+
+    def _save_main_quick_ip(self) -> None:
+        if not hasattr(self, "main_quick_ip_entry"):
+            return
+        ip = self.main_quick_ip_entry.get().strip()
+        if not ip:
+            self.log("⚠️ Введите IPv4 пира")
+            return
+        if not portal_config._is_ipv4(ip):
+            self.log("⚠️ Нужен полный IPv4 (например 192.168.1.5)")
+            return
+        if ip in self._self_ipv4_addresses():
+            try:
+                self.log(i18n.tr("peers.self_ip_blocked", ip=ip))
+            except Exception:
+                self.log("⚠️ Это адрес этого компьютера")
+            return
+        ips = list(portal_config.load_peer_ips())
+        if ip in ips:
+            self.log(i18n.tr("main.quick_ip_exists", ip=ip))
+            return
+        ips.append(ip)
+        if portal_config.save_peer_ips(ips):
+            self.log(i18n.tr("main.quick_ip_saved", ip=ip))
+            try:
+                self.main_quick_ip_entry.delete(0, "end")
+            except Exception:
+                pass
+            self.rebuild_peer_checkboxes()
+            self._reload_peer_settings_from_config()
+        else:
+            self.log("❌ Не удалось сохранить IP")
+
+    def _ui_receive_progress_show(self, done: int, total: int) -> None:
+        if not hasattr(self, "_receive_progress"):
+            return
+        if total < getattr(self, "_receive_progress_min_bytes", 2 * 1024 * 1024):
+            return
+        try:
+            self._receive_progress.pack(pady=(4, 0))
+            self._receive_progress.set(max(0.0, min(1.0, float(done) / float(total))))
+        except Exception:
+            pass
+
+    def _ui_receive_progress_hide(self) -> None:
+        if not hasattr(self, "_receive_progress"):
+            return
+        try:
+            self._receive_progress.pack_forget()
+            self._receive_progress.set(0)
+        except Exception:
+            pass
+
     def _save_main_secret_banner(self) -> None:
         if not hasattr(self, "main_secret_entry"):
             return
@@ -1621,9 +1813,25 @@ class PortalApp(ctk.CTk):
 
     def _on_settings_closed(self) -> None:
         try:
+            self._widget_pulse_generation += 1
+            w = getattr(self, "portal_widget_ref", None)
+            if w is not None and hasattr(w, "clear_transient_portal_media"):
+                try:
+                    w.clear_transient_portal_media()
+                except Exception:
+                    pass
             self.rebuild_peer_checkboxes()
             self._sync_settings_secret_entry_from_config()
             self._refresh_main_secret_banner_visibility()
+            if hasattr(self, "extra_secrets_text"):
+                try:
+                    self.extra_secrets_text.delete("1.0", "end")
+                    self.extra_secrets_text.insert(
+                        "1.0",
+                        "\n".join(portal_config.load_extra_shared_secrets()),
+                    )
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -2056,6 +2264,33 @@ class PortalApp(ctk.CTk):
             command=self.save_widget_geometry_from_ui,
             font=ctk.CTkFont(size=12),
         ).pack(side="left", padx=(4, 0))
+        wm_geo2 = ctk.CTkFrame(t_widget, fg_color="transparent")
+        wm_geo2.pack(fill="x", padx=8, pady=(0, 6))
+        self.widget_easy_drag_var = tk.BooleanVar(
+            value=portal_config.load_widget_easy_drag()
+        )
+        ctk.CTkCheckBox(
+            wm_geo2,
+            text=i18n.tr("widget.easy_drag"),
+            variable=self.widget_easy_drag_var,
+            command=self._toggle_widget_easy_drag,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 10))
+        ctk.CTkButton(
+            wm_geo2,
+            text=i18n.tr("widget.snap_from_widget"),
+            width=200,
+            command=self.save_widget_position_from_live_widget,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkLabel(
+            wm_geo2,
+            text=i18n.tr("widget.margin_hint"),
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=480,
+            justify="left",
+        ).pack(side="left", fill="x", expand=True)
         if platform.system() == "Darwin":
             mac_bg_row = ctk.CTkFrame(t_widget, fg_color="transparent")
             mac_bg_row.pack(fill="x", padx=8, pady=(6, 2))
@@ -2217,22 +2452,12 @@ class PortalApp(ctk.CTk):
         self._widget_preset_rules_scroll.pack(fill="x", padx=8, pady=(0, 6))
         self._rebuild_widget_preset_rule_rows()
 
-        ctk.CTkLabel(
-            t_peers,
-            text=i18n.tr("peers.rows_intro"),
-            font=ctk.CTkFont(size=11),
-            text_color="gray",
-            wraplength=720,
-            justify="left",
-        ).pack(anchor="w", padx=8, pady=(8, 4))
         self._peer_setting_rows: List[Dict[str, Any]] = []
         self._peer_group_setting_rows: List[Dict[str, Any]] = []
-        self._peers_settings_scroll = ctk.CTkScrollableFrame(
-            t_peers, height=220, fg_color="transparent"
-        )
-        self._peers_settings_scroll.pack(fill="both", expand=True, padx=8, pady=(0, 4))
-        peer_btn_row = ctk.CTkFrame(t_peers, fg_color="transparent")
-        peer_btn_row.pack(fill="x", padx=8, pady=(0, 6))
+        peer_footer = ctk.CTkFrame(t_peers, fg_color="transparent")
+        peer_footer.pack(side="bottom", fill="x", padx=8, pady=(4, 10))
+        peer_btn_row = ctk.CTkFrame(peer_footer, fg_color="transparent")
+        peer_btn_row.pack(fill="x", pady=(0, 4))
         ctk.CTkButton(
             peer_btn_row,
             text=i18n.tr("peers.add_ip_row"),
@@ -2243,34 +2468,39 @@ class PortalApp(ctk.CTk):
         ctk.CTkButton(
             peer_btn_row,
             text=i18n.tr("peers.save_list"),
-            width=150,
+            width=200,
             command=self.save_peer_ips_from_ui,
             font=ctk.CTkFont(size=12, weight="bold"),
         ).pack(side="left", padx=(0, 8))
-        ctk.CTkLabel(
-            t_peers,
-            text=i18n.tr("peers.settings_hint"),
-            font=ctk.CTkFont(size=11),
+        self._peers_settings_save_feedback = ctk.CTkLabel(
+            peer_footer,
+            text="",
+            font=ctk.CTkFont(size=12),
             text_color="gray",
-            wraplength=720,
-            justify="left",
-        ).pack(anchor="w", padx=8, pady=(4, 8))
+            anchor="w",
+        )
+        self._peers_settings_save_feedback.pack(anchor="w", fill="x")
+
+        self._peers_tab_scroll = ctk.CTkScrollableFrame(
+            t_peers, fg_color="transparent"
+        )
+        self._peers_tab_scroll.pack(fill="both", expand=True, padx=8, pady=(8, 4))
+        pts = self._peers_tab_scroll
         ctk.CTkLabel(
-            t_peers,
+            pts,
             text=i18n.tr("peers.groups_title"),
             font=ctk.CTkFont(size=13, weight="bold"),
-        ).pack(anchor="w", padx=8, pady=(10, 4))
+        ).pack(anchor="w", pady=(0, 4))
         ctk.CTkLabel(
-            t_peers,
+            pts,
             text=i18n.tr("peers.groups_hint"),
             font=ctk.CTkFont(size=11),
             text_color="gray",
             wraplength=720,
             justify="left",
-        ).pack(anchor="w", padx=8, pady=(0, 4))
-        # Кнопку «Добавить группу» выше списка — иначе на узком окне она уезжает под предел скролла вкладки.
-        grp_btn_row = ctk.CTkFrame(t_peers, fg_color="transparent")
-        grp_btn_row.pack(fill="x", padx=8, pady=(0, 6))
+        ).pack(anchor="w", pady=(0, 4))
+        grp_btn_row = ctk.CTkFrame(pts, fg_color="transparent")
+        grp_btn_row.pack(fill="x", pady=(0, 6))
         ctk.CTkButton(
             grp_btn_row,
             text=i18n.tr("peers.add_group_row"),
@@ -2278,10 +2508,26 @@ class PortalApp(ctk.CTk):
             command=self._add_peer_group_settings_row_ui,
             font=ctk.CTkFont(size=12),
         ).pack(side="left")
-        self._peer_groups_scroll = ctk.CTkScrollableFrame(
-            t_peers, height=220, fg_color="transparent"
-        )
-        self._peer_groups_scroll.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self._peer_groups_inner = ctk.CTkFrame(pts, fg_color="transparent")
+        self._peer_groups_inner.pack(fill="x", pady=(0, 12))
+        ctk.CTkLabel(
+            pts,
+            text=i18n.tr("peers.rows_intro"),
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=720,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 4))
+        ctk.CTkLabel(
+            pts,
+            text=i18n.tr("peers.settings_hint"),
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=720,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 8))
+        self._peer_ips_inner = ctk.CTkFrame(pts, fg_color="transparent")
+        self._peer_ips_inner.pack(fill="x", pady=(0, 8))
         self._peer_group_checkbox_vars: Dict[str, Any] = {}
         self._reload_peer_settings_from_config()
 
@@ -2350,6 +2596,46 @@ class PortalApp(ctk.CTk):
             wraplength=680,
             justify="left",
         ).pack(anchor="w", padx=8, pady=(4, 8))
+        ctk.CTkLabel(
+            t_secret,
+            text=i18n.tr("secret.extra_title"),
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=8, pady=(8, 4))
+        ctk.CTkLabel(
+            t_secret,
+            text=i18n.tr("secret.extra_hint"),
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=680,
+            justify="left",
+        ).pack(anchor="w", padx=8, pady=(0, 6))
+        ex_row = ctk.CTkFrame(t_secret, fg_color="transparent")
+        ex_row.pack(fill="x", padx=8, pady=(0, 6))
+        ctk.CTkButton(
+            ex_row,
+            text=i18n.tr("secret.extra_gen_line"),
+            width=200,
+            command=self._generate_extra_secret_line_ui,
+            font=ctk.CTkFont(size=12),
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            ex_row,
+            text=i18n.tr("secret.extra_save"),
+            width=160,
+            command=self._save_extra_secrets_ui,
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(side="left")
+        self.extra_secrets_text = ctk.CTkTextbox(
+            t_secret, width=660, height=120, font=ctk.CTkFont(size=12)
+        )
+        self.extra_secrets_text.pack(fill="x", padx=8, pady=(0, 8))
+        try:
+            self.extra_secrets_text.insert(
+                "1.0",
+                "\n".join(portal_config.load_extra_shared_secrets()),
+            )
+        except Exception:
+            pass
         ctk.CTkLabel(
             t_secret,
             text=i18n.tr("secret.banner_hint2"),
@@ -2498,6 +2784,42 @@ class PortalApp(ctk.CTk):
             portal_update_check.manual_check_from_menu(self)
         except Exception as e:
             self.log(f"🔄 Обновления: {e}")
+
+    def _open_onboarding_window(self) -> None:
+        if self._onboarding_win is not None:
+            try:
+                if self._onboarding_win.winfo_exists():
+                    self._onboarding_win.deiconify()
+                    self._onboarding_win.lift()
+                    return
+            except Exception:
+                self._onboarding_win = None
+        w = ctk.CTkToplevel(self)
+        w.title(i18n.tr("onboarding.title"))
+        w.geometry("720x620")
+        w.minsize(560, 480)
+        try:
+            w.transient(self)
+        except Exception:
+            pass
+        self._onboarding_win = w
+        sc = ctk.CTkScrollableFrame(w, fg_color="transparent")
+        sc.pack(fill="both", expand=True, padx=12, pady=12)
+        ctk.CTkLabel(
+            sc,
+            text=i18n.tr("onboarding.body"),
+            font=ctk.CTkFont(size=13),
+            justify="left",
+            anchor="w",
+            wraplength=660,
+        ).pack(anchor="w", fill="x")
+        ctk.CTkButton(
+            w,
+            text=i18n.tr("onboarding.close"),
+            width=200,
+            command=w.destroy,
+            font=ctk.CTkFont(size=13),
+        ).pack(pady=(0, 12))
 
     def _open_help_window(self) -> None:
         if self._help_win is not None:
@@ -2759,11 +3081,47 @@ class PortalApp(ctk.CTk):
                 pb.pack_forget()
             except Exception:
                 pass
+            self_ips = self._self_ipv4_addresses()
+            removed = [ip for ip in list(found_labels.keys()) if ip in self_ips]
+            for ip in removed:
+                found_labels.pop(ip, None)
+            if removed:
+                try:
+                    self.log(
+                        i18n.tr("lan.hidden_self_ips", ips=", ".join(removed[:8]))
+                    )
+                except Exception:
+                    pass
+            after_self_n = len(found_labels)
+            known_peers = set(portal_config.load_peer_ips())
+            removed_known = [ip for ip in list(found_labels.keys()) if ip in known_peers]
+            for ip in removed_known:
+                found_labels.pop(ip, None)
+            if removed_known:
+                try:
+                    self.log(
+                        i18n.tr(
+                            "lan.hidden_known_peers",
+                            ips=", ".join(removed_known[:8]),
+                        )
+                    )
+                except Exception:
+                    pass
             st.configure(text=i18n.tr("lan.done", n=len(found_labels)))
             for ch in scroll.winfo_children():
                 ch.destroy()
             if not found_labels:
-                ctk.CTkLabel(scroll, text=i18n.tr("lan.none")).pack(anchor="w", pady=6)
+                key = (
+                    "lan.new_only_none"
+                    if after_self_n > 0
+                    else "lan.none"
+                )
+                ctk.CTkLabel(
+                    scroll,
+                    text=i18n.tr(key),
+                    wraplength=640,
+                    justify="left",
+                ).pack(anchor="w", pady=6)
                 return
             for ip in sorted(
                 found_labels.keys(),
@@ -2799,7 +3157,8 @@ class PortalApp(ctk.CTk):
         threading.Thread(target=work, daemon=True).start()
 
         def add_selected() -> None:
-            sel = [ip for ip, v in check_vars.items() if v.get()]
+            self_ips = self._self_ipv4_addresses()
+            sel = [ip for ip, v in check_vars.items() if v.get() and ip not in self_ips]
             if not sel:
                 self.log(i18n.tr("lan.nothing_selected"))
                 return
@@ -3076,19 +3435,19 @@ class PortalApp(ctk.CTk):
         return labels, label_to_key, key_to_label
 
     def _clear_peer_settings_widgets(self) -> None:
-        if hasattr(self, "_peers_settings_scroll"):
-            for w in self._peers_settings_scroll.winfo_children():
+        if hasattr(self, "_peer_ips_inner"):
+            for w in self._peer_ips_inner.winfo_children():
                 w.destroy()
         self._peer_setting_rows.clear()
 
     def _clear_peer_group_settings_widgets(self) -> None:
-        if hasattr(self, "_peer_groups_scroll"):
-            for w in self._peer_groups_scroll.winfo_children():
+        if hasattr(self, "_peer_groups_inner"):
+            for w in self._peer_groups_inner.winfo_children():
                 w.destroy()
         self._peer_group_setting_rows.clear()
 
     def _reload_peer_settings_from_config(self) -> None:
-        if not hasattr(self, "_peers_settings_scroll"):
+        if not hasattr(self, "_peer_ips_inner"):
             return
         self._clear_peer_settings_widgets()
         ips = portal_config.load_peer_ips()
@@ -3115,7 +3474,7 @@ class PortalApp(ctk.CTk):
     def _append_peer_settings_row_widget(self, ip: str, name: str, net_label: str) -> None:
         labels, label_to_key, _ = self._net_menu_values()
         ex_labels, ex_l2k, ex_k2l = self._exchange_menu_values()
-        fr = ctk.CTkFrame(self._peers_settings_scroll, fg_color="transparent")
+        fr = ctk.CTkFrame(self._peer_ips_inner, fg_color="transparent")
         fr.pack(fill="x", pady=3)
         ip_e = ctk.CTkEntry(fr, width=150, placeholder_text="192.168.x.x")
         if ip:
@@ -3123,6 +3482,8 @@ class PortalApp(ctk.CTk):
         nm_e = ctk.CTkEntry(fr, width=160, placeholder_text=i18n.tr("peers.name_ph"))
         if name:
             nm_e.insert(0, name)
+        wire_ctk_entry_paste(ip_e)
+        wire_ctk_entry_paste(nm_e)
         net_m = ctk.CTkOptionMenu(fr, values=labels, width=130)
         net_m.set(net_label if net_label in labels else labels[0])
         cur_ex = portal_config.load_peer_exchange_mode(ip) if ip else "both"
@@ -3153,15 +3514,20 @@ class PortalApp(ctk.CTk):
         )
 
     def _add_peer_settings_row_ui(self) -> None:
-        if not hasattr(self, "_peers_settings_scroll"):
+        if not hasattr(self, "_peer_ips_inner"):
             return
         _, _, key_to_label = self._net_menu_values()
         self._append_peer_settings_row_widget("", "", key_to_label["auto"])
 
     def _peer_ips_for_group_picker(self) -> List[str]:
         """IP из текущих (ещё не сохранённых) строк настроек пиров."""
-        ips, _, _, _, bad = self._collect_peer_rows_from_settings_ui()
-        return [x for x in ips if x and portal_config._is_ipv4(x)]
+        ips, _, _, _, _bad = self._collect_peer_rows_from_settings_ui()
+        self_ips = self._self_ipv4_addresses()
+        return [
+            x
+            for x in ips
+            if x and portal_config._is_ipv4(x) and x not in self_ips
+        ]
 
     def _refresh_group_member_chips(self, row: Dict[str, Any]) -> None:
         chips = row.get("chips_frame")
@@ -3172,7 +3538,11 @@ class PortalApp(ctk.CTk):
         for ip in row.get("member_ips", []):
             chip = ctk.CTkFrame(chips, fg_color=("gray70", "gray30"))
             chip.pack(side="left", padx=(0, 4), pady=2)
-            ctk.CTkLabel(chip, text=ip, font=ctk.CTkFont(size=11)).pack(
+            ctk.CTkLabel(
+                chip,
+                text=portal_config.peer_display_label(ip),
+                font=ctk.CTkFont(size=11),
+            ).pack(
                 side="left", padx=(6, 2), pady=2
             )
 
@@ -3196,7 +3566,9 @@ class PortalApp(ctk.CTk):
         taken = set(row.get("member_ips", []))
         rest = [ip for ip in avail if ip not in taken]
         placeholder = "—"
-        menu.configure(values=[placeholder] + rest if rest else [placeholder])
+        labels = [portal_config.peer_display_label(ip) for ip in rest]
+        row["_group_menu_ip_by_label"] = {lab: ip for lab, ip in zip(labels, rest)}
+        menu.configure(values=[placeholder] + labels if labels else [placeholder])
         try:
             menu.set(placeholder)
         except Exception:
@@ -3205,10 +3577,17 @@ class PortalApp(ctk.CTk):
     def _on_group_add_ip_choice(self, row: Dict[str, Any], choice: str) -> None:
         if not choice or choice.startswith("—"):
             return
-        members: List[str] = list(row.get("member_ips", []))
-        if choice in members:
+        ip = (row.get("_group_menu_ip_by_label") or {}).get(choice, choice)
+        if ip in self._self_ipv4_addresses():
+            try:
+                self.log(i18n.tr("peers.self_ip_blocked", ip=ip))
+            except Exception:
+                pass
             return
-        members.append(choice)
+        members: List[str] = list(row.get("member_ips", []))
+        if ip in members:
+            return
+        members.append(ip)
         row["member_ips"] = members
         self._refresh_group_member_chips(row)
         self._refresh_group_add_menu_values(row)
@@ -3216,20 +3595,25 @@ class PortalApp(ctk.CTk):
     def _append_peer_group_row_widget(
         self, gid: str, name: str, member_ips: Optional[List[str]] = None
     ) -> None:
-        fr = ctk.CTkFrame(self._peer_groups_scroll, fg_color="transparent")
+        fr = ctk.CTkFrame(self._peer_groups_inner, fg_color="transparent")
         fr.pack(fill="x", pady=4)
         if not gid:
             gid = f"g_{secrets.token_hex(6)}"
         top = ctk.CTkFrame(fr, fg_color="transparent")
         top.pack(fill="x")
-        id_e = ctk.CTkEntry(top, width=88)
+        left = ctk.CTkFrame(top, fg_color="transparent")
+        left.pack(side="left", fill="x", expand=True)
+        id_e = ctk.CTkEntry(left, width=88)
         id_e.insert(0, gid)
         id_e.configure(state="disabled")
-        nm_e = ctk.CTkEntry(top, width=160, placeholder_text=i18n.tr("peers.group_name_ph"))
+        nm_e = ctk.CTkEntry(
+            left, width=120, placeholder_text=i18n.tr("peers.group_name_ph")
+        )
         if name:
             nm_e.insert(0, name)
+        wire_ctk_entry_paste(nm_e)
         id_e.pack(side="left", padx=(0, 4))
-        nm_e.pack(side="left", padx=(0, 6))
+        nm_e.pack(side="left", fill="x", expand=True, padx=(0, 8))
 
         def _remove_g() -> None:
             fr.destroy()
@@ -3286,7 +3670,7 @@ class PortalApp(ctk.CTk):
         self._refresh_group_add_menu_values(row)
 
     def _add_peer_group_settings_row_ui(self) -> None:
-        if not hasattr(self, "_peer_groups_scroll"):
+        if not hasattr(self, "_peer_groups_inner"):
             return
         self._append_peer_group_row_widget("", "", [])
 
@@ -3357,9 +3741,31 @@ class PortalApp(ctk.CTk):
         if not hasattr(self, "_peer_setting_rows"):
             return
         ips, aliases, kinds, exchange, bad = self._collect_peer_rows_from_settings_ui()
+        self_ips = self._self_ipv4_addresses()
+        skip_self = [ip for ip in ips if ip in self_ips]
+        ips = [ip for ip in ips if ip not in self_ips]
+        for ip in skip_self:
+            aliases.pop(ip, None)
+            kinds.pop(ip, None)
+            exchange.pop(ip, None)
+        if skip_self:
+            try:
+                self.log(
+                    i18n.tr("peers.self_ip_blocked", ip=", ".join(skip_self[:5]))
+                )
+            except Exception:
+                pass
         groups = self._collect_groups_from_settings_ui(allowed_ips=set(ips))
+        for g in groups:
+            raw = list(g.get("member_ips") or [])
+            g["member_ips"] = [x for x in raw if str(x).strip() not in self_ips]
         if hasattr(self, "ip_saved_feedback"):
             self.ip_saved_feedback.configure(text="⏳ …", text_color="gray")
+        if hasattr(self, "_peers_settings_save_feedback"):
+            self._peers_settings_save_feedback.configure(
+                text=i18n.tr("peers.save_working"),
+                text_color="gray",
+            )
         ok = portal_config.save_peer_ips(ips)
         if ok:
             portal_config.save_peer_aliases(aliases)
@@ -3381,6 +3787,11 @@ class PortalApp(ctk.CTk):
             self.log(f"💾 Список пиров сохранён ({len(ips)}): {', '.join(shown) or '(пусто)'}")
             if hasattr(self, "ip_saved_feedback"):
                 self.ip_saved_feedback.configure(text="✅ Список сохранён", text_color="#3dd68c")
+            if hasattr(self, "_peers_settings_save_feedback"):
+                self._peers_settings_save_feedback.configure(
+                    text=i18n.tr("peers.save_ok_settings"),
+                    text_color="#3dd68c",
+                )
             self._reload_peer_settings_from_config()
             self.rebuild_peer_checkboxes()
             self.check_peer_connection_async(silent=False)
@@ -3390,14 +3801,54 @@ class PortalApp(ctk.CTk):
             except Exception:
                 pass
         else:
-            self.log("❌ Не удалось сохранить список IP")
+            cfg_p = str(portal_config.config_path())
+            self.log(f"❌ Не удалось сохранить список IP — проверьте доступ к файлу: {cfg_p}")
             if hasattr(self, "ip_saved_feedback"):
                 self.ip_saved_feedback.configure(text="❌ Ошибка записи", text_color="#e74c3c")
+            if hasattr(self, "_peers_settings_save_feedback"):
+                self._peers_settings_save_feedback.configure(
+                    text=i18n.tr("peers.save_err_settings"),
+                    text_color="#e74c3c",
+                )
+            try:
+                from tkinter import messagebox
+
+                messagebox.showerror(
+                    i18n.tr("peers.save_err_title"),
+                    i18n.tr("peers.save_err_body", path=cfg_p),
+                )
+            except Exception:
+                pass
+
+    def _patch_main_scroll_excludes_peer_list(self) -> None:
+        """Не прокручивать внешний главный скролл, когда колесо над вложенным списком пиров."""
+        if not hasattr(self, "main_frame") or not hasattr(self, "peer_select_scroll"):
+            return
+        mf = self.main_frame
+        ps = self.peer_select_scroll
+        try:
+            orig = mf._mouse_wheel_all
+        except Exception:
+            return
+
+        def wrapped(event):
+            w = getattr(event, "widget", None)
+            x = w
+            while x is not None:
+                if x is ps:
+                    return
+                try:
+                    x = x.master
+                except Exception:
+                    break
+            return orig(event)
+
+        mf._mouse_wheel_all = wrapped
 
     def rebuild_peer_checkboxes(self) -> None:
-        if not hasattr(self, "peer_select_frame"):
+        if not hasattr(self, "peer_select_scroll"):
             return
-        for w in self.peer_select_frame.winfo_children():
+        for w in self.peer_select_scroll.winfo_children():
             w.destroy()
         self._peer_checkbox_vars.clear()
         if not hasattr(self, "_peer_group_checkbox_vars"):
@@ -3407,29 +3858,49 @@ class PortalApp(ctk.CTk):
         targets_set = set(portal_config.load_peer_send_targets())
         groups = portal_config.load_peer_groups()
         group_targets = set(portal_config.load_peer_send_group_ids())
+        box = self.peer_select_scroll
         if not ips and not groups:
             ctk.CTkLabel(
-                self.peer_select_frame,
+                box,
                 text=i18n.tr("peer.add_ip_hint"),
                 font=ctk.CTkFont(size=11),
                 text_color="gray",
-            ).pack(side="left", padx=4, pady=4)
+            ).pack(anchor="w", padx=4, pady=4)
             return
-        row = ctk.CTkFrame(self.peer_select_frame, fg_color="transparent")
-        row.pack(fill="x", pady=2)
+        if groups:
+            ctk.CTkLabel(
+                box,
+                text=i18n.tr("peers.main_groups_colon"),
+                font=ctk.CTkFont(size=11, weight="bold"),
+                anchor="w",
+            ).pack(anchor="w", padx=2, pady=(0, 2))
+            for g in groups:
+                gid = str(g.get("id", ""))
+                if not gid:
+                    continue
+                var = ctk.BooleanVar(value=gid in group_targets)
+                self._peer_group_checkbox_vars[gid] = var
+                gname = str(g.get("name", "Группа"))
+                n_ips = len(g.get("member_ips", []) or [])
+                ctk.CTkCheckBox(
+                    box,
+                    text=f"{gname} ({n_ips} IP)",
+                    variable=var,
+                    font=ctk.CTkFont(size=11),
+                ).pack(anchor="w", padx=(8, 4), pady=1)
         ctk.CTkLabel(
-            row,
+            box,
             text=i18n.tr("peers.main_peers_colon"),
             font=ctk.CTkFont(size=11, weight="bold"),
-            width=52,
-        ).pack(side="left", padx=(0, 6))
+            anchor="w",
+        ).pack(anchor="w", padx=2, pady=(10, 2))
         if ips:
             for ip in ips:
                 recv_only = portal_config.load_peer_exchange_mode(ip) == "receive_only"
                 var = ctk.BooleanVar(value=(ip in targets_set) and not recv_only)
                 self._peer_checkbox_vars[ip] = var
                 cb = ctk.CTkCheckBox(
-                    row,
+                    box,
                     text=portal_config.peer_display_label(ip),
                     variable=var,
                     font=ctk.CTkFont(size=11),
@@ -3440,37 +3911,14 @@ class PortalApp(ctk.CTk):
                         cb.configure(state="disabled")
                     except Exception:
                         pass
-                cb.pack(side="left", padx=(0, 14), pady=0)
+                cb.pack(anchor="w", padx=(8, 4), pady=1)
         else:
             ctk.CTkLabel(
-                row,
+                box,
                 text="—",
                 font=ctk.CTkFont(size=11),
                 text_color="gray",
-            ).pack(side="left", padx=4)
-        if groups:
-            row2 = ctk.CTkFrame(self.peer_select_frame, fg_color="transparent")
-            row2.pack(fill="x", pady=(4, 2))
-            ctk.CTkLabel(
-                row2,
-                text=i18n.tr("peers.main_groups_colon"),
-                font=ctk.CTkFont(size=11, weight="bold"),
-                width=52,
-            ).pack(side="left", padx=(0, 6))
-            for g in groups:
-                gid = str(g.get("id", ""))
-                if not gid:
-                    continue
-                var = ctk.BooleanVar(value=gid in group_targets)
-                self._peer_group_checkbox_vars[gid] = var
-                gname = str(g.get("name", "Группа"))
-                n_ips = len(g.get("member_ips", []) or [])
-                ctk.CTkCheckBox(
-                    row2,
-                    text=f"{gname} ({n_ips} IP)",
-                    variable=var,
-                    font=ctk.CTkFont(size=11),
-                ).pack(side="left", padx=(0, 14), pady=0)
+            ).pack(anchor="w", padx=8)
 
     def save_peer_selection_from_ui(self) -> None:
         ips = portal_config.load_peer_ips()
@@ -3836,6 +4284,26 @@ class PortalApp(ctk.CTk):
         except Exception as e:
             self.log(f"⚠️ Не удалось скопировать: {e}")
 
+    def _generate_extra_secret_line_ui(self) -> None:
+        if not hasattr(self, "extra_secrets_text"):
+            return
+        line = portal_config.generate_shared_secret(12)
+        try:
+            self.extra_secrets_text.insert("end", line + "\n")
+        except Exception:
+            pass
+        self.log(i18n.tr("secret.extra_generated_line"))
+
+    def _save_extra_secrets_ui(self) -> None:
+        if not hasattr(self, "extra_secrets_text"):
+            return
+        raw = self.extra_secrets_text.get("1.0", "end")
+        lines = [x.strip() for x in raw.splitlines() if x.strip()]
+        if portal_config.save_extra_shared_secrets(lines):
+            self.log(i18n.tr("secret.extra_saved", n=len(lines)))
+        else:
+            self.log("⚠️ Не удалось сохранить дополнительные пароли")
+
     def choose_widget_media_file(self) -> None:
         from tkinter import filedialog
         from tkinter import messagebox
@@ -4183,6 +4651,62 @@ class PortalApp(ctk.CTk):
                 "медиа подхватится при следующей загрузке."
             )
 
+    def _toggle_widget_easy_drag(self) -> None:
+        portal_config.save_widget_easy_drag(bool(self.widget_easy_drag_var.get()))
+        w = getattr(self, "portal_widget_ref", None)
+        if w is not None and hasattr(w, "refresh_drag_bindings"):
+            try:
+                self.after(0, w.refresh_drag_bindings)
+            except Exception:
+                w.refresh_drag_bindings()
+
+    def save_widget_position_from_live_widget(self) -> None:
+        w = getattr(self, "portal_widget_ref", None)
+        if w is None or not hasattr(w, "root"):
+            self.log(i18n.tr("widget.snap_no_widget"))
+            return
+        try:
+            import portal_win_metrics
+
+            ox, oy, ww, wh = portal_win_metrics.primary_work_area_tk(self)
+            wx = int(w.root.winfo_x())
+            wy = int(w.root.winfo_y())
+            sz = int(getattr(w, "size", 0) or 0)
+            if sz < 80:
+                self.log(i18n.tr("widget.snap_no_widget"))
+                return
+            label = self.widget_corner_menu.get()
+            ck = getattr(self, "_widget_corner_rev", {}).get(label, "br")
+            mx, my = portal_config.infer_widget_margins_from_window(
+                win_x=wx,
+                win_y=wy,
+                size=sz,
+                corner_key=ck,
+                origin_x=ox,
+                origin_y=oy,
+                work_w=ww,
+                work_h=wh,
+            )
+            self.widget_margin_x_entry.delete(0, "end")
+            self.widget_margin_x_entry.insert(0, str(mx))
+            self.widget_margin_y_entry.delete(0, "end")
+            self.widget_margin_y_entry.insert(0, str(my))
+            base = max(1, min(int(ww), int(wh)))
+            pct = float(sz) / float(base)
+            if portal_config.save_widget_geometry_settings(
+                size=sz,
+                corner_key=ck,
+                margin_x=mx,
+                margin_y=my,
+                size_pct=pct,
+            ):
+                self.log(i18n.tr("widget.snap_ok", mx=mx, my=my))
+                self._apply_widget_geometry_live()
+            else:
+                self.log("⚠️ Не удалось сохранить отступы")
+        except Exception as ex:
+            self.log(f"⚠️ Запоминание позиции: {ex}")
+
     def save_widget_geometry_from_ui(self) -> None:
         if not hasattr(self, "widget_size_entry"):
             return
@@ -4199,8 +4723,20 @@ class PortalApp(ctk.CTk):
         except ValueError:
             self.log("⚠️ Отступы X и Y — целые числа (пиксели от края экрана)")
             return
+        try:
+            import portal_win_metrics
+
+            _ox, _oy, ww, wh = portal_win_metrics.primary_work_area_tk(self)
+            base = max(1, min(int(ww), int(wh)))
+            pct = float(sz) / float(base)
+        except Exception:
+            pct = None
         if portal_config.save_widget_geometry_settings(
-            size=sz, corner_key=ck, margin_x=mx, margin_y=my
+            size=sz,
+            corner_key=ck,
+            margin_x=mx,
+            margin_y=my,
+            size_pct=pct,
         ):
             self.log("✅ Размер и положение виджета сохранены")
             self._apply_widget_geometry_live()
@@ -4268,7 +4804,7 @@ class PortalApp(ctk.CTk):
         m.set(pick)
 
     def _on_widget_idle_preset_combo_selected(self, choice: str) -> None:
-        """Выбранный пресет — обычный вид портала (хоткей); сохраняем и перезагружаем медиа."""
+        """Выбранный пресет — обычный вид портала (хоткей); сохраняем сразу и перезагружаем GIF."""
         labels, ids = self._widget_preset_labels_and_ids()
         try:
             idx = labels.index(str(choice))
@@ -4302,6 +4838,26 @@ class PortalApp(ctk.CTk):
         except Exception:
             pass
 
+    def _widget_rule_peer_menu_lists(self) -> Tuple[List[str], List[str]]:
+        """Подписи для ComboBox и соответствующие значения peer в config (*, IP, group:id)."""
+        keys: List[str] = ["*"]
+        disp: List[str] = ["*"]
+        for ip in portal_config.load_peer_ips():
+            ip = str(ip).strip()
+            if not ip or not portal_config._is_ipv4(ip):
+                continue
+            keys.append(ip)
+            disp.append(portal_config.peer_display_label(ip))
+        for g in portal_config.load_peer_groups():
+            gid = str(g.get("id", "")).strip()
+            if not gid:
+                continue
+            gname = str(g.get("name", "Группа")).strip() or "Группа"
+            n = len(g.get("member_ips", []) or [])
+            keys.append(f"group:{gid}")
+            disp.append(f'Группа «{gname}» ({n} IP)')
+        return disp, keys
+
     def _add_widget_preset_rule_row(
         self, peer: str, event_key: str, preset_id: str
     ) -> None:
@@ -4312,17 +4868,23 @@ class PortalApp(ctk.CTk):
         fr = ctk.CTkFrame(sc, fg_color="transparent")
         fr.pack(fill="x", pady=3)
         peer_s = (peer or "").strip() or "*"
-        ip_vals = ["*"] + [p for p in portal_config.load_peer_ips() if str(p).strip()]
-        if peer_s not in ip_vals:
-            ip_vals.insert(1, peer_s)
+        disp, pkeys = self._widget_rule_peer_menu_lists()
+        if peer_s not in pkeys:
+            pkeys.insert(1, peer_s)
+            disp.insert(1, peer_s)
+        try:
+            ix = pkeys.index(peer_s)
+            start_d = disp[ix]
+        except ValueError:
+            start_d = disp[0]
         ip_e = ctk.CTkComboBox(
             fr,
-            width=160,
-            values=ip_vals,
+            width=280,
+            values=disp,
             font=ctk.CTkFont(size=12),
             state="normal",
         )
-        ip_e.set(peer_s if peer_s in ip_vals else ip_vals[0])
+        ip_e.set(start_d)
         ip_e.pack(side="left", padx=(0, 6))
         ev_map = i18n.widget_preset_event_labels()
         ev_labels = list(ev_map.values())
@@ -4340,7 +4902,7 @@ class PortalApp(ctk.CTk):
         pr_m = ctk.CTkOptionMenu(
             fr,
             values=labels,
-            width=340,
+            width=280,
             font=ctk.CTkFont(size=12),
         )
         if preset_id in ids:
@@ -4351,6 +4913,8 @@ class PortalApp(ctk.CTk):
         row_ui: Dict[str, Any] = {
             "frame": fr,
             "ip": ip_e,
+            "peer_disp": disp,
+            "peer_keys": pkeys,
             "event_menu": ev_m,
             "preset_menu": pr_m,
             "preset_ids": list(ids),
@@ -4389,7 +4953,19 @@ class PortalApp(ctk.CTk):
         rules: List[Dict[str, str]] = []
         rev_ev = {v: k for k, v in i18n.widget_preset_event_labels().items()}
         for row in self._widget_preset_rule_rows:
-            ip = (row["ip"].get() or "").strip() or "*"
+            shown = (row["ip"].get() or "").strip()
+            disp_l: List[str] = row.get("peer_disp") or []
+            key_l: List[str] = row.get("peer_keys") or []
+            peer_k = "*"
+            try:
+                ix = disp_l.index(shown)
+                peer_k = key_l[ix]
+            except (ValueError, IndexError):
+                if shown == "*":
+                    peer_k = "*"
+                elif portal_config._is_ipv4(shown):
+                    peer_k = shown
+            peer_k = (peer_k or "*").strip() or "*"
             ev_ru = row["event_menu"].get()
             ev = rev_ev.get(ev_ru, "receive")
             pr_vals = list(row["preset_menu"].cget("values"))
@@ -4400,7 +4976,7 @@ class PortalApp(ctk.CTk):
                 pid = ids_row[ix]
             except (ValueError, IndexError):
                 pid = "main"
-            rules.append({"peer": ip, "event": ev, "preset": pid})
+            rules.append({"peer": peer_k, "event": ev, "preset": pid})
         return rules
 
     def save_widget_preset_rules_from_ui(self) -> None:
@@ -4453,7 +5029,7 @@ class PortalApp(ctk.CTk):
                 "Проверь путь в «Медиа» (по умолчанию assets/portal_main.gif) и файлы в assets/presets/."
             )
             return
-        seconds = 4.0
+        seconds = 2.5
 
         def run() -> None:
             try:
@@ -4578,6 +5154,12 @@ class PortalApp(ctk.CTk):
                             try:
                                 if w.is_visible():
                                     w.hide()
+                            except Exception:
+                                pass
+                        elif ev == "receive" and was_visible:
+                            try:
+                                if hasattr(w, "freeze_portal_animation_static"):
+                                    w.freeze_portal_animation_static()
                             except Exception:
                                 pass
                     except tk.TclError:
@@ -5301,19 +5883,54 @@ class PortalApp(ctk.CTk):
 
             remaining = filesize
             chunk_buf = strip_leading_tcp_json_delimiter(prefix)
-            with open(filepath, "wb") as f:
-                while remaining > 0:
-                    if chunk_buf:
-                        take = min(len(chunk_buf), remaining)
-                        f.write(chunk_buf[:take])
-                        chunk_buf = chunk_buf[take:]
-                        remaining -= take
-                        continue
-                    chunk = client_socket.recv(min(65536, remaining))
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    remaining -= len(chunk)
+            got_total = 0
+            last_prog = 0
+            prog_step = max(262_144, filesize // 100) if filesize > 0 else 262_144
+
+            def _prog_bump(delta: int) -> None:
+                nonlocal got_total, last_prog
+                got_total += delta
+                if filesize < getattr(self, "_receive_progress_min_bytes", 2 * 1024 * 1024):
+                    return
+                if got_total - last_prog < prog_step and got_total < filesize:
+                    return
+                last_prog = got_total
+                try:
+                    self.after(
+                        0,
+                        lambda g=got_total: self._ui_receive_progress_show(g, filesize),
+                    )
+                except Exception:
+                    pass
+
+            try:
+                try:
+                    self.after(
+                        0,
+                        lambda: self._ui_receive_progress_show(0, max(filesize, 1)),
+                    )
+                except Exception:
+                    pass
+                with open(filepath, "wb") as f:
+                    while remaining > 0:
+                        if chunk_buf:
+                            take = min(len(chunk_buf), remaining)
+                            f.write(chunk_buf[:take])
+                            _prog_bump(take)
+                            chunk_buf = chunk_buf[take:]
+                            remaining -= take
+                            continue
+                        chunk = client_socket.recv(min(65536, remaining))
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        _prog_bump(len(chunk))
+                        remaining -= len(chunk)
+            finally:
+                try:
+                    self.after(0, self._ui_receive_progress_hide)
+                except Exception:
+                    self._ui_receive_progress_hide()
 
             if remaining > 0:
                 self._log_from_thread(
@@ -6369,9 +6986,41 @@ class PortalApp(ctk.CTk):
         clip_batch: Optional[Tuple[str, int, int]] = None,
     ):
         """Отправка файла; portal_clipboard — на приёме положить в буфер ОС."""
+        tmp_zip: Optional[str] = None
+        send_path = filepath
+        hist_path = str(Path(filepath).resolve())
+        display_name = os.path.basename(filepath)
+        client_socket: Optional[socket.socket] = None
         try:
             self.log(f"📤 Отправка файла на {target_ip}...")
-            
+            if os.path.isdir(filepath):
+                import tempfile
+                import zipfile
+
+                base = Path(filepath).resolve()
+                folder_name = base.name
+                fd, tmp_zip = tempfile.mkstemp(
+                    suffix=".zip", prefix="portal_folder_", text=False
+                )
+                os.close(fd)
+                with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+                    any_file = False
+                    for f in base.rglob("*"):
+                        if f.is_file():
+                            any_file = True
+                            zf.write(f, arcname=str(Path(folder_name) / f.relative_to(base)))
+                    if not any_file:
+                        zf.writestr(f"{folder_name}/", b"")
+                send_path = tmp_zip
+                display_name = f"{folder_name}_portal_folder.zip"
+                hist_path = str(base)
+                self.log(
+                    f"📦 Папка «{folder_name}» упакована в ZIP для передачи: {display_name}"
+                )
+            elif not os.path.isfile(filepath):
+                self.log("❌ Укажите путь к файлу или к папке")
+                return
+
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client_socket.settimeout(15)
             try:
@@ -6404,8 +7053,8 @@ class PortalApp(ctk.CTk):
                     self.log(f"❌ Ошибка сети: {str(e)}")
                 return
             
-            filename = os.path.basename(filepath)
-            filesize = os.path.getsize(filepath)
+            filename = display_name
+            filesize = os.path.getsize(send_path)
             
             message: Dict[str, Any] = {
                 "type": "file",
@@ -6427,7 +7076,7 @@ class PortalApp(ctk.CTk):
             )
             time.sleep(0.05)
 
-            with open(filepath, "rb") as f:
+            with open(send_path, "rb") as f:
                 while True:
                     chunk = f.read(65536)
                     if not chunk:
@@ -6450,7 +7099,7 @@ class PortalApp(ctk.CTk):
                         peer_ip=target_ip,
                         peer_label=portal_config.peer_display_label(target_ip),
                         name=filename,
-                        stored_path=str(Path(filepath).resolve()),
+                        stored_path=hist_path,
                         route_json=json.dumps([target_ip]),
                         filesize=filesize,
                     )
@@ -6469,7 +7118,6 @@ class PortalApp(ctk.CTk):
                 self.log(
                     f"⚠️ Ответ приёма файлов: {response!r} — смотри лог на ПК-получателе (ошибка приёма / JSON)"
                 )
-                
         except socket.timeout:
             self.log(f"❌ Таймаут при отправке на {target_ip}")
             self.log("💡 Файл слишком большой или медленное соединение")
@@ -6504,6 +7152,11 @@ class PortalApp(ctk.CTk):
             else:
                 self.log(f"❌ Ошибка отправки: {err_msg}")
         finally:
+            if tmp_zip:
+                try:
+                    os.unlink(tmp_zip)
+                except OSError:
+                    pass
             if client_socket is not None:
                 try:
                     client_socket.close()

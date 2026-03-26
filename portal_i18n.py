@@ -98,10 +98,18 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "toolbar.apk": "📱 APP",
         "toolbar.log": "📋 Журнал",
         "toolbar.history": "История",
+        "toolbar.onboarding": "Старт",
         "toolbar.help": "❓",
         "toolbar.update": "🔄 Обновление",
         "update.dialog_title": "Доступна новая версия Portal",
-        "update.dialog_body": "Установлено: {current}\nНа GitHub: {new_tag}\nФайл: {asset}\n\nСкачай установщик и замени приложение (Mac: перетащи в «Программы»).",
+        "update.dialog_body": (
+            "У вас: {current}\nНа GitHub: {new_tag}\nФайл: {asset}\n\n"
+            "Откроется загрузка в браузере (автоустановка без вашего участия не делается).\n"
+            "Windows: если предлагается PortalSetup.exe — запустите его и пройдите мастер "
+            "(установка в Program Files, ярлык). Иначе ZIP: распакуйте и замените папку или "
+            "Portal.exe вместе с _internal.\n"
+            "macOS: скачайте DMG или ZIP и перетащите Portal.app в «Программы»."
+        ),
         "update.open_download": "Открыть загрузку",
         "update.later": "Позже",
         "main.subtitle": "Передача файлов и общий буфер · пиры и папки — в ⚙ Настройки",
@@ -121,6 +129,11 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "main.secret_placeholder": "введи пароль и сохрани",
         "main.save_password": "Сохранить пароль",
         "main.secret_hint": "Когда пароль задан, менять его можно в ⚙ Настройки → «Пароль».",
+        "main.quick_ip_title": "Быстрый IP пира (на главном экране)",
+        "main.quick_ip_add": "Добавить в список пиров",
+        "main.quick_ip_hint": "Укажите IPv4 устройства в вашей сети (Wi‑Fi или mesh-VPN), затем сохраните выбор получателей ниже. Полный список и группы — в Настройки → Пиры.",
+        "main.quick_ip_saved": "IP {ip} добавлен в список пиров. Отметьте получателя и нажмите «Сохранить выбор получателей».",
+        "main.quick_ip_exists": "IP {ip} уже есть в списке пиров.",
         "main.save_recipients": "Сохранить выбор получателей",
         "main.conn_title": "📡 Статус связи",
         "main.local_recv_unknown": "⏸ Локальный приём: неизвестно",
@@ -199,6 +212,11 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "widget.margin_x": "Отступ X:",
         "widget.margin_y": "Y:",
         "widget.save_geo": "Сохранить размер и угол",
+        "widget.easy_drag": "Редактирование: таскать виджет мышью без Alt",
+        "widget.snap_from_widget": "Запомнить отступы с экрана",
+        "widget.snap_no_widget": "Сначала откройте виджет (хоткей), перетащите в нужное место, затем нажмите снова.",
+        "widget.snap_ok": "Отступы сохранены: X={mx}, Y={my} (для выбранного угла).",
+        "widget.margin_hint": "Отступы — от краёв рабочей области (Windows: без панели задач).",
         "widget.mac_bg_title": "Фон окна виджета (macOS):",
         "widget.mac_bg_save": "Применить фон",
         "widget.mac_bg_hint": "Высокие/широкие картинки и GIF вписываются в квадрат окна с полями. Светлый фон — если тёмный портал плохо читается.",
@@ -214,7 +232,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "widget.pulse_hint": "Ниже: какой пресет показывать при обычном открытии портала (хоткей) — выбор в списке сохраняется сразу. «Основное медиа (main)» — то же, что в блоке «Медиа виджета на столе» выше. «Показать превью в углу» — кратко посмотреть выбранный пресет. Таблица правил — отдельно: какая анимация при приёме файла/буфера и при отправке.",
         "widget.idle_preset_label": "Портал при открытии (хоткей) — пресет:",
         "widget.preview_btn": "Показать превью в углу",
-        "widget.rules_hint": "Колонки: адрес в сети Portal (или * = любой), событие, какая картинка на виджете. Совпадение: сначала точный IP, иначе *.",
+        "widget.rules_hint": "Адрес: * (все), конкретный IP с подписью из «Пиры», или целая группа. Приоритет: свой IP важнее группы, группа важнее *. Событие → пресет.",
         "widget.add_rule": "➕ Добавить строку (IP + событие)",
         "widget.rules_rows_intro": "Одна строка = один адрес + одно событие + одна анимация. Для одного IP можно добавить несколько строк с разными событиями. Сначала нажми «➕», выбери событие и пресет, потом «Сохранить правила».",
         "widget.save_rules": "Сохранить правила пресетов",
@@ -255,7 +273,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "peers.net_lan": "LAN (дом)",
         "peers.net_ts": "mesh-VPN",
         "peers.groups_title": "Группы для отправки",
-        "peers.groups_hint": "Состав группы выбери из списка IP (выпадающий список). На главной отметь группу галочкой — файлы уйдут на все её IP (вместе с отмеченными пирами). Сначала сохрани строки IP выше.",
+        "peers.groups_hint": "Состав группы выбери из списка IP (выпадающий список). На главной отметь группу галочкой — файлы уйдут на все её IP (вместе с отмеченными пирами). Сначала добавьте строки IP ниже и сохраните список.",
         "peers.add_group_row": "➕ Добавить группу",
         "peers.group_name_ph": "Название",
         "peers.group_add_ip": "+ IP в группу",
@@ -265,7 +283,12 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "peers.main_peers_colon": "Пиры:",
         "peers.main_groups_colon": "Группы:",
         "peers.save_list": "Сохранить\nсписок IP",
-        "peers.settings_hint": "После «Сохранить список IP» отметь на главном экране, кому слать файлы и буфер, и нажми «Сохранить выбор получателей». Проверка связи смотрит только на отмеченных. Отдельная папка приёма по IP — вкладка «Папка и приём».",
+        "peers.save_working": "Сохранение…",
+        "peers.save_ok_settings": "Список пиров и групп сохранён.",
+        "peers.save_err_settings": "Не удалось записать config.json — см. сообщение.",
+        "peers.save_err_title": "Ошибка записи настроек",
+        "peers.save_err_body": "Не удалось сохранить список пиров.\nПроверьте права на файл:\n{path}",
+        "peers.settings_hint": "Изменил пиров или группы — внизу нажми «Сохранить список IP». Затем на главной отметь получателей и «Сохранить выбор получателей». Проверка связи — только отмеченные. Папки приёма по IP — «Папка и приём».",
         "secret.title": "Пароль сети (shared secret):",
         "secret.placeholder": "пусто = без пароля (как в старых версиях)",
         "secret.fill": "Подставить",
@@ -275,6 +298,26 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "secret.push_field": "Разослать пароль из поля (уже введённый)",
         "secret.long_hint": "Разсылка идёт на все IP из вкладки «Пиры» (кроме этого устройства). На удалённых устройствах должен быть запущен приём Портала. Нужен текущий общий пароль — сначала все в одной сети с одним паролем, или без пароля (режим как в старых версиях). Отключить TCP-рассылку: PORTAL_NO_REMOTE_SECRET_SYNC=1.",
         "secret.banner_hint2": "Пока пароль не задан, на главном экране показывается быстрый ввод.",
+        "secret.extra_title": "Дополнительные пароли (параллельно основному)",
+        "secret.extra_hint": "По одному паролю на строку. Входящее соединение принимается, если поле secret совпадает с основным паролем или с любым из списка. Отправка по-прежнему использует только основной пароль из поля выше.",
+        "secret.extra_gen_line": "Сгенерировать строку",
+        "secret.extra_save": "Сохранить список",
+        "secret.extra_saved": "Сохранено дополнительных паролей: {n}.",
+        "secret.extra_generated_line": "Сгенерирован пароль — добавлена строка в список (нажмите «Сохранить список»).",
+        "tray.hint_minimize": "Окно свернуто в трей — иконка у часов. Откройте снова из меню трея или завершите работу там.",
+        "onboarding.title": "Кратко: с чего начать",
+        "onboarding.body": (
+            "Вы настраиваете Portal для обмена файлами и буфером между вашими устройствами.\n\n"
+            "1) Установите на ПК и телефонах один и тот же mesh-клиент (например Tailscale), включите его на всех устройствах.\n\n"
+            "2) Узнайте IPv4 другого устройства в этой сети (в приложении mesh или в настройках Wi‑Fi). Введите его в поле «Быстрый IP пира» на главном экране или во вкладке «Пиры» в настройках.\n\n"
+            "3) Задайте одинаковый пароль сети: на главном экране или в Настройки → Пароль. Нажмите «Сохранить».\n\n"
+            "4) Нажмите «Запустить портал» на обоих компьютерах. Проверьте связь кнопкой «Проверить связь».\n\n"
+            "5) Сочетание клавиш: на Windows — Ctrl+Alt+P показать виджет на рабочем столе; на Mac — Cmd+Ctrl+P (см. также «Справка»).\n\n"
+            "6) В Настройки → Виджет настройте размер и угол; при необходимости включите «таскать без Alt» и «Запомнить отступы с экрана». Кнопка «Показать превью в углу» покажет пример.\n\n"
+            "7) Перетащите файл на виджет или используйте «Отправить файл».\n\n"
+            "При закрытии окна на Windows Portal остаётся в трее — приём файлов продолжается."
+        ),
+        "onboarding.close": "Понятно",
         "apk.title": "Мобильное приложение",
         "apk.window_subtitle": "Выбери вкладку: Android (.apk) или iOS (не как APK — см. инструкцию).",
         "apk.tab_android": "Android",
@@ -353,6 +396,11 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "lan.scan_start": "mDNS + скан подсетей: {subnets}",
         "lan.scan_hint": "Скан показывает устройства, которые сейчас отвечают на Portal (TCP :12345) с этого компьютера. Телефон с приёмом держи на экране — в фоне iOS часто не отвечает.",
         "lan.done": "Готово. Найдено: {n}",
+        "lan.hidden_self_ips": "Из списка убраны адреса этого компьютера: {ips}",
+        "lan.hidden_known_peers": "Из списка убраны уже сохранённые пиры: {ips}",
+        "lan.new_only_none": "Новых устройств с Portal не найдено — в ответе были только этот компьютер и уже добавленные IP.\n\n"
+        "Установите Portal на другом устройстве в той же Wi‑Fi сети (или mesh-VPN), запустите приём и повторите поиск.",
+        "peers.self_ip_blocked": "Это адрес этого ПК ({ip}) — в пиры и группы не добавляется.",
         "lan.none": "На порту Portal в выбранных подсетях никого не видно. Проверь: Портал запущен, тот же Wi‑Fi или mesh-VPN, файрвол, одинаковый пароль в config.\n\n"
         "iPhone/iPad: скан с Mac — это входящее подключение к телефону на :12345. Пока приложение в фоне, iOS часто не отвечает — открой Portal, включи «Принимать с ПК», затем снова «Найти локально». Отправка с телефона на Mac идёт наоборот и может работать, даже если скан телефон не показал.",
         "lan.mobile_receive_hint": "Скан показывает только устройства, которые сейчас отвечают на Portal (TCP :12345) с этим Mac. Телефон с включённым приёмом держи на экране — в фоне iOS часто не виден в списке.",
@@ -371,10 +419,17 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "toolbar.apk": "📱 APP",
         "toolbar.log": "📋 Log",
         "toolbar.history": "History",
+        "toolbar.onboarding": "Start",
         "toolbar.help": "❓",
         "toolbar.update": "🔄 Update",
         "update.dialog_title": "New Portal version available",
-        "update.dialog_body": "Installed: {current}\nOn GitHub: {new_tag}\nFile: {asset}\n\nDownload and replace the app (Mac: drag to Applications).",
+        "update.dialog_body": (
+            "Yours: {current}\nOn GitHub: {new_tag}\nFile: {asset}\n\n"
+            "Your browser will download the file (no fully silent auto-update).\n"
+            "Windows: if you get PortalSetup.exe, run it and follow the wizard (Program Files, shortcuts). "
+            "Otherwise use the ZIP: extract and replace the folder or Portal.exe + _internal.\n"
+            "macOS: open the DMG or ZIP and drag Portal.app to Applications."
+        ),
         "update.open_download": "Open download",
         "update.later": "Later",
         "main.subtitle": "File transfer & shared clipboard · peers and folders in ⚙ Settings",
@@ -394,6 +449,11 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "main.secret_placeholder": "enter password and save",
         "main.save_password": "Save password",
         "main.secret_hint": "Once set, change it in ⚙ Settings → Password.",
+        "main.quick_ip_title": "Quick peer IP (on main screen)",
+        "main.quick_ip_add": "Add to peer list",
+        "main.quick_ip_hint": "Enter the device’s IPv4 on your network (Wi‑Fi or mesh-VPN), then save recipient selection below. Full list and groups: Settings → Peers.",
+        "main.quick_ip_saved": "IP {ip} added to peers. Check the recipient and tap “Save recipient selection”.",
+        "main.quick_ip_exists": "IP {ip} is already in the peer list.",
         "main.save_recipients": "Save recipient selection",
         "main.conn_title": "📡 Connection status",
         "main.local_recv_unknown": "⏸ Local receive: unknown",
@@ -472,6 +532,11 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "widget.margin_x": "Margin X:",
         "widget.margin_y": "Y:",
         "widget.save_geo": "Save size & corner",
+        "widget.easy_drag": "Edit mode: drag the widget without Alt",
+        "widget.snap_from_widget": "Capture margins from current position",
+        "widget.snap_no_widget": "Show the widget first (hotkey), drag it where you want, then tap again.",
+        "widget.snap_ok": "Margins saved: X={mx}, Y={my} (for the selected corner).",
+        "widget.margin_hint": "Margins are from the work area edges (Windows: taskbar excluded).",
         "widget.mac_bg_title": "Widget window background (macOS):",
         "widget.mac_bg_save": "Apply background",
         "widget.mac_bg_hint": "Tall/wide images and GIFs scale to fit the square window. Pick a light background if a dark portal is hard to see.",
@@ -487,7 +552,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "widget.pulse_hint": "The list below sets which preset is shown when you open the portal (hotkey) — the choice is saved immediately. “Main” matches “Desktop widget media” above. «Corner preview» is a short preview. The rules table is separate: animations on receive / send events.",
         "widget.idle_preset_label": "Preset when opening the portal (hotkey):",
         "widget.preview_btn": "Corner preview",
-        "widget.rules_hint": "Columns: Portal address (* = any), event, widget image. Match: exact IP first, then *.",
+        "widget.rules_hint": "Address: * (all), a peer IP (label from Peers), or a whole group. Priority: specific IP beats group, group beats *. Event → preset.",
         "widget.add_rule": "➕ Add row (IP + event)",
         "widget.rules_rows_intro": "Each row = one address + one event + one animation. Add multiple rows for the same IP with different events. Use ➕, then «Save rules».",
         "widget.save_rules": "Save preset rules",
@@ -528,7 +593,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "peers.net_lan": "LAN (home)",
         "peers.net_ts": "mesh-VPN",
         "peers.groups_title": "Send groups",
-        "peers.groups_hint": "Pick member IPs from the dropdown (saved peer list). On the main screen, tick a group to send to all its IPs. Save the IP rows above first.",
+        "peers.groups_hint": "Pick member IPs from the dropdown (saved peer list). On the main screen, tick a group to send to all its IPs. Add IP rows below and save the list first.",
         "peers.add_group_row": "➕ Add group",
         "peers.group_name_ph": "Name",
         "peers.group_add_ip": "+ Add peer IP",
@@ -538,7 +603,12 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "peers.main_peers_colon": "Peers:",
         "peers.main_groups_colon": "Groups:",
         "peers.save_list": "Save\nIP list",
-        "peers.settings_hint": "After “Save IP list”, check recipients on the main screen and tap “Save recipient selection”. Connection check only probes selected peers. Per-peer receive folders are on the “Folder & receive” tab.",
+        "peers.save_working": "Saving…",
+        "peers.save_ok_settings": "Peers and groups saved.",
+        "peers.save_err_settings": "Could not write config.json — see dialog.",
+        "peers.save_err_title": "Settings write error",
+        "peers.save_err_body": "Could not save the peer list.\nCheck permissions for:\n{path}",
+        "peers.settings_hint": "After editing peers or groups, tap “Save IP list” at the bottom. Then on the main screen pick recipients and “Save recipient selection”. Connection check probes selected peers only. Per-peer receive folders: “Folder & receive”.",
         "secret.title": "Network password (shared secret):",
         "secret.placeholder": "empty = no password (legacy mode)",
         "secret.fill": "Generate",
@@ -548,6 +618,26 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "secret.push_field": "Push password from field (already entered)",
         "secret.long_hint": "Push goes to all IPs in Peers (except this device). Remote devices must run Portal receive. Current shared password required — or start with no password (legacy). Disable TCP push: PORTAL_NO_REMOTE_SECRET_SYNC=1.",
         "secret.banner_hint2": "Until a password is set, quick entry is shown on the main screen.",
+        "secret.extra_title": "Extra passwords (alongside the main one)",
+        "secret.extra_hint": "One password per line. Incoming connections are accepted if secret matches the main password or any line here. Outgoing traffic still uses only the main password above.",
+        "secret.extra_gen_line": "Generate a line",
+        "secret.extra_save": "Save list",
+        "secret.extra_saved": "Saved {n} extra password(s).",
+        "secret.extra_generated_line": "Generated password — line added (tap “Save list”).",
+        "tray.hint_minimize": "Window minimized to tray — open from the menu or quit there.",
+        "onboarding.title": "Quick start",
+        "onboarding.body": (
+            "You are setting up Portal to share files and clipboard between your devices.\n\n"
+            "1) Install the same mesh client on PCs and phones (e.g. Tailscale) and enable it everywhere.\n\n"
+            "2) Find the other device’s IPv4 on that network. Enter it in “Quick peer IP” on the main screen or in Settings → Peers.\n\n"
+            "3) Set the same network password on the main screen or Settings → Password.\n\n"
+            "4) Tap “Start Portal” on each computer. Use “Check connection” to verify.\n\n"
+            "5) Hotkeys: Windows — Ctrl+Alt+P for the widget; Mac — Cmd+Ctrl+P (see Help).\n\n"
+            "6) Settings → Widget: size, corner; optional “drag without Alt” and “Capture margins”. “Show preview in corner”.\n\n"
+            "7) Drop a file on the widget or use “Send file”.\n\n"
+            "On Windows, closing the window keeps Portal in the tray — receive keeps running."
+        ),
+        "onboarding.close": "Got it",
         "apk.title": "Mobile app",
         "apk.window_subtitle": "Pick a tab: Android (.apk) or iOS (not the same as APK — see guide).",
         "apk.tab_android": "Android",
@@ -626,6 +716,11 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "lan.scan_start": "mDNS + subnet scan: {subnets}",
         "lan.scan_hint": "The list only includes devices that respond to Portal (TCP :12345) from this computer right now. Keep a phone on-screen with receive enabled — in background iOS often does not answer.",
         "lan.done": "Done. Found: {n}",
+        "lan.hidden_self_ips": "Removed this computer’s own addresses from the list: {ips}",
+        "lan.hidden_known_peers": "Removed IPs already in your peer list: {ips}",
+        "lan.new_only_none": "No new Portal devices — the scan only saw this computer and peers you already added.\n\n"
+        "Install Portal on another device on the same Wi‑Fi (or mesh-VPN), start receive there, and run the search again.",
+        "peers.self_ip_blocked": "That’s this PC’s address ({ip}) — not added as a peer or group member.",
         "lan.none": "No Portal peers on these subnets. Check: Portal is running, same Wi‑Fi or mesh-VPN, firewall, matching network password.\n\n"
         "iPhone/iPad: this scan is an inbound TCP probe to the phone on :12345. In background iOS often does not answer — open Portal, enable receive from PC, then run Find on LAN again. Sending from phone to Mac is the opposite direction and can work even if the phone never appears here.",
         "lan.mobile_receive_hint": "The list only includes devices that respond to Portal (TCP :12345) from this Mac right now. Keep the phone on-screen with receive enabled — in background iOS is often invisible to the scan.",

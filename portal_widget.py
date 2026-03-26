@@ -472,6 +472,7 @@ class PortalWidget:
         self.anim_state = self.ANIM_HIDDEN
         self.anim_frame_idx = 0
         self._anim_after_id = None
+        self._anim_idle_after_id: Optional[str] = None
         self._anim_master: Optional[tk.Misc] = None  # тот же виджет, что вызывал after (для after_cancel)
         self._anim_speed_ms = 42  # ~24fps
 
@@ -587,11 +588,19 @@ class PortalWidget:
             except tk.TclError:
                 pass
 
-        sw = self.root.winfo_screenwidth()
-        sh = self.root.winfo_screenheight()
+        try:
+            import portal_win_metrics
+
+            ox, oy, ww, wh = portal_win_metrics.primary_work_area_tk(self.root)
+        except Exception:
+            ox, oy = 0, 0
+            ww, wh = int(self.root.winfo_screenwidth()), int(self.root.winfo_screenheight())
+        self.size = portal_config.resolve_widget_pixel_size(ww, wh)
         x, y = portal_config.widget_window_xy(
-            sw,
-            sh,
+            ox,
+            oy,
+            ww,
+            wh,
             self.size,
             portal_config.load_widget_corner(),
             portal_config.load_widget_margin_x(),
@@ -605,13 +614,16 @@ class PortalWidget:
     def apply_widget_geometry(self) -> None:
         """Размер и угол из config.json (после «Сохранить размер и угол» в главном окне)."""
         try:
-            new_size = portal_config.load_widget_size()
+            import portal_win_metrics
+
+            ox, oy, ww, wh = portal_win_metrics.primary_work_area_tk(self.root)
+            new_size = portal_config.resolve_widget_pixel_size(ww, wh)
             corner = portal_config.load_widget_corner()
             mx = portal_config.load_widget_margin_x()
             my = portal_config.load_widget_margin_y()
-            sw = int(self.root.winfo_screenwidth())
-            sh = int(self.root.winfo_screenheight())
-            x, y = portal_config.widget_window_xy(sw, sh, new_size, corner, mx, my)
+            x, y = portal_config.widget_window_xy(
+                ox, oy, ww, wh, new_size, corner, mx, my
+            )
             size_changed = new_size != self.size
             self.size = new_size
             try:
@@ -1257,7 +1269,54 @@ class PortalWidget:
 
     # ───────────────────────────── АНИМАЦИЯ ─────────────────────────
 
+    def _cancel_anim_idle_deadline(self) -> None:
+        if self._anim_idle_after_id is not None:
+            for t in (self.root, getattr(self, "main_app", None)):
+                if t is None:
+                    continue
+                try:
+                    t.after_cancel(self._anim_idle_after_id)
+                    break
+                except Exception:
+                    continue
+            self._anim_idle_after_id = None
+
+    def _schedule_anim_idle_deadline(self) -> None:
+        """Через ~10 с в открытом состоянии свернуть виджет (снять бесконечный GIF)."""
+        self._cancel_anim_idle_deadline()
+        try:
+            ms = int(os.environ.get("PORTAL_WIDGET_ANIM_IDLE_MS", "10000").strip() or "10000")
+        except ValueError:
+            ms = 10000
+        ms = max(3000, min(ms, 120_000))
+
+        def fire():
+            self._anim_idle_after_id = None
+            if self.anim_state != self.ANIM_OPEN:
+                return
+            try:
+                self.hide()
+            except Exception:
+                pass
+
+        try:
+            self._anim_idle_after_id = self.root.after(ms, fire)
+        except Exception:
+            self._anim_idle_after_id = None
+
+    def freeze_portal_animation_static(self) -> None:
+        """Остановить цикл GIF, оставить кадр (импульс «приём» при уже открытом виджете)."""
+        self._cancel_anim_idle_deadline()
+        self._cancel_anim()
+        self.anim_state = self.ANIM_OPEN
+        if self.gif_frames:
+            self.anim_frame_idx = 0
+            self._show_frame(0)
+        elif getattr(self, "_portal_media_static_visual", False):
+            self._show_static_scaled(1.0)
+
     def _cancel_anim(self):
+        self._cancel_anim_idle_deadline()
         if self._anim_after_id is not None:
             target = getattr(self, "_anim_master", None)
             if target is not None and hasattr(target, "after_cancel"):
@@ -1372,6 +1431,7 @@ class PortalWidget:
             else:
                 self.anim_state = self.ANIM_OPEN
                 self._show_static_scaled(1.0)
+                self._schedule_anim_idle_deadline()
             return
 
         if self.anim_state == self.ANIM_OPEN and getattr(
@@ -1415,6 +1475,7 @@ class PortalWidget:
                     self._schedule_anim_ms(d, self._animate_step)
                 else:
                     self.anim_state = self.ANIM_OPEN
+                    self._schedule_anim_idle_deadline()
                     self._schedule_anim_ms(self._gif_delay_for_idx(self.anim_frame_idx), self._animate_step)
             else:
                 if self.anim_frame_idx < total - 1:
@@ -1422,6 +1483,7 @@ class PortalWidget:
                     self._schedule_anim_ms(self._anim_speed_ms, self._animate_step)
                 else:
                     self.anim_state = self.ANIM_OPEN
+                    self._schedule_anim_idle_deadline()
 
         elif self.anim_state == self.ANIM_CLOSING:
             if self.gif_frames:
@@ -1551,13 +1613,39 @@ class PortalWidget:
 
     # ───────────────────────────── МЫШЬ / БИНДИНГИ ──────────────────
 
-    def setup_mouse_bindings(self):
+    def _unbind_drag_variants(self, w) -> None:
+        for seq in (
+            "<Alt-Button-1>",
+            "<Alt-B1-Motion>",
+            "<Button-1>",
+            "<B1-Motion>",
+        ):
+            try:
+                w.unbind(seq)
+            except tk.TclError:
+                pass
+
+    def _bind_drag_bindings(self) -> None:
+        for w in (self.root, self.canvas):
+            self._unbind_drag_variants(w)
+        easy = portal_config.load_widget_easy_drag()
+
         def bind_drag(w):
-            w.bind("<Alt-Button-1>", self.start_drag)
-            w.bind("<Alt-B1-Motion>", self.on_drag)
+            if easy:
+                w.bind("<Button-1>", self.start_drag)
+                w.bind("<B1-Motion>", self.on_drag)
+            else:
+                w.bind("<Alt-Button-1>", self.start_drag)
+                w.bind("<Alt-B1-Motion>", self.on_drag)
 
         bind_drag(self.root)
         bind_drag(self.canvas)
+
+    def refresh_drag_bindings(self) -> None:
+        self._bind_drag_bindings()
+
+    def setup_mouse_bindings(self):
+        self._bind_drag_bindings()
 
         # Только canvas: привязка на root дублирует событие (toplevel входит в bindtags canvas → два файла)
         self.canvas.bind("<Double-Button-1>", self.on_double_click_clipboard_image)

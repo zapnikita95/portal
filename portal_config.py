@@ -19,7 +19,7 @@ _SHARED_SECRET_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 # Версия десктоп-сборки (PyInstaller CFBundleShortVersionString / проверка обновлений).
 # Поднимай вместе с pyinstaller_portal.spec → CFBundleShortVersionString.
-PORTAL_DESKTOP_VERSION = "1.2.1"
+PORTAL_DESKTOP_VERSION = "1.2.2"
 
 _UPDATE_CHECK_INTERVAL_SEC = 86400 * 2  # не чаще раз в 2 суток авто-проверка
 

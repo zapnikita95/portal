@@ -383,7 +383,7 @@ def version_a_newer_than_b(tag_or_version_a: str, plain_b: str) -> bool:
 
 def pick_desktop_download_url(release: dict) -> Tuple[Optional[str], Optional[str]]:
     """
-    Предпочтение: Portal.dmg, затем Portal-macOS.zip, Portal-Windows.zip по платформе.
+    Предпочтение: Portal.dmg, Portal-macOS.dmg (CI), Portal-macOS.zip; на Windows — Portal-Windows.zip.
     Возвращает (url, имя_файла).
     """
     import sys
@@ -400,11 +400,11 @@ def pick_desktop_download_url(release: dict) -> Tuple[Optional[str], Optional[st
         return None, None
 
     if sys.platform == "darwin":
-        u, n = pick("Portal.dmg", "Portal-macOS.zip")
+        u, n = pick("Portal.dmg", "Portal-macOS.dmg", "Portal-macOS.zip")
         if u:
             return u, n
     elif sys.platform == "win32":
-        u, n = pick("Portal-Windows.zip")
+        u, n = pick("PortalSetup.exe", "Portal-Windows.zip")
         if u:
             return u, n
     # fallback: любой zip/dmg из релиза
