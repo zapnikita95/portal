@@ -2122,6 +2122,11 @@ class PortalApp(ctk.CTk):
             wraplength=680,
             justify="left",
         ).pack(anchor="w", padx=8, pady=(0, 6))
+        ctk.CTkLabel(
+            t_widget,
+            text=i18n.tr("widget.idle_preset_label"),
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(anchor="w", padx=8, pady=(4, 2))
         prev_row = ctk.CTkFrame(t_widget, fg_color="transparent")
         prev_row.pack(fill="x", padx=8, pady=(0, 8))
         self._widget_preset_preview_combo = ctk.CTkComboBox(
@@ -2130,6 +2135,7 @@ class PortalApp(ctk.CTk):
             values=["…"],
             font=ctk.CTkFont(size=12),
             state="readonly",
+            command=self._on_widget_idle_preset_combo_selected,
         )
         self._widget_preset_preview_combo.pack(side="left", padx=(0, 8))
         ctk.CTkButton(
@@ -4249,14 +4255,34 @@ class PortalApp(ctk.CTk):
         m = getattr(self, "_widget_preset_preview_combo", None)
         if m is None:
             return
-        labels, _ids = self._widget_preset_labels_and_ids()
-        try:
-            cur = m.get()
-        except Exception:
-            cur = ""
+        labels, ids = self._widget_preset_labels_and_ids()
         m.configure(values=labels)
-        if labels:
-            m.set(cur if cur in labels else labels[0])
+        if not labels:
+            return
+        saved = portal_config.load_widget_display_preset()
+        try:
+            ix = ids.index(saved)
+            pick = labels[ix]
+        except ValueError:
+            pick = labels[0]
+        m.set(pick)
+
+    def _on_widget_idle_preset_combo_selected(self, choice: str) -> None:
+        """Выбранный пресет — обычный вид портала (хоткей); сохраняем и перезагружаем медиа."""
+        labels, ids = self._widget_preset_labels_and_ids()
+        try:
+            idx = labels.index(str(choice))
+        except ValueError:
+            return
+        pid = ids[idx]
+        if not portal_config.save_widget_display_preset(pid):
+            return
+        w = getattr(self, "portal_widget_ref", None)
+        if w is not None and hasattr(w, "load_portal_gif"):
+            try:
+                self.after(0, w.load_portal_gif)
+            except Exception:
+                pass
 
     def _refresh_settings_preset_rules_ui(self) -> None:
         try:

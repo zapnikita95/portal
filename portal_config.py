@@ -12,14 +12,14 @@ import tempfile
 import time
 import secrets
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # Алфавит без O/0/I/1 — проще диктовать и копировать
 _SHARED_SECRET_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 # Версия десктоп-сборки (PyInstaller CFBundleShortVersionString / проверка обновлений).
 # Поднимай вместе с pyinstaller_portal.spec → CFBundleShortVersionString.
-PORTAL_DESKTOP_VERSION = "1.2.0"
+PORTAL_DESKTOP_VERSION = "1.2.1"
 
 _UPDATE_CHECK_INTERVAL_SEC = 86400 * 2  # не чаще раз в 2 суток авто-проверка
 
@@ -1412,6 +1412,32 @@ def load_widget_preset_rules() -> List[Dict[str, str]]:
 def save_widget_preset_rules(rules: List[Dict[str, str]]) -> bool:
     data = _load_all()
     data["widget_preset_rules"] = _normalize_widget_preset_rules(rules)
+    return _write_all(data)
+
+
+def _valid_widget_preset_ids() -> Set[str]:
+    out = {"main"}
+    for p in load_widget_presets_catalog():
+        pid = str(p.get("id", "")).strip()
+        if pid:
+            out.add(pid)
+    return out
+
+
+def load_widget_display_preset() -> str:
+    """Пресет для обычного показа виджета (хоткей, без импульса). «main» = медиа из блока «Медиа виджета на столе»."""
+    raw = str(_load_all().get("widget_display_preset_id") or "main").strip() or "main"
+    if raw in _valid_widget_preset_ids():
+        return raw
+    return "main"
+
+
+def save_widget_display_preset(preset_id: str) -> bool:
+    pid = (preset_id or "main").strip() or "main"
+    if pid not in _valid_widget_preset_ids():
+        return False
+    data = _load_all()
+    data["widget_display_preset_id"] = pid
     return _write_all(data)
 
 
