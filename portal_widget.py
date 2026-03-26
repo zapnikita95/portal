@@ -891,6 +891,10 @@ class PortalWidget:
         t = getattr(self, "_transient_media_path", None)
         if t and os.path.isfile(t):
             return t
+        disp = portal_config.load_widget_display_preset()
+        preset_path = portal_config.resolve_widget_preset_file_path(disp)
+        if preset_path and os.path.isfile(preset_path):
+            return preset_path
         custom = portal_config.effective_widget_media_path()
         if custom and os.path.isfile(custom):
             return custom
